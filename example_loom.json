@@ -1,0 +1,11 @@
+{
+    "trackingConfig": {
+        "mindUrl": "https://storage.googleapis.com/star-wear-ecb39.firebasestorage.app/anchors/merch_4d4/test_jacket.mind?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=297163369889-compute%40developer.gserviceaccount.com%2F20260519%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260519T031151Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=0c71ba7979c076a43baf41b366eb4928c815f79a4090641879972045718d71bcc7819865aecbed06676ac655bb3be753bda67c3cabd12bc2acbd688715696985681177b67f6c8b07125d0bce8068bc9d5ea19836770e6adcb3ef4670d40875b6d626287a73ddc5b513703e3b24771a03a3d9e8c14187613b806d7069c706a08d65b5792e74491fb828ae31044bc9e509727a44caf18a6153e7e8b8ffbaa7fd7ba41a6f23a81cedf06a79a36be66c1904e2ff246dc4207c19632c4f624ed1668b3002024424969956fbd34ef6b8fc4cdab7761abfe93fe11bf27072987288ff4a273cbc3d12e25754c65e1428784b82e02e0e5f16dae22f596b73ca40514f7b3e"
+    },
+    "arExperience": {
+        "modelUrl": "https://storage.googleapis.com/star-wear-ecb39.firebasestorage.app/assets/asset_hologram_1/model.glb?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=297163369889-compute%40developer.gserviceaccount.com%2F20260519%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20260519T031151Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=742469dc65a8c89a92a5f3fa0c88fc517c41a0ed0dc79960a24515ab0470e0e874ccf4b62991d892b934f0c23bcf1b8bb91559b43c7552eda4c5b9b7824d57b6919d37ca09ff0cd0f0602e78d8b2e4fa71189fdec95f7ec53fe139d7bc42130d2b1d2c0b6634383fffd1fc085349ac2cda7453c6234b66a0d5226c77b0ef2faaeaffd37b9b076f4847712c602f25c58eecef543132a969d089ead33333ec6fc6aaefe973c2c2bd565d340c5fb8380c72a81f293f3a797f860f1cb2a749996ad84f615557dad1d19c1da7f0ce816e864367439d2d6242f3c811bc387c5c1c81337ce4afb85654a833b9885cf4bf151f5b26e35076388873faebc92f72480cdd27",
+        "position": "0 0 0",
+        "scale": "1 1 1",
+        "rotation": "0 0 0"
+    }
+}

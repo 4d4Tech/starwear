@@ -1,0 +1,138 @@
+@import "tailwindcss";
+
+@theme {
+  /* Colors from Stitch with User's requested Slate Blue palette */
+  --color-primary: #526373;
+  --color-primary-fixed-dim: #b7c8db;
+  --color-background: #f9f9fc;
+  --color-on-background: #1a1c1e;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-bright: #f9f9fc;
+  --color-outline-variant: #bfc8cc;
+  --color-on-surface-variant: #40484c;
+  --color-on-primary: #ffffff;
+  --color-secondary: #615e59;
+  --color-tertiary-fixed-dim: #c7c6c5;
+
+  /* Typography */
+  --font-label-caps: "Hanken Grotesk", sans-serif;
+  --font-body-md: "Hanken Grotesk", sans-serif;
+  --font-body-lg: "Hanken Grotesk", sans-serif;
+  --font-headline-xl: "Montserrat", sans-serif;
+  --font-headline-lg: "Montserrat", sans-serif;
+  --font-headline-lg-mobile: "Montserrat", sans-serif;
+
+  /* Spacing */
+  --spacing-gutter: 24px;
+  --spacing-margin-desktop: 64px;
+  --spacing-margin-mobile: 20px;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-on-background);
+  font-family: var(--font-body-md);
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Typography Utility Classes from Stitch */
+.text-label-caps {
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+}
+.text-body-md {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+}
+.text-body-lg {
+  font-size: 18px;
+  line-height: 28px;
+  font-weight: 400;
+}
+.text-headline-xl {
+  font-size: 80px;
+  line-height: 90px;
+  letter-spacing: 0.05em;
+  font-weight: 800;
+}
+.text-headline-lg {
+  font-size: 48px;
+  line-height: 56px;
+  letter-spacing: 0.02em;
+  font-weight: 700;
+}
+.text-headline-lg-mobile {
+  font-size: 32px;
+  line-height: 40px;
+  letter-spacing: 0.02em;
+  font-weight: 700;
+}
+
+/* Glassmorphism utility */
+.glass {
+  background: rgba(249, 249, 252, 0.4);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(183, 200, 219, 0.2);
+}
+
+.glass-panel {
+  background: rgba(249, 249, 252, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 0.5px solid rgba(112, 120, 124, 0.1);
+}
+
+/* Bracket navigation links */
+.nav-bracket {
+  transition: all 0.3s ease;
+  font-family: var(--font-label-caps);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.nav-bracket::before {
+  content: '[';
+  opacity: 0;
+  margin-right: 4px;
+  transform: translateX(5px);
+  transition: all 0.3s ease;
+}
+
+.nav-bracket::after {
+  content: ']';
+  opacity: 0;
+  margin-left: 4px;
+  transform: translateX(-5px);
+  transition: all 0.3s ease;
+}
+
+.nav-bracket:hover::before,
+.nav-bracket:hover::after {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* Hide scrollbar for clean horizontal scrolls */
+.no-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+.no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+/* Force AR elements to cover the screen without letterboxing */
+video, .a-canvas {
+  object-fit: cover !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  top: 0 !important;
+  left: 0 !important;
+}
