@@ -4,6 +4,8 @@ import 'aframe';
 import 'mind-ar/dist/mindar-image-aframe.prod.js';
 import BuyNowButton from '../components/BuyNowButton';
 import '../utils/aframe-components';
+import { db } from '../firebase';
+import { doc, getDoc } from 'firebase/firestore';
 
 const ARExperience = () => {
   const { batchId } = useParams();
@@ -12,30 +14,58 @@ const ARExperience = () => {
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [mediaPlaying, setMediaPlaying] = useState(true);
 
+  // NEW DIAGNOSTIC STATE
+  const [diagnosticLog, setDiagnosticLog] = useState("");
+  const [showDiagnostics, setShowDiagnostics] = useState(true);
+
+  const logToScreen = (tag, data) => {
+    const payload = typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
+    setDiagnosticLog(prev => prev + `[${tag}]\n${payload}\n\n`);
+  };
+
   useEffect(() => {
     const fetchARPayload = async () => {
       try {
+        logToScreen("ROUTER_FETCH", "Fetching batch...");
         const response = await fetch(`https://loomrouter-5qjmmwdvcq-uc.a.run.app/s/${batchId}?t=${Date.now()}`);
-        if (!response.ok) {
-          throw new Error("Batch not found or inactive.");
-        }
+        if (!response.ok) throw new Error("Batch not found or inactive.");
+        
         const data = await response.json();
+        logToScreen("ROUTER_PAYLOAD", data);
         
         if (!data || !data.arExperience) {
           setError('No configuration found for this batch');
           return;
         }
 
+        let firestoreConfig = null;
+        try {
+          const batchRef = doc(db, 'batches', batchId);
+          const batchSnap = await getDoc(batchRef);
+          if (batchSnap.exists() && batchSnap.data().ar_config) {
+            firestoreConfig = batchSnap.data().ar_config;
+            logToScreen("FIRESTORE_SUCCESS", "Retrieved ar_config directly.");
+          } else {
+            logToScreen("FIRESTORE_WARN", "Document exists but no ar_config found.");
+          }
+        } catch (fsError) {
+          logToScreen("FIRESTORE_ERROR", fsError.message);
+        }
+
+        const savedConfig = firestoreConfig || data.ar_config || data.arExperience.config || {};
+        logToScreen("FINAL_CONFIG", savedConfig);
+
         setArData({
           gltfPath: data.arExperience.modelUrl,
           mindPath: data.trackingConfig.mindUrl,
-          config: data.arExperience.config || {}
+          config: savedConfig
         });
         
-        if (data.arExperience.config && data.arExperience.config.mediaPlaying !== undefined) {
-          setMediaPlaying(data.arExperience.config.mediaPlaying);
+        if (savedConfig.mediaPlaying !== undefined) {
+          setMediaPlaying(savedConfig.mediaPlaying);
         }
       } catch (err) {
+        logToScreen("FATAL_ERROR", err.message);
         setError(err.message);
       }
     };
@@ -51,6 +81,34 @@ const ARExperience = () => {
       if (rootEl) rootEl.style.backgroundColor = '';
     };
   }, [batchId]);
+
+  useEffect(() => {
+    const modelEl = document.getElementById('ar-model');
+    if (!modelEl) return;
+
+    const onModelLoad = () => {
+      logToScreen("GLTF_LOAD", "Model geometry loaded successfully.");
+      const mesh = modelEl.getObject3D('mesh');
+      if (mesh) {
+        mesh.traverse((node) => {
+          if (node.isMesh) {
+            const hasMap = node.material.map ? "YES" : "NO";
+            logToScreen(`MATERIAL_INSPECT [${node.name}]`, `Has Texture Map: ${hasMap}`);
+          }
+        });
+      }
+    };
+
+    const onModelError = (e) => logToScreen("GLTF_ERROR", e.detail);
+
+    modelEl.addEventListener('model-loaded', onModelLoad);
+    modelEl.addEventListener('model-error', onModelError);
+
+    return () => {
+      modelEl.removeEventListener('model-loaded', onModelLoad);
+      modelEl.removeEventListener('model-error', onModelError);
+    };
+  }, [arData]);
 
   const handleCheckout = async () => {
     setCheckoutLoading(true);
@@ -92,7 +150,21 @@ const ARExperience = () => {
   };
 
   const toggleMedia = () => {
-    setMediaPlaying(prev => !prev);
+    const nextState = !mediaPlaying;
+    setMediaPlaying(nextState);
+    
+    const aframeVideos = document.querySelectorAll('a-assets video');
+    logToScreen("MEDIA_TOGGLE", `Found ${aframeVideos.length} videos. State: ${nextState}`);
+    
+    aframeVideos.forEach(vid => {
+      if (nextState) {
+        vid.play()
+          .then(() => logToScreen("VIDEO_SUCCESS", vid.src))
+          .catch(e => logToScreen("VIDEO_ERROR", `${e.name}: ${e.message}`));
+      } else {
+        vid.pause();
+      }
+    });
   };
 
   if (error) {
@@ -222,6 +294,34 @@ const ARExperience = () => {
           color={buyButtonColor} 
           onClick={handleCheckout} 
         />
+      )}
+
+      {/* Diagnostic Overlay */}
+      {showDiagnostics && (
+        <div className="absolute top-0 left-0 w-full h-[50dvh] bg-black/95 z-[9999] p-4 flex flex-col font-mono text-xs shadow-2xl border-b-2 border-red-500">
+          <div className="flex justify-between items-center mb-3">
+            <span className="text-red-500 font-bold text-sm tracking-widest">SYSTEM DIAGNOSTICS</span>
+            <div className="space-x-4">
+              <button 
+                onClick={() => navigator.clipboard.writeText(diagnosticLog)} 
+                className="bg-white text-black px-4 py-2 font-bold rounded"
+              >
+                COPY
+              </button>
+              <button 
+                onClick={() => setShowDiagnostics(false)} 
+                className="text-neutral-400 underline p-2"
+              >
+                CLOSE
+              </button>
+            </div>
+          </div>
+          <textarea 
+            readOnly 
+            value={diagnosticLog} 
+            className="flex-1 w-full bg-neutral-900 text-green-400 border border-neutral-700 p-3 rounded outline-none resize-none"
+          />
+        </div>
       )}
     </div>
   );

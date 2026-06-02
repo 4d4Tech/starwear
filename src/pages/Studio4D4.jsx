@@ -5,6 +5,162 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
+class FabricMaterialManager {
+    constructor() {
+        this.profiles = {
+            cotton: {
+                roughness: 0.85,
+                metalness: 0.05,
+                sheen: 0.4,
+                sheenRoughness: 0.8,
+                sheenColor: new THREE.Color(0xffffff),
+                clearcoat: 0.0,
+                useRim: 0.0,
+                transparent: false,
+                opacity: 1.0,
+                alphaMap: null
+            },
+            satin: {
+                roughness: 0.25,
+                metalness: 0.1,
+                sheen: 1.0,
+                sheenRoughness: 0.2,
+                sheenColor: new THREE.Color(0xffffff),
+                clearcoat: 0.1,
+                useRim: 0.0,
+                transparent: false,
+                opacity: 1.0,
+                alphaMap: null
+            },
+            velvet: {
+                roughness: 0.7,
+                metalness: 0.0,
+                sheen: 1.0,
+                sheenRoughness: 0.5,
+                sheenColor: new THREE.Color(0xffffff),
+                clearcoat: 0.0,
+                useRim: 1.0,
+                rimColor: new THREE.Color(0xffffff),
+                rimPower: 4.0,
+                rimIntensity: 1.5,
+                transparent: false,
+                opacity: 1.0,
+                alphaMap: null
+            },
+            mesh: {
+                roughness: 0.5,
+                metalness: 0.1,
+                sheen: 0.0,
+                sheenRoughness: 0.0,
+                clearcoat: 0.0,
+                useRim: 0.0,
+                transparent: true,
+                opacity: 0.7,
+                alphaMap: this.createMeshAlphaMap()
+            }
+        };
+    }
+
+    createMeshAlphaMap() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, 64, 64);
+        
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 64, 16);
+        ctx.fillRect(0, 0, 16, 64);
+        ctx.fillRect(0, 48, 64, 16);
+        ctx.fillRect(48, 0, 16, 64);
+        
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.set(16, 16);
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        texture.needsUpdate = true;
+        return texture;
+    }
+
+    createFabricMaterial(parameters) {
+        const mat = new THREE.MeshPhysicalMaterial(parameters);
+        
+        mat.userData = {
+            useRim: 0.0,
+            rimColor: new THREE.Color(0xffffff),
+            rimPower: 4.0,
+            rimIntensity: 1.5,
+            originalSide: parameters.side !== undefined ? parameters.side : THREE.FrontSide
+        };
+
+        mat.onBeforeCompile = (shader) => {
+            mat.userData.shader = shader;
+            
+            shader.uniforms.useRim = { get value() { return mat.userData.useRim; } };
+            shader.uniforms.rimColor = { get value() { return mat.userData.rimColor; } };
+            shader.uniforms.rimPower = { get value() { return mat.userData.rimPower; } };
+            shader.uniforms.rimIntensity = { get value() { return mat.userData.rimIntensity; } };
+
+            shader.fragmentShader = `
+                uniform float useRim;
+                uniform vec3 rimColor;
+                uniform float rimPower;
+                uniform float rimIntensity;
+            ` + shader.fragmentShader;
+
+            shader.fragmentShader = shader.fragmentShader.replace(
+                '#include <dithering_fragment>',
+                `
+                #include <dithering_fragment>
+                if (useRim > 0.5) {
+                    vec3 viewDir = normalize(vViewPosition);
+                    vec3 normal = normalize(vNormal);
+                    float NdotV = dot(normal, viewDir);
+                    float fresnel = pow(1.0 - max(abs(NdotV), 0.0), rimPower);
+                    gl_FragColor.rgb += rimColor * fresnel * rimIntensity;
+                }
+                `
+            );
+        };
+        
+        return mat;
+    }
+
+    applyProfile(material, profileName) {
+        const profile = this.profiles[profileName] || this.profiles.cotton;
+        
+        material.roughness = profile.roughness;
+        material.metalness = profile.metalness;
+        material.sheen = profile.sheen;
+        material.sheenRoughness = profile.sheenRoughness;
+        if (material.sheenColor) {
+            material.sheenColor.copy(profile.sheenColor || new THREE.Color(0xffffff));
+        }
+        material.clearcoat = profile.clearcoat || 0.0;
+        material.transparent = profile.transparent;
+        material.opacity = profile.opacity ?? 1.0;
+        material.alphaMap = profile.alphaMap || null;
+
+        if (profileName === 'mesh') {
+            material.side = THREE.DoubleSide;
+        } else {
+            if (material.userData && material.userData.originalSide !== undefined) {
+                material.side = material.userData.originalSide;
+            }
+        }
+
+        material.userData.useRim = profile.useRim || 0.0;
+        if (profile.rimColor && material.userData.rimColor) material.userData.rimColor.copy(profile.rimColor);
+        if (profile.rimPower !== undefined) material.userData.rimPower = profile.rimPower;
+        if (profile.rimIntensity !== undefined) material.userData.rimIntensity = profile.rimIntensity;
+
+        material.needsUpdate = true;
+    }
+}
+
 export default function Studio4D4() {
     useEffect(() => {
         class StudioApp {
@@ -17,6 +173,7 @@ export default function Studio4D4() {
                 this.objects = [];
                 this.helpers = [];
                 this.selectedObject = null;
+                this.fabricMaterialManager = new FabricMaterialManager();
 
                 this.init();
             }
@@ -525,15 +682,26 @@ export default function Studio4D4() {
                             // Solid edge color sampled from image boundaries
                             const edgeColor = edgeHexColor;
 
-                            // Lit (PBR)
-                            const litMatFront = new THREE.MeshStandardMaterial({
+                            // Lit (PBR Physical)
+                            const litMatFront = this.fabricMaterialManager.createFabricMaterial({
                                 map: texture, roughness: 0.3, metalness: 0.1, alphaTest: 0.5
                             });
-                            const litMatSide = new THREE.MeshStandardMaterial({
+                            litMatFront.userData.originalSide = THREE.FrontSide;
+
+                            const litMatSide = this.fabricMaterialManager.createFabricMaterial({
                                 color: edgeColor, roughness: 0.6, metalness: 0.2
                             });
-                            const litMatBack = new THREE.MeshStandardMaterial({
+                            litMatSide.userData.originalSide = THREE.FrontSide;
+
+                            const litMatBack = this.fabricMaterialManager.createFabricMaterial({
                                 map: texture, roughness: 0.3, metalness: 0.1, alphaTest: 0.5, side: THREE.DoubleSide
+                            });
+                            litMatBack.userData.originalSide = THREE.DoubleSide;
+
+                            // Apply default profile (cotton) to all lit materials
+                            const matsLit = [litMatFront, litMatSide, litMatBack];
+                            matsLit.forEach(mat => {
+                                this.fabricMaterialManager.applyProfile(mat, 'cotton');
                             });
 
                             // Unlit (Albedo)
@@ -552,7 +720,6 @@ export default function Studio4D4() {
                                 color: 0x00ffcc, wireframe: true, side: THREE.DoubleSide, transparent: true, opacity: 0.5
                             });
 
-                            const matsLit = [litMatFront, litMatSide, litMatBack];
                             const matsUnlit = [unlitMatFront, unlitMatSide, unlitMatBack];
                             const matsWire = [wireMat, wireMat, wireMat];
 
@@ -569,7 +736,8 @@ export default function Studio4D4() {
                                 materials: { lit: matsLit, unlit: matsUnlit, wireframe: matsWire },
                                 animate: false,
                                 rotationSpeed: 0.01,
-                                currentMode: 'lit'
+                                currentMode: 'lit',
+                                fabricProfile: 'cotton'
                             };
 
                             this.addSceneObject(mesh);
@@ -890,6 +1058,11 @@ export default function Studio4D4() {
                          if (colorBackEl && this.selectedObject.userData.materials?.lit?.[2]) {
                              colorBackEl.value = '#' + this.selectedObject.userData.materials.lit[2].color.getHexString();
                          }
+
+                         const profileSelect = document.getElementById('fabric-profile-select');
+                         if (profileSelect) {
+                             profileSelect.value = this.selectedObject.userData.fabricProfile || 'cotton';
+                         }
                     }
                 }
             }
@@ -1011,6 +1184,22 @@ export default function Studio4D4() {
                         const val = parseFloat(e.target.value);
                         document.getElementById('extrusion-val').textContent = val.toFixed(2);
                         this.updateSelectedMeshExtrusion(val);
+                    });
+                }
+
+                const profileSelect = document.getElementById('fabric-profile-select');
+                if (profileSelect) {
+                    profileSelect.addEventListener('change', (e) => {
+                        const obj = this.selectedObject;
+                        if (obj && obj.isMesh && obj.userData.isGenerated && obj.userData.materials) {
+                            const val = e.target.value;
+                            obj.userData.fabricProfile = val;
+                            if (obj.userData.materials.lit) {
+                                obj.userData.materials.lit.forEach(mat => {
+                                    this.fabricMaterialManager.applyProfile(mat, val);
+                                });
+                            }
+                        }
                     });
                 }
 
@@ -1325,6 +1514,17 @@ export default function Studio4D4() {
                                 <span id="extrusion-val" className="text-xs text-slate-400">1.00</span>
                             </div>
                             <input type="range" id="extrusion-amount" min="0.05" max="3.0" step="0.05" className="w-full accent-indigo-500" />
+                        </div>
+
+                        <h3 className="text-xs uppercase font-semibold text-slate-400 border-t border-slate-700 pt-3 mt-3">Fabric Profile</h3>
+                        <div className="flex items-center justify-between">
+                            <span className="text-xs text-slate-400">Material Profile</span>
+                            <select id="fabric-profile-select" className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-white">
+                                <option value="cotton">Matte Cotton</option>
+                                <option value="satin">Satin / Silk</option>
+                                <option value="velvet">Velvet / Fuzz</option>
+                                <option value="mesh">Technical Mesh</option>
+                            </select>
                         </div>
 
                         <h3 className="text-xs uppercase font-semibold text-slate-400 border-t border-slate-700 pt-3 mt-3">Face Colors</h3>
