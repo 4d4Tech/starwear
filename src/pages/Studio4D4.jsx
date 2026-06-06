@@ -1,9 +1,12 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getFunctions, httpsCallable } from "firebase/functions";
 
 class FabricMaterialManager {
     constructor() {
@@ -162,6 +165,9 @@ class FabricMaterialManager {
 }
 
 export default function Studio4D4() {
+    const [pendingFile, setPendingFile] = useState(null);
+    const appRef = useRef(null);
+
     useEffect(() => {
         class StudioApp {
             constructor() {
@@ -898,6 +904,117 @@ export default function Studio4D4() {
                 this.updateDiagnostics(`Geometry extruded depth updated to: ${newDepth.toFixed(2)}\nVertices: ${newGeometry.attributes.position.count}`);
             }
 
+            async generateVolumetricMesh(file) {
+                this.setLoadingState("Step 1: Uploading Image to Storage...", true);
+
+                try {
+                    // 1. Upload to Firebase Storage to get a public URL for the external AI API
+                    const storage = getStorage();
+                    const storageRef = ref(storage, `ai-uploads/${Date.now()}_${file.name}`);
+                    await uploadBytes(storageRef, file);
+                    const publicImageUrl = await getDownloadURL(storageRef);
+
+                    this.setLoadingState("Step 2: Initiating AI Generation...", true);
+
+                    // 2. Trigger the Firebase Cloud Function
+                    const functions = getFunctions();
+                    const initiateAIGeneration = httpsCallable(functions, 'initiateAIGeneration');
+                    const pollGenerationStatus = httpsCallable(functions, 'pollGenerationStatus');
+
+                    const initRes = await initiateAIGeneration({ imageUrl: publicImageUrl });
+                    const taskId = initRes.data.taskId;
+
+                    // 3. The Polling Loop
+                    this.setLoadingState("Step 3: AI is synthesizing volume... (1-2 mins)", true);
+                    
+                    const pollInterval = setInterval(async () => {
+                        try {
+                            const statusRes = await pollGenerationStatus({ taskId });
+                            const { status, progress, modelUrl } = statusRes.data;
+
+                            this.setLoadingState(`Synthesizing... ${progress || 0}%`, true);
+
+                            if (status === 'SUCCEEDED' && modelUrl) {
+                                clearInterval(pollInterval);
+                                
+                                // THE FIX: Pass the dynamic modelUrl explicitly
+                                this.loadGeneratedGLB(modelUrl, file.name); 
+                                
+                            } else if (status === 'FAILED' || status === 'CANCELED') {
+                                clearInterval(pollInterval);
+                                this.setLoadingState("Generation Failed.", true);
+                                this.updateDiagnostics("AI Generation failed at the external API level.", true);
+                            }
+                        } catch (pollErr) {
+                            console.error("Polling error:", pollErr);
+                        }
+                    }, 5000); // Check status every 5 seconds
+
+                } catch (error) {
+                    console.error("Pipeline Error:", error);
+                    this.setLoadingState("Error during AI initialization.", true);
+                    this.updateDiagnostics(error.message, true);
+                }
+            }
+
+            // 4. The dynamic GLTF Loader
+            loadGeneratedGLB(dynamicUrl, filename) {
+                this.setLoadingState("Step 4: Downloading & Optimizing Mesh...", true);
+                
+                const loader = new GLTFLoader();
+
+                // Use the dynamicUrl, NOT a hardcoded placeholder
+                loader.load(dynamicUrl, (gltf) => {
+                    const scene = gltf.scene;
+
+                    scene.traverse((child) => {
+                        if (child.isMesh) {
+                            // Preserve the AI-generated texture mapping
+                            const aiTexture = child.material.map || null;
+
+                            // Apply Studio44's custom fabric manager
+                            const newMat = this.fabricMaterialManager.createFabricMaterial({
+                                map: aiTexture,
+                                color: aiTexture ? 0xffffff : 0xcccccc // Fallback color if no texture
+                            });
+                            
+                            this.fabricMaterialManager.applyProfile(newMat, 'cotton');
+                            child.material = newMat;
+
+                            // Attach required user data for the properties panel to work
+                            child.userData = {
+                                isGenerated: true,
+                                materials: {
+                                    lit: [newMat],
+                                    unlit: [new THREE.MeshBasicMaterial({ map: aiTexture })],
+                                    wireframe: [new THREE.MeshBasicMaterial({ color: 0x00ffcc, wireframe: true })]
+                                },
+                                fabricProfile: 'cotton',
+                                animate: false,
+                                rotationSpeed: 0.01
+                            };
+                        }
+                    });
+
+                    // Auto-Center and place on the floor grid
+                    const box = new THREE.Box3().setFromObject(scene);
+                    const center = box.getCenter(new THREE.Vector3());
+                    scene.position.sub(center); 
+                    scene.position.y += (box.max.y - box.min.y) / 2; 
+
+                    scene.name = `Volumetric_${filename}`;
+                    
+                    // Add to your custom Scene Outliner
+                    this.addSceneObject(scene);
+                    this.selectObject(scene);
+
+                    this.setLoadingState("Done", false);
+                }, undefined, (error) => {
+                    console.error("GLTFLoader Error:", error);
+                    this.setLoadingState("Failed to load the resulting GLB", true);
+                });
+            }
+
             setViewMode(mode) {
                 ['lit', 'unlit', 'wire'].forEach(id => {
                     const btn = document.getElementById(`view-${id}`);
@@ -1086,7 +1203,7 @@ export default function Studio4D4() {
                 const handleFile = async (file) => {
                     if (file && file.type.startsWith('image/')) {
                         const url = await this.processImageFile(file);
-                        this.createReimaginedGeometry(url, file.name);
+                        setPendingFile({ file, url });
                     }
                 };
 
@@ -1373,8 +1490,10 @@ export default function Studio4D4() {
         }
 
         const app = new StudioApp();
+        appRef.current = app;
 
         return () => {
+            appRef.current = null;
             app.destroy();
         };
     }, []);
@@ -1554,6 +1673,48 @@ export default function Studio4D4() {
                     </button>
                 </div>
             </div>
+
+            {/* Choose 3D Generation Pipeline Modal */}
+            {pendingFile && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
+                    <div className="bg-slate-900 border border-slate-700 p-6 rounded-xl shadow-2xl max-w-sm w-full text-center space-y-4">
+                        <h3 className="text-lg font-bold text-white tracking-wide">Select Generation Pipeline</h3>
+                        <p className="text-sm text-slate-400">Choose how you want to convert the garment image into 3D geometry.</p>
+                        <div className="flex flex-col gap-2 pt-2">
+                            <button 
+                                onClick={async () => {
+                                    if (appRef.current && pendingFile) {
+                                        const { file, url } = pendingFile;
+                                        setPendingFile(null);
+                                        await appRef.current.createReimaginedGeometry(url, file.name);
+                                    }
+                                }}
+                                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg transition-colors text-sm"
+                            >
+                                Flat Extrusion
+                            </button>
+                            <button 
+                                onClick={async () => {
+                                    if (appRef.current && pendingFile) {
+                                        const { file } = pendingFile;
+                                        setPendingFile(null);
+                                        await appRef.current.generateVolumetricMesh(file);
+                                    }
+                                }}
+                                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg transition-colors text-sm"
+                            >
+                                Volumetric AI
+                            </button>
+                            <button 
+                                onClick={() => setPendingFile(null)}
+                                className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-lg transition-colors text-xs font-semibold"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
