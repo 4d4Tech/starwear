@@ -12,12 +12,32 @@ if (typeof AFRAME !== 'undefined') {
         emissive: { type: 'color', default: '#000000' },
         emissiveIntensity: { type: 'number', default: 0 },
         wireframe: { type: 'boolean', default: false },
-        opacity: { type: 'number', default: 1.0 }
+        opacity: { type: 'number', default: 1.0 },
+        envMapUrl: { type: 'string', default: 'https://firebasestorage.googleapis.com/v0/b/star-wear-ecb39.firebasestorage.app/o/environment-map.jpg?alt=media&token=d96fbc96-ccab-4ee1-bf6b-96cc37162fd9' }
       },
       init: function () {
         console.log("dynamic-materials shared init: registering model-loaded listener");
         this.applyMaterials = this.applyMaterials.bind(this);
         this.el.addEventListener('model-loaded', this.applyMaterials);
+        
+        // Pre-load the environment map
+        this.envMapTexture = null;
+        if (this.data.envMapUrl) {
+          const textureLoader = new AFRAME.THREE.TextureLoader();
+          textureLoader.crossOrigin = 'anonymous';
+          textureLoader.load(this.data.envMapUrl, (texture) => {
+            texture.mapping = AFRAME.THREE.EquirectangularReflectionMapping;
+            if (AFRAME.THREE.sRGBEncoding !== undefined) {
+              texture.encoding = AFRAME.THREE.sRGBEncoding;
+            } else if (AFRAME.THREE.SRGBColorSpace !== undefined) {
+              texture.colorSpace = AFRAME.THREE.SRGBColorSpace;
+            }
+            this.envMapTexture = texture;
+            // Force an update once the texture is downloaded
+            this.applyMaterials();
+          });
+        }
+
         if (this.el.getObject3D('mesh')) {
           console.log("dynamic-materials shared init: mesh already loaded, applying immediately");
           this.applyMaterials();
@@ -28,18 +48,15 @@ if (typeof AFRAME !== 'undefined') {
       },
       applyMaterials: function () {
         const obj = this.el.getObject3D('mesh');
-        console.log("dynamic-materials shared applyMaterials: obj =", obj);
         if (!obj) return;
 
         obj.traverse((node) => {
-          // Disable embedded GLTF lights to allow AR configuration to control lighting
           if (node.isLight) {
             node.visible = false;
             node.intensity = 0;
           }
 
           if (node.isMesh) {
-            // Fix missing normals which cause completely dark lighting
             if (node.geometry && !node.geometry.attributes.normal) {
               node.geometry.computeVertexNormals();
             }
@@ -47,8 +64,13 @@ if (typeof AFRAME !== 'undefined') {
             if (node.material) {
               const materials = Array.isArray(node.material) ? node.material : [node.material];
               materials.forEach((mat) => {
-                // SAFE APPROACH: Mutate parameters on the existing material instance
-                // to avoid stripping embedded textures (maps)
+                
+                // Inject the downloaded environment map
+                if (this.envMapTexture) {
+                  mat.envMap = this.envMapTexture;
+                  mat.envMapIntensity = 1.0; 
+                }
+
                 if (mat.metalness !== undefined) mat.metalness = this.data.metalness;
                 if (mat.roughness !== undefined) mat.roughness = this.data.roughness;
                 if (mat.emissive && typeof mat.emissive.set === 'function') {
@@ -59,11 +81,7 @@ if (typeof AFRAME !== 'undefined') {
                 mat.opacity = this.data.opacity;
                 mat.transparent = this.data.opacity < 1.0;
                 
-                // Signal Three.js that material updates require cache refresh
                 mat.needsUpdate = true;
-
-                // Log the mutated material state
-                console.error(`MUTATED_MATERIAL [${node.name}] Type: ${mat.type} | Color: #${mat.color ? mat.color.getHexString() : 'N/A'} | Emissive: #${mat.emissive ? mat.emissive.getHexString() : 'N/A'} | Roughness: ${mat.roughness} | Metalness: ${mat.metalness} | Opacity: ${mat.opacity} | Transparent: ${mat.transparent} | Has Texture: ${!!mat.map}`);
               });
             }
           }

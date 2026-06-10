@@ -7,8 +7,9 @@ import '../utils/aframe-components';
 import { db } from '../firebase';
 import { doc, getDoc } from 'firebase/firestore';
 
-const ARExperience = () => {
-  const { batchId } = useParams();
+const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
+  const { batchId: routeBatchId } = useParams();
+  const batchId = propBatchId || routeBatchId;
   const [arData, setArData] = useState(null);
   const [error, setError] = useState(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
@@ -93,13 +94,20 @@ const ARExperience = () => {
     };
     fetchARPayload();
 
-    // Make sure body and #root are transparent so the AR camera video feed (z-index -2) is visible
-    document.body.style.backgroundColor = 'transparent';
-    const rootEl = document.getElementById('root');
-    if (rootEl) rootEl.style.backgroundColor = 'transparent';
+    // Make sure body and #root are transparent so the AR camera video feed (z-index -2) is visible (if not in test mode)
+    if (!isTestMode) {
+      document.body.style.backgroundColor = 'transparent';
+      const rootEl = document.getElementById('root');
+      if (rootEl) rootEl.style.backgroundColor = 'transparent';
+    } else {
+      document.body.style.backgroundColor = '#0f172a';
+      const rootEl = document.getElementById('root');
+      if (rootEl) rootEl.style.backgroundColor = '#0f172a';
+    }
 
     return () => {
       document.body.style.backgroundColor = '';
+      const rootEl = document.getElementById('root');
       if (rootEl) rootEl.style.backgroundColor = '';
       window.removeEventListener('error', handleError);
       window.removeEventListener('unhandledrejection', handleRejection);
@@ -109,11 +117,11 @@ const ARExperience = () => {
 
   useEffect(() => {
     const modelEl = document.getElementById('ar-model');
-    if (!modelEl) return;
+    const targetEl = document.getElementById('target-entity');
 
     const onModelLoad = () => {
       logToScreen("GLTF_LOAD", "Model geometry loaded successfully.");
-      const mesh = modelEl.getObject3D('mesh');
+      const mesh = modelEl ? modelEl.getObject3D('mesh') : null;
       if (mesh) {
         mesh.traverse((node) => {
           if (node.isMesh) {
@@ -130,12 +138,39 @@ const ARExperience = () => {
 
     const onModelError = (e) => logToScreen("GLTF_ERROR", e.detail);
 
-    modelEl.addEventListener('model-loaded', onModelLoad);
-    modelEl.addEventListener('model-error', onModelError);
+    const onTargetFound = () => {
+      logToScreen("TARGET_FOUND", "Image target detected!");
+      if (modelEl) {
+        const mesh = modelEl.getObject3D('mesh');
+        if (mesh) {
+          mesh.traverse((node) => {
+            if (node.isMesh && node.material) {
+              const materials = Array.isArray(node.material) ? node.material : [node.material];
+              materials.forEach((mat) => {
+                mat.needsUpdate = true;
+              });
+            }
+          });
+        }
+      }
+    };
+
+    if (modelEl) {
+      modelEl.addEventListener('model-loaded', onModelLoad);
+      modelEl.addEventListener('model-error', onModelError);
+    }
+    if (targetEl) {
+      targetEl.addEventListener('targetFound', onTargetFound);
+    }
 
     return () => {
-      modelEl.removeEventListener('model-loaded', onModelLoad);
-      modelEl.removeEventListener('model-error', onModelError);
+      if (modelEl) {
+        modelEl.removeEventListener('model-loaded', onModelLoad);
+        modelEl.removeEventListener('model-error', onModelError);
+      }
+      if (targetEl) {
+        targetEl.removeEventListener('targetFound', onTargetFound);
+      }
     };
   }, [arData]);
 
@@ -250,42 +285,107 @@ const ARExperience = () => {
 
   return (
     <div className="w-screen h-[100dvh] overflow-hidden relative bg-transparent">
+      {onBack && (
+        <button 
+          onClick={onBack}
+          style={{
+            position: 'absolute',
+            top: '20px',
+            left: '20px',
+            zIndex: 10000,
+            backgroundColor: 'rgba(0, 0, 0, 0.7)',
+            color: 'white',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            borderRadius: '8px',
+            padding: '10px 16px',
+            fontWeight: 'bold',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            cursor: 'pointer',
+            fontSize: '14px'
+          }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>arrow_back</span>
+          Exit Test
+        </button>
+      )}
 
       {/* AR Scene */}
-      <a-scene
-        mindar-image={`imageTargetSrc: ${arData.mindPath}; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 5;`}
-        color-space="sRGB"
-        renderer="colorManagement: true; physicallyCorrectLights: false;"
-        vr-mode-ui="enabled: false"
-        device-orientation-permission-ui="enabled: false"
-        loading-screen="enabled: false"
-        fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
-      >
-        <a-assets>
-          <a-asset-item id="metaModel" src={arData.gltfPath} crossOrigin="anonymous"></a-asset-item>
-        </a-assets>
+      {isTestMode ? (
+        <a-scene
+          embedded
+          color-space="sRGB"
+          renderer="colorManagement: true; physicallyCorrectLights: false;"
+          vr-mode-ui="enabled: false"
+          device-orientation-permission-ui="enabled: false"
+          loading-screen="enabled: false"
+          fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
+          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: '#0f172a' }}
+        >
+          <a-assets>
+            <a-asset-item id="metaModel" src={arData.gltfPath} crossOrigin="anonymous"></a-asset-item>
+          </a-assets>
 
-        {/* Dynamic Lighting */}
-        <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
-        <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
-        <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
+          <a-camera position="0 0 0" look-controls="enabled: true" wasd-controls="enabled: false"></a-camera>
 
-        <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
+          {/* Place model directly in front of camera (similar to standard 3D viewer) */}
+          <a-entity id="target-entity" position="0 0 -2.5">
+            {/* Dynamic Lighting Moved Inside Target */}
+            <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
+            <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
+            <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
 
-        <a-entity mindar-image-target="targetIndex: 0">
-          <a-gltf-model
-            id="ar-model"
-            src="#metaModel"
-            position="0 0 0"
-            scale={`${modelScale} ${modelScale} ${modelScale}`}
-            rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
-            {...(modelRotSpeed > 0 ? { animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${modelRotY + 360} ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;` } : {})}
-            dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-            play-gltf-video={`playing: ${mediaPlaying}`}
-            play-gltf-animation={`playing: ${mediaPlaying}`}
-          ></a-gltf-model>
-        </a-entity>
-      </a-scene>
+            <a-gltf-model
+              id="ar-model"
+              src="#metaModel"
+              position="0 0 0"
+              scale={`${modelScale} ${modelScale} ${modelScale}`}
+              rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
+              {...(modelRotSpeed > 0 ? { animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${modelRotY + 360} ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;` } : {})}
+              dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
+              play-gltf-video={`playing: ${mediaPlaying}`}
+              play-gltf-animation={`playing: ${mediaPlaying}`}
+            ></a-gltf-model>
+          </a-entity>
+        </a-scene>
+      ) : (
+        <a-scene
+          mindar-image={`imageTargetSrc: ${arData.mindPath}; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 5;`}
+          embedded
+          color-space="sRGB"
+          renderer="colorManagement: true; physicallyCorrectLights: false;"
+          vr-mode-ui="enabled: false"
+          device-orientation-permission-ui="enabled: false"
+          loading-screen="enabled: false"
+          fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
+        >
+          <a-assets>
+            <a-asset-item id="metaModel" src={arData.gltfPath} crossOrigin="anonymous"></a-asset-item>
+          </a-assets>
+
+          <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
+
+          <a-entity id="target-entity" mindar-image-target="targetIndex: 0">
+            {/* Dynamic Lighting Moved Inside Target */}
+            <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
+            <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
+            <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
+
+            <a-gltf-model
+              id="ar-model"
+              src="#metaModel"
+              position="0 0 0"
+              scale={`${modelScale} ${modelScale} ${modelScale}`}
+              rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
+              {...(modelRotSpeed > 0 ? { animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${modelRotY + 360} ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;` } : {})}
+              dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
+              play-gltf-video={`playing: ${mediaPlaying}`}
+              play-gltf-animation={`playing: ${mediaPlaying}`}
+            ></a-gltf-model>
+          </a-entity>
+        </a-scene>
+      )}
 
       {/* Scanning Overlay (optional aesthetic) */}
       <div className="absolute inset-0 pointer-events-none border-[16px] border-black/20 mix-blend-overlay z-40"></div>

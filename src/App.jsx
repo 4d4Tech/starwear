@@ -18,6 +18,7 @@ import Studio4D4 from './pages/Studio4D4';
 // Lazy load AR components to prevent aframe/mind-ar from polluting the global scope on other pages
 const ARExperience = lazy(() => import('./pages/ARExperience'));
 const ARTest = lazy(() => import('./pages/ARTest'));
+const ARExperienceLauncher = lazy(() => import('./pages/ARExperienceLauncher'));
 
 function App() {
   return (
@@ -34,6 +35,7 @@ function App() {
           <Route path="/seed" element={<SeedDatabase />} />
           <Route path="/ar/:batchId" element={<ARExperience />} />
           <Route path="/ar-test" element={<ARTest />} />
+          <Route path="/ar-test-live" element={<ARExperienceLauncher />} />
           <Route path="/studio44" element={<Studio4D4 />} />
           {/* Admin Routes */}
           <Route path="/admin" element={<AdminLayout />}>
