@@ -229,9 +229,6 @@ export default function Studio4D4() {
                 });
                 this.transformControl.addEventListener('change', () => {
                     this.syncPropertiesPanel();
-                    if (this.orbit && this.selectedObject && this.selectedObject.position) {
-                        this.orbit.target.copy(this.selectedObject.position);
-                    }
                 });
 
                 this.scene.add(this.transformControl.getHelper());
@@ -814,6 +811,79 @@ export default function Studio4D4() {
                 geometry.addGroup(frontCapIndices.length + sideIndices.length, backCapIndices.length, 2); // Back Cap
             }
 
+            inflateGeometry(geometry, smoothPath, planeW, planeH, w, h, baseThickness, inflationAmount) {
+                const posAttr = geometry.attributes.position;
+                if (!posAttr) return;
+                const count = posAttr.count;
+
+                const boundary3D = smoothPath.map(pt => new THREE.Vector2(
+                    (pt.x / (w - 1) - 0.5) * planeW,
+                    (0.5 - pt.y / (h - 1)) * planeH
+                ));
+
+                const distances = new Float32Array(count);
+                let maxDist = 0;
+
+                const n = boundary3D.length;
+                for (let i = 0; i < count; i++) {
+                    const vx = posAttr.getX(i);
+                    const vy = posAttr.getY(i);
+
+                    let minDist = Infinity;
+                    for (let j = 0; j < n; j++) {
+                        const a = boundary3D[j];
+                        const b = boundary3D[(j + 1) % n];
+
+                        // Distance from (vx, vy) to segment ab
+                        const l2 = (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+                        let dist;
+                        if (l2 === 0) {
+                            dist = Math.sqrt((vx - a.x) ** 2 + (vy - a.y) ** 2);
+                        } else {
+                            let t = ((vx - a.x) * (b.x - a.x) + (vy - a.y) * (b.y - a.y)) / l2;
+                            t = Math.max(0, Math.min(1, t));
+                            const projX = a.x + t * (b.x - a.x);
+                            const projY = a.y + t * (b.y - a.y);
+                            dist = Math.sqrt((vx - projX) ** 2 + (vy - projY) ** 2);
+                        }
+
+                        if (dist < minDist) {
+                            minDist = dist;
+                        }
+                    }
+
+                    distances[i] = minDist;
+                    if (minDist > maxDist) {
+                        maxDist = minDist;
+                    }
+                }
+
+                geometry.computeBoundingBox();
+                const bbox = geometry.boundingBox;
+                const maxZ = bbox.max.z;
+                const minZ = bbox.min.z;
+
+                for (let i = 0; i < count; i++) {
+                    const vz = posAttr.getZ(i);
+                    const dist = distances[i];
+                    const normDist = maxDist > 0 ? dist / maxDist : 0;
+
+                    // Pillowy shape using a sine curve
+                    const displacement = inflationAmount * Math.sin(normDist * Math.PI / 2);
+
+                    let z_new = vz;
+                    if (vz > 0.001 && maxZ > 0) {
+                        z_new = vz + displacement * (vz / maxZ);
+                    } else if (vz < -0.001 && minZ < 0) {
+                        z_new = vz - displacement * (vz / minZ);
+                    }
+                    posAttr.setZ(i, z_new);
+                }
+
+                posAttr.needsUpdate = true;
+                geometry.computeVertexNormals();
+            }
+
             updateSelectedMeshExtrusion(newDepth) {
                 const obj = this.selectedObject;
                 if (!obj || !obj.isMesh || !obj.userData.isGenerated || !obj.userData.shape) return;
@@ -833,6 +903,13 @@ export default function Studio4D4() {
                 newGeometry.computeBoundingBox();
                 const centerOffset = -0.5 * (newGeometry.boundingBox.max.z + newGeometry.boundingBox.min.z);
                 newGeometry.translate(0, 0, centerOffset);
+
+                // Re-inflate if it is a volumetric mesh
+                if (obj.userData.isVolumetric) {
+                    const { smoothPath, planeW, planeH, w, h, baseThickness } = obj.userData;
+                    const inflationAmount = newDepth * 1.5;
+                    this.inflateGeometry(newGeometry, smoothPath, planeW, planeH, w, h, baseThickness, inflationAmount);
+                }
 
                 // Split front and back caps
                 this.splitExtrudeGeometryGroups(newGeometry);
@@ -905,113 +982,407 @@ export default function Studio4D4() {
             }
 
             async generateVolumetricMesh(file) {
-                this.setLoadingState("Step 1: Uploading Image to Storage...", true);
+                this.setLoadingState("Phase 1: Analyzing Garment Silhouettes...", true);
+                this.updateDiagnostics("Starting Volumetric Pipeline...\nLoading image source...");
 
+                // Background upload to keep Firebase storage updated without blocking the UI
                 try {
-                    // 1. Upload to Firebase Storage to get a public URL for the external AI API
                     const storage = getStorage();
                     const storageRef = ref(storage, `ai-uploads/${Date.now()}_${file.name}`);
-                    await uploadBytes(storageRef, file);
-                    const publicImageUrl = await getDownloadURL(storageRef);
-
-                    this.setLoadingState("Step 2: Initiating AI Generation...", true);
-
-                    // 2. Trigger the Firebase Cloud Function
-                    const functions = getFunctions();
-                    const initiateAIGeneration = httpsCallable(functions, 'initiateAIGeneration');
-                    const pollGenerationStatus = httpsCallable(functions, 'pollGenerationStatus');
-
-                    const initRes = await initiateAIGeneration({ imageUrl: publicImageUrl });
-                    const taskId = initRes.data.taskId;
-
-                    // 3. The Polling Loop
-                    this.setLoadingState("Step 3: AI is synthesizing volume... (1-2 mins)", true);
-                    
-                    const pollInterval = setInterval(async () => {
-                        try {
-                            const statusRes = await pollGenerationStatus({ taskId });
-                            const { status, progress, modelUrl } = statusRes.data;
-
-                            this.setLoadingState(`Synthesizing... ${progress || 0}%`, true);
-
-                            if (status === 'SUCCEEDED' && modelUrl) {
-                                clearInterval(pollInterval);
-                                
-                                // THE FIX: Pass the dynamic modelUrl explicitly
-                                this.loadGeneratedGLB(modelUrl, file.name); 
-                                
-                            } else if (status === 'FAILED' || status === 'CANCELED') {
-                                clearInterval(pollInterval);
-                                this.setLoadingState("Generation Failed.", true);
-                                this.updateDiagnostics("AI Generation failed at the external API level.", true);
-                            }
-                        } catch (pollErr) {
-                            console.error("Polling error:", pollErr);
-                        }
-                    }, 5000); // Check status every 5 seconds
-
-                } catch (error) {
-                    console.error("Pipeline Error:", error);
-                    this.setLoadingState("Error during AI initialization.", true);
-                    this.updateDiagnostics(error.message, true);
-                }
-            }
-
-            // 4. The dynamic GLTF Loader
-            loadGeneratedGLB(dynamicUrl, filename) {
-                this.setLoadingState("Step 4: Downloading & Optimizing Mesh...", true);
-                
-                const loader = new GLTFLoader();
-
-                // Use the dynamicUrl, NOT a hardcoded placeholder
-                loader.load(dynamicUrl, (gltf) => {
-                    const scene = gltf.scene;
-
-                    scene.traverse((child) => {
-                        if (child.isMesh) {
-                            // Preserve the AI-generated texture mapping
-                            const aiTexture = child.material.map || null;
-
-                            // Apply Studio44's custom fabric manager
-                            const newMat = this.fabricMaterialManager.createFabricMaterial({
-                                map: aiTexture,
-                                color: aiTexture ? 0xffffff : 0xcccccc // Fallback color if no texture
-                            });
-                            
-                            this.fabricMaterialManager.applyProfile(newMat, 'cotton');
-                            child.material = newMat;
-
-                            // Attach required user data for the properties panel to work
-                            child.userData = {
-                                isGenerated: true,
-                                materials: {
-                                    lit: [newMat],
-                                    unlit: [new THREE.MeshBasicMaterial({ map: aiTexture })],
-                                    wireframe: [new THREE.MeshBasicMaterial({ color: 0x00ffcc, wireframe: true })]
-                                },
-                                fabricProfile: 'cotton',
-                                animate: false,
-                                rotationSpeed: 0.01
-                            };
-                        }
+                    uploadBytes(storageRef, file).then(() => {
+                        console.log("Original image successfully saved to Firebase Storage.");
+                    }).catch(err => {
+                        console.warn("Background Firebase Storage upload failed:", err);
                     });
+                } catch (e) {
+                    console.warn("Firebase Storage is not initialized or failed:", e);
+                }
 
-                    // Auto-Center and place on the floor grid
-                    const box = new THREE.Box3().setFromObject(scene);
-                    const center = box.getCenter(new THREE.Vector3());
-                    scene.position.sub(center); 
-                    scene.position.y += (box.max.y - box.min.y) / 2; 
+                // Process image file locally to a data URL
+                const imageUrl = await this.processImageFile(file);
 
-                    scene.name = `Volumetric_${filename}`;
-                    
-                    // Add to your custom Scene Outliner
-                    this.addSceneObject(scene);
-                    this.selectObject(scene);
+                return new Promise((resolve, reject) => {
+                    const img = new Image();
+                    if (!imageUrl.startsWith('data:')) {
+                        img.crossOrigin = "Anonymous";
+                    }
 
-                    this.setLoadingState("Done", false);
-                }, undefined, (error) => {
-                    console.error("GLTFLoader Error:", error);
-                    this.setLoadingState("Failed to load the resulting GLB", true);
+                    img.onerror = (err) => {
+                        console.error("Failed to load image:", err);
+                        this.setLoadingState("Failed to load image", true);
+                        this.updateDiagnostics(`Failed to load image: ${err.message || 'Unknown image error'}`, true);
+                        reject(err);
+                    };
+
+                    img.onload = async () => {
+                        try {
+                            this.updateDiagnostics(`Image loaded successfully: ${img.width}x${img.height}\nRunning Pass 1 (Extract pixels)...`);
+                            // Pass 1: Extract exact pixels
+                            const canvas = document.createElement('canvas');
+                            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                            canvas.width = img.width;
+                            canvas.height = img.height;
+                            ctx.drawImage(img, 0, 0);
+                            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+                            this.setLoadingState("Phase 2: Projecting Volumetric Fields...");
+                            this.updateDiagnostics(`Image loaded: ${img.width}x${img.height}\nCalculating depth contours...`);
+                            await new Promise(r => setTimeout(r, 400));
+
+                            // Pass 2: Create a "cognitive blur" to calculate center of mass and edge distance.
+                            const blurCanvas = document.createElement('canvas');
+                            const blurCtx = blurCanvas.getContext('2d', { willReadFrequently: true });
+                            blurCanvas.width = img.width;
+                            blurCanvas.height = img.height;
+
+                            const blurRadius = Math.max(4, Math.floor(img.width * 0.08));
+                            blurCtx.filter = `blur(${blurRadius}px)`;
+                            blurCtx.drawImage(img, 0, 0);
+                            const blurredData = blurCtx.getImageData(0, 0, canvas.width, canvas.height);
+
+                            this.setLoadingState("Phase 2.5: Planarity Analysis & Edge Detection...");
+                            await new Promise(r => setTimeout(r, 300));
+
+                            // Pass 2.5: Planarity Detection
+                            let sumLum = 0, sumLumSq = 0, solidCount = 0;
+                            for (let i = 0; i < blurredData.data.length; i += 4) {
+                                if (imgData.data[i + 3] > 128) {
+                                    const lum = (blurredData.data[i] * 0.299 + blurredData.data[i + 1] * 0.587 + blurredData.data[i + 2] * 0.114) / 255.0;
+                                    sumLum += lum;
+                                    sumLumSq += lum * lum;
+                                    solidCount++;
+                                }
+                            }
+
+                            let planarity = 0.5;
+                            if (solidCount > 0) {
+                                const mean = sumLum / solidCount;
+                                const variance = Math.max(0, (sumLumSq / solidCount) - (mean * mean));
+                                const stdDev = Math.sqrt(variance);
+                                planarity = 1.0 - Math.min(Math.max((stdDev - 0.03) / 0.09, 0), 1.0);
+                                planarity = planarity * planarity * (3 - 2 * planarity);
+                            }
+
+                            this.setLoadingState("Phase 3: Synthesizing Mesh Vertices...", true);
+                            this.updateDiagnostics("Starting Pass 3...\nCalculating topology resolution...");
+                            await new Promise(r => setTimeout(r, 400));
+
+                            // Determine topology resolution for contour tracing
+                            const maxRes = 150;
+                            let w = Math.max(2, img.width), h = Math.max(2, img.height);
+                            if (w > maxRes || h > maxRes) {
+                                const ratio = Math.min(maxRes / w, maxRes / h);
+                                w = Math.floor(w * ratio);
+                                h = Math.floor(h * ratio);
+                            }
+
+                            const scale = 5 / Math.max(img.width, img.height);
+                            const planeW = img.width * scale;
+                            const planeH = img.height * scale;
+                            const baseThickness = planeW * 0.12;
+
+                            // Trace outline on a low-res alpha map for performance and anti-aliasing
+                            const traceCanvas = document.createElement('canvas');
+                            const traceCtx = traceCanvas.getContext('2d', { willReadFrequently: true });
+                            traceCanvas.width = w;
+                            traceCanvas.height = h;
+                            traceCtx.drawImage(img, 0, 0, w, h);
+                            const traceData = traceCtx.getImageData(0, 0, w, h);
+
+                            const grid = new Uint8Array(w * h);
+                            for (let i = 0; i < w * h; i++) {
+                                grid[i] = traceData.data[i * 4 + 3] > 80 ? 1 : 0;
+                            }
+
+                            // Find starting boundary pixel
+                            let startX = -1, startY = -1;
+                            for (let y = 0; y < h; y++) {
+                                for (let x = 0; x < w; x++) {
+                                    if (grid[y * w + x] === 1) {
+                                        startX = x;
+                                        startY = y;
+                                        break;
+                                    }
+                                }
+                                if (startX !== -1) break;
+                            }
+
+                            if (startX === -1) {
+                                throw new Error("No solid pixels found in image alpha channel.");
+                            }
+
+                            // Moore-Neighbor tracing
+                            const path = [];
+                            let cx = startX, cy = startY;
+                            const dx = [-1,  0,  1, 1, 1, 0, -1, -1];
+                            const dy = [-1, -1, -1, 0, 1, 1,  1,  0];
+                            let backtrackDir = 7;
+                            let iterations = 0;
+                            const maxIterations = w * h * 2;
+
+                            do {
+                                path.push({ x: cx, y: cy });
+                                let found = false;
+                                let searchDir = (backtrackDir + 1) % 8;
+
+                                for (let i = 0; i < 8; i++) {
+                                    const dir = (searchDir + i) % 8;
+                                    const nx = cx + dx[dir];
+                                    const ny = cy + dy[dir];
+
+                                    if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                                        if (grid[ny * w + nx] === 1) {
+                                            cx = nx;
+                                            cy = ny;
+                                            backtrackDir = (dir + 4) % 8;
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (!found) break;
+                                iterations++;
+                            } while ((cx !== startX || cy !== startY) && iterations < maxIterations);
+
+                            // Smooth contour path (moving average)
+                            const smoothPath = [];
+                            const windowSize = 5;
+                            const halfWindow = Math.floor(windowSize / 2);
+                            const pathLen = path.length;
+
+                            for (let i = 0; i < pathLen; i++) {
+                                let sumX = 0, sumY = 0;
+                                for (let j = -halfWindow; j <= halfWindow; j++) {
+                                    const idx = (i + j + pathLen) % pathLen;
+                                    sumX += path[idx].x;
+                                    sumY += path[idx].y;
+                                }
+                                smoothPath.push({
+                                    x: sumX / windowSize,
+                                    y: sumY / windowSize
+                                });
+                            }
+
+                            // Sample average edge color from original high-res canvas
+                            let sumR = 0, sumG = 0, sumB = 0, edgeColorCount = 0;
+                            const sampleStep = Math.max(1, Math.floor(smoothPath.length / 50));
+                            for (let i = 0; i < smoothPath.length; i += sampleStep) {
+                                const pt = smoothPath[i];
+                                const px = Math.floor((pt.x / (w - 1)) * (img.width - 1));
+                                const py = Math.floor((pt.y / (h - 1)) * (img.height - 1));
+                                if (px >= 0 && px < img.width && py >= 0 && py < img.height) {
+                                    const pixelIdx = (py * img.width + px) * 4;
+                                    const r = imgData.data[pixelIdx];
+                                    const g = imgData.data[pixelIdx + 1];
+                                    const b = imgData.data[pixelIdx + 2];
+                                    const a = imgData.data[pixelIdx + 3];
+                                    if (a > 128) {
+                                        sumR += r;
+                                        sumG += g;
+                                        sumB += b;
+                                        edgeColorCount++;
+                                    }
+                                }
+                            }
+
+                            let edgeHexColor = 0x1e293b;
+                            if (edgeColorCount > 0) {
+                                const avgR = Math.floor(sumR / edgeColorCount);
+                                const avgG = Math.floor(sumG / edgeColorCount);
+                                const avgB = Math.floor(sumB / edgeColorCount);
+                                edgeHexColor = (avgR << 16) | (avgG << 8) | avgB;
+                            }
+
+                            // Convert smooth path to THREE.Shape
+                            const shape = new THREE.Shape();
+                            if (smoothPath.length > 0) {
+                                const p0_x = (smoothPath[0].x / (w - 1) - 0.5) * planeW;
+                                const p0_y = (0.5 - smoothPath[0].y / (h - 1)) * planeH;
+                                shape.moveTo(p0_x, p0_y);
+
+                                for (let i = 1; i < smoothPath.length; i++) {
+                                    const px = (smoothPath[i].x / (w - 1) - 0.5) * planeW;
+                                    const py = (0.5 - smoothPath[i].y / (h - 1)) * planeH;
+                                    shape.lineTo(px, py);
+                                }
+                                shape.closePath();
+                            }
+
+                            // Extrude Geometry with Bevel
+                            const extrudeSettings = {
+                                depth: baseThickness * 1.5,
+                                bevelEnabled: true,
+                                bevelThickness: baseThickness * 0.15,
+                                bevelSize: baseThickness * 0.15,
+                                bevelSegments: 3,
+                                steps: 1,
+                                curveSegments: 12
+                            };
+
+                            const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+                            geometry.computeVertexNormals();
+
+                            // Center Origin
+                            geometry.computeBoundingBox();
+                            const centerOffset = -0.5 * (geometry.boundingBox.max.z + geometry.boundingBox.min.z);
+                            geometry.translate(0, 0, centerOffset);
+
+                            this.setLoadingState("Phase 4: Volumetric Inflation...");
+                            this.updateDiagnostics("Applying mathematical distance transform and Z-axis vertex displacement...");
+                            await new Promise(r => setTimeout(r, 450));
+
+                            // Run our mathematical inflation algorithm
+                            const inflationAmount = baseThickness * 1.5;
+                            this.inflateGeometry(geometry, smoothPath, planeW, planeH, w, h, baseThickness, inflationAmount);
+
+                            // Split front and back caps into separate groups
+                            this.splitExtrudeGeometryGroups(geometry);
+
+                            // Recalculate UVs for front and back faces (group with materialIndex === 0 or 2)
+                            geometry.computeBoundingBox();
+                            const bbox = geometry.boundingBox;
+                            const width = bbox.max.x - bbox.min.x;
+                            const height = bbox.max.y - bbox.min.y;
+
+                            if (width > 0 && height > 0) {
+                                const posAttr = geometry.attributes.position;
+                                const uvAttr = geometry.attributes.uv;
+                                const indexAttr = geometry.index;
+
+                                if (posAttr && uvAttr) {
+                                    const capVertexIndices = new Set();
+                                    if (geometry.groups && indexAttr) {
+                                        for (const group of geometry.groups) {
+                                            if (group.materialIndex === 0 || group.materialIndex === 2) {
+                                                for (let i = group.start; i < group.start + group.count; i++) {
+                                                    capVertexIndices.add(indexAttr.getX(i));
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if (capVertexIndices.size > 0) {
+                                        capVertexIndices.forEach(idx => {
+                                            const x = posAttr.getX(idx);
+                                            const y = posAttr.getY(idx);
+                                            const u = (x - bbox.min.x) / width;
+                                            const v = (y - bbox.min.y) / height;
+                                            uvAttr.setXY(idx, u, v);
+                                        });
+                                    } else {
+                                        const normalAttr = geometry.attributes.normal;
+                                        for (let i = 0; i < posAttr.count; i++) {
+                                            let isCap = false;
+                                            if (normalAttr) {
+                                                if (Math.abs(normalAttr.getZ(i)) > 0.9) {
+                                                    isCap = true;
+                                                }
+                                            } else {
+                                                isCap = true;
+                                            }
+                                            if (isCap) {
+                                                const x = posAttr.getX(i);
+                                                const y = posAttr.getY(i);
+                                                const u = (x - bbox.min.x) / width;
+                                                const v = (y - bbox.min.y) / height;
+                                                uvAttr.setXY(i, u, v);
+                                            }
+                                        }
+                                    }
+                                    uvAttr.needsUpdate = true;
+                                }
+                            }
+
+                            this.setLoadingState("Phase 5: Multi-Material PBR Baking...");
+                            this.updateDiagnostics(`Geometry constructed and inflated:\nVertices: ${geometry.attributes.position.count}\nBaking textures...`);
+                            await new Promise(r => setTimeout(r, 400));
+
+                            // Construct Multi-Material Layers
+                            const texture = new THREE.CanvasTexture(canvas);
+                            texture.colorSpace = THREE.SRGBColorSpace;
+                            texture.needsUpdate = true;
+
+                            const edgeColor = edgeHexColor;
+
+                            // Lit (PBR Physical)
+                            const litMatFront = this.fabricMaterialManager.createFabricMaterial({
+                                map: texture, roughness: 0.3, metalness: 0.1, alphaTest: 0.5
+                            });
+                            litMatFront.userData.originalSide = THREE.FrontSide;
+
+                            const litMatSide = this.fabricMaterialManager.createFabricMaterial({
+                                color: edgeColor, roughness: 0.6, metalness: 0.2
+                            });
+                            litMatSide.userData.originalSide = THREE.FrontSide;
+
+                            const litMatBack = this.fabricMaterialManager.createFabricMaterial({
+                                map: texture, roughness: 0.3, metalness: 0.1, alphaTest: 0.5, side: THREE.DoubleSide
+                            });
+                            litMatBack.userData.originalSide = THREE.DoubleSide;
+
+                            // Apply default profile (cotton) to all lit materials
+                            const matsLit = [litMatFront, litMatSide, litMatBack];
+                            matsLit.forEach(mat => {
+                                this.fabricMaterialManager.applyProfile(mat, 'cotton');
+                            });
+
+                            // Unlit (Albedo)
+                            const unlitMatFront = new THREE.MeshBasicMaterial({
+                                map: texture, alphaTest: 0.5
+                            });
+                            const unlitMatSide = new THREE.MeshBasicMaterial({
+                                color: edgeColor
+                            });
+                            const unlitMatBack = new THREE.MeshBasicMaterial({
+                                map: texture, alphaTest: 0.5, side: THREE.DoubleSide
+                            });
+
+                            // Wireframe
+                            const wireMat = new THREE.MeshBasicMaterial({
+                                color: 0x00ffcc, wireframe: true, side: THREE.DoubleSide, transparent: true, opacity: 0.5
+                            });
+
+                            const matsUnlit = [unlitMatFront, unlitMatSide, unlitMatBack];
+                            const matsWire = [wireMat, wireMat, wireMat];
+
+                            const mesh = new THREE.Mesh(geometry, matsLit);
+                            mesh.name = `Volumetric_${file.name}`;
+                            mesh.castShadow = true;
+                            mesh.receiveShadow = true;
+                            mesh.position.y = planeH / 2;
+
+                            mesh.userData = {
+                                isGenerated: true,
+                                isVolumetric: true, // Flag to identify volumetric meshes
+                                smoothPath: smoothPath,
+                                planeW: planeW,
+                                planeH: planeH,
+                                w: w,
+                                h: h,
+                                baseThickness: baseThickness,
+                                shape: shape,
+                                extrudeSettings: extrudeSettings,
+                                materials: { lit: matsLit, unlit: matsUnlit, wireframe: matsWire },
+                                animate: false,
+                                rotationSpeed: 0.01,
+                                currentMode: 'lit',
+                                fabricProfile: 'cotton'
+                            };
+
+                            this.addSceneObject(mesh);
+                            this.selectObject(mesh);
+
+                            this.updateDiagnostics(`Geometry constructed using ExtrudeGeometry and Volumetric Inflation:\nVertices: ${geometry.attributes.position.count}\nMesh added to scene and selected!`);
+                            this.setLoadingState("Done", false);
+                            resolve();
+                        } catch (err) {
+                            console.error("Error generating geometry inside onload:", err);
+                            this.updateDiagnostics(`Pipeline Error:\n${err.message}\nStack:\n${err.stack}`, true);
+                            this.setLoadingState("Error during generation", true);
+                            reject(err);
+                        }
+                    };
+                    img.src = imageUrl;
                 });
             }
 
@@ -1067,10 +1438,7 @@ export default function Studio4D4() {
                 this.selectedObject = obj;
                 this.transformControl.attach(obj);
 
-                // Focus OrbitControls target on the selected object
-                if (this.orbit && obj.position) {
-                    this.orbit.target.copy(obj.position);
-                }
+
 
                 // Apply selection highlights
                 if (obj.isMesh) {

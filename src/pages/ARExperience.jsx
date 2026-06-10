@@ -24,6 +24,28 @@ const ARExperience = () => {
   };
 
   useEffect(() => {
+    const handleError = (event) => {
+      logToScreen("WINDOW_ERROR", event.message || event.error || String(event));
+    };
+    const handleRejection = (event) => {
+      logToScreen("PROMISE_REJECTION", String(event.reason));
+    };
+    
+    const originalConsoleError = console.error;
+    console.error = (...args) => {
+      logToScreen("CONSOLE_ERROR", args.map(arg => {
+        try {
+          return typeof arg === 'object' ? JSON.stringify(arg) : String(arg);
+        } catch(e) {
+          return String(arg);
+        }
+      }).join(' '));
+      originalConsoleError.apply(console, args);
+    };
+
+    window.addEventListener('error', handleError);
+    window.addEventListener('unhandledrejection', handleRejection);
+
     const fetchARPayload = async () => {
       try {
         logToScreen("ROUTER_FETCH", "Fetching batch...");
@@ -79,6 +101,9 @@ const ARExperience = () => {
     return () => {
       document.body.style.backgroundColor = '';
       if (rootEl) rootEl.style.backgroundColor = '';
+      window.removeEventListener('error', handleError);
+      window.removeEventListener('unhandledrejection', handleRejection);
+      console.error = originalConsoleError;
     };
   }, [batchId]);
 
@@ -92,8 +117,12 @@ const ARExperience = () => {
       if (mesh) {
         mesh.traverse((node) => {
           if (node.isMesh) {
-            const hasMap = node.material.map ? "YES" : "NO";
-            logToScreen(`MATERIAL_INSPECT [${node.name}]`, `Has Texture Map: ${hasMap}`);
+            const mat = node.material;
+            const hasMap = mat.map ? "YES" : "NO";
+            const colorHex = mat.color ? `#${mat.color.getHexString()}` : 'N/A';
+            const emissiveHex = mat.emissive ? `#${mat.emissive.getHexString()}` : 'N/A';
+            const details = `Type: ${mat.type} | Color: ${colorHex} | Emissive: ${emissiveHex} | Roughness: ${mat.roughness ?? 'N/A'} | Metalness: ${mat.metalness ?? 'N/A'} | Has Texture: ${hasMap}`;
+            logToScreen(`MATERIAL_INSPECT [${node.name}]`, details);
           }
         });
       }
@@ -226,9 +255,10 @@ const ARExperience = () => {
       <a-scene
         mindar-image={`imageTargetSrc: ${arData.mindPath}; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 5;`}
         color-space="sRGB"
-        renderer="colorManagement: true; physicallyCorrectLights: true"
+        renderer="colorManagement: true; physicallyCorrectLights: false;"
         vr-mode-ui="enabled: false"
         device-orientation-permission-ui="enabled: false"
+        loading-screen="enabled: false"
         fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
       >
         <a-assets>
@@ -236,11 +266,11 @@ const ARExperience = () => {
         </a-assets>
 
         {/* Dynamic Lighting */}
-        <a-light key={`amb-${ambientColor}-${ambientIntensity}`} type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
-        <a-light key={`dir1-${dir1Color}-${dir1Intensity}-${dir1Position}`} type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
-        <a-light key={`dir2-${dir2Color}-${dir2Intensity}-${dir2Position}`} type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
+        <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
+        <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
+        <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
 
-        <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+        <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
 
         <a-entity mindar-image-target="targetIndex: 0">
           <a-gltf-model

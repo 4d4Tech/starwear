@@ -45,45 +45,25 @@ if (typeof AFRAME !== 'undefined') {
             }
 
             if (node.material) {
-              const THREE_INSTANCE = AFRAME.THREE;
               const materials = Array.isArray(node.material) ? node.material : [node.material];
-              materials.forEach((mat, index) => {
-                // Upgrade basic/unlit materials to Standard to ensure they react to scene lights
-                if (mat.type === 'MeshBasicMaterial' || mat.type === 'MeshPhongMaterial' || mat.type === 'MeshLambertMaterial') {
-                  const newMat = new THREE_INSTANCE.MeshStandardMaterial({
-                    color: mat.color || new THREE_INSTANCE.Color('#ffffff'),
-                    map: mat.map || null,
-                    transparent: mat.transparent || false,
-                    opacity: mat.opacity || 1.0,
-                    wireframe: mat.wireframe || false,
-                    side: mat.side !== undefined ? mat.side : 2,
-                    name: mat.name || ''
-                  });
-                  if (mat.alphaMap) newMat.alphaMap = mat.alphaMap;
-                  if (mat.emissiveMap) newMat.emissiveMap = mat.emissiveMap;
-                  
-                  materials[index] = newMat;
-                  mat = newMat;
-                  
-                  if (Array.isArray(node.material)) {
-                    node.material = materials;
-                  } else {
-                    node.material = newMat;
-                  }
+              materials.forEach((mat) => {
+                // SAFE APPROACH: Mutate parameters on the existing material instance
+                // to avoid stripping embedded textures (maps)
+                if (mat.metalness !== undefined) mat.metalness = this.data.metalness;
+                if (mat.roughness !== undefined) mat.roughness = this.data.roughness;
+                if (mat.emissive && typeof mat.emissive.set === 'function') {
+                  mat.emissive.set(this.data.emissive);
                 }
-
-                mat.metalness = this.data.metalness;
-                mat.roughness = this.data.roughness;
-                if (mat.emissive) mat.emissive.set(this.data.emissive);
-                mat.emissiveIntensity = this.data.emissiveIntensity;
+                if (mat.emissiveIntensity !== undefined) mat.emissiveIntensity = this.data.emissiveIntensity;
                 mat.wireframe = this.data.wireframe;
-                if (this.data.opacity < 1.0) {
-                  mat.transparent = true;
-                  mat.opacity = this.data.opacity;
-                } else {
-                  mat.opacity = this.data.opacity;
-                }
+                mat.opacity = this.data.opacity;
+                mat.transparent = this.data.opacity < 1.0;
+                
+                // Signal Three.js that material updates require cache refresh
                 mat.needsUpdate = true;
+
+                // Log the mutated material state
+                console.error(`MUTATED_MATERIAL [${node.name}] Type: ${mat.type} | Color: #${mat.color ? mat.color.getHexString() : 'N/A'} | Emissive: #${mat.emissive ? mat.emissive.getHexString() : 'N/A'} | Roughness: ${mat.roughness} | Metalness: ${mat.metalness} | Opacity: ${mat.opacity} | Transparent: ${mat.transparent} | Has Texture: ${!!mat.map}`);
               });
             }
           }

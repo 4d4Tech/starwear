@@ -359,7 +359,7 @@ const ARTest = () => {
           <a-scene
             embedded
             color-space="sRGB"
-            renderer="colorManagement: true; physicallyCorrectLights: true"
+            renderer="colorManagement: true; physicallyCorrectLights: false;"
             vr-mode-ui="enabled: false"
             device-orientation-permission-ui="enabled: false"
             fog={`type: exponential; color: ${fogColor}; density: ${fogDensity}`}
@@ -369,11 +369,12 @@ const ARTest = () => {
               <a-asset-item id="metaModel" src={arData.arExperience.modelUrl} crossOrigin="anonymous"></a-asset-item>
             </a-assets>
 
-            <a-light key={`amb-${ambientColor}-${ambientIntensity}`} type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
-            <a-light key={`dir1-${dir1Color}-${dir1Intensity}-${dir1Position}`} type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
-            <a-light key={`dir2-${dir2Color}-${dir2Intensity}-${dir2Position}`} type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
+            {/* Dynamic Lighting */}
+            <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
+            <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
+            <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
 
-            <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
+            <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
 
             <a-entity position="0 0 -2.5">
               <a-gltf-model
