@@ -200,6 +200,9 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     if (modelEl) {
       modelEl.addEventListener('model-loaded', onModelLoad);
       modelEl.addEventListener('model-error', onModelError);
+      if (modelEl.getObject3D('mesh')) {
+        updateMeshMaterials();
+      }
     }
     if (targetEl) {
       targetEl.addEventListener('targetFound', onTargetFound);
@@ -214,7 +217,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         targetEl.removeEventListener('targetFound', onTargetFound);
       }
     };
-  }, [arData]);
+  }, [arData, cameraEnabled]);
 
   const handleCheckout = async () => {
     setCheckoutLoading(true);
@@ -299,10 +302,10 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const ambientIntensity = cfg.ambientIntensity ?? 1.5;
   const dir1Color = cfg.dir1Color || '#ffffff';
   const dir1Intensity = cfg.dir1Intensity ?? 2.5;
-  const dir1Position = cfg.dir1Position || '0 2 2';
+  const dir1Position = cfg.dir1Position || '1 2 1';
   const dir2Color = cfg.dir2Color || '#ffffff';
   const dir2Intensity = cfg.dir2Intensity ?? 1.0;
-  const dir2Position = cfg.dir2Position || '-1 1 2';
+  const dir2Position = cfg.dir2Position || '-1 -2 -1';
   
   const showBuyButton = cfg.showBuyButton !== undefined ? cfg.showBuyButton : true;
   const buyButtonColor = cfg.buyButtonColor || '#000000';
@@ -317,11 +320,11 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const modelRotY = cfg.modelRotY ?? 0;
   const modelRotZ = cfg.modelRotZ ?? 0;
 
-  // Material Configs (-1 means keep GLTF model original unless explicitly set)
-  const matMetalness = cfg.matMetalness !== undefined ? cfg.matMetalness : -1;
-  const matRoughness = cfg.matRoughness !== undefined ? cfg.matRoughness : -1;
-  const matEmissive = cfg.matEmissive || '';
-  const matEmissiveIntensity = cfg.matEmissiveIntensity !== undefined ? cfg.matEmissiveIntensity : -1;
+  // Material Configs (matching ARTest defaults)
+  const matMetalness = cfg.matMetalness !== undefined ? cfg.matMetalness : 0.0;
+  const matRoughness = cfg.matRoughness !== undefined ? cfg.matRoughness : 1.0;
+  const matEmissive = cfg.matEmissive || '#000000';
+  const matEmissiveIntensity = cfg.matEmissiveIntensity !== undefined ? cfg.matEmissiveIntensity : 0.0;
   const matWireframe = cfg.matWireframe || false;
   const matOpacity = cfg.matOpacity ?? 1.0;
 
@@ -371,7 +374,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
           <a-camera position="0 0 0" look-controls="enabled: true" wasd-controls="enabled: false">
             {/* Front Headlight attached to camera */}
-            <a-entity light="type: directional; color: #ffffff; intensity: 1.5; position: 0 0 1"></a-entity>
+            <a-light type="directional" color="#ffffff" intensity="1.5" position="0 0 1"></a-light>
           </a-camera>
 
           {/* Dynamic Lighting MUST be at root to avoid matrix scale crushing */}
@@ -396,7 +399,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         </a-scene>
       ) : (
         <a-scene
-          mindar-image={`imageTargetSrc: ${arData.mindPath}; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 5;`}
+          mindar-image={`imageTargetSrc: ${arData.mindPath}; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 5; uiLoading: no; uiScanning: no; uiError: no;`}
           embedded
           color-space="sRGB"
           renderer="colorManagement: true; physicallyCorrectLights: false;"
@@ -411,7 +414,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
           <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false">
             {/* Front Headlight attached to camera ensures phone camera facing side is always lit */}
-            <a-entity light="type: directional; color: #ffffff; intensity: 1.5; position: 0 0 1"></a-entity>
+            <a-light type="directional" color="#ffffff" intensity="1.5" position="0 0 1"></a-light>
           </a-camera>
 
           {/* Dynamic Lighting MUST be at root to avoid matrix scale crushing */}
