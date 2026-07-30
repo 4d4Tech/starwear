@@ -7,10 +7,10 @@ if (typeof AFRAME !== 'undefined') {
   if (!AFRAME.components['dynamic-materials']) {
     AFRAME.registerComponent('dynamic-materials', {
       schema: {
-        metalness: { type: 'number', default: 0.0 },
-        roughness: { type: 'number', default: 1.0 },
-        emissive: { type: 'color', default: '#000000' },
-        emissiveIntensity: { type: 'number', default: 0 },
+        metalness: { type: 'number', default: -1 },
+        roughness: { type: 'number', default: -1 },
+        emissive: { type: 'color', default: '' },
+        emissiveIntensity: { type: 'number', default: -1 },
         wireframe: { type: 'boolean', default: false },
         opacity: { type: 'number', default: 1.0 },
         envMapUrl: { type: 'string', default: 'https://firebasestorage.googleapis.com/v0/b/star-wear-ecb39.firebasestorage.app/o/environment-map.jpg?alt=media&token=d96fbc96-ccab-4ee1-bf6b-96cc37162fd9' }
@@ -25,17 +25,24 @@ if (typeof AFRAME !== 'undefined') {
         if (this.data.envMapUrl) {
           const textureLoader = new AFRAME.THREE.TextureLoader();
           textureLoader.crossOrigin = 'anonymous';
-          textureLoader.load(this.data.envMapUrl, (texture) => {
-            texture.mapping = AFRAME.THREE.EquirectangularReflectionMapping;
-            if (AFRAME.THREE.sRGBEncoding !== undefined) {
-              texture.encoding = AFRAME.THREE.sRGBEncoding;
-            } else if (AFRAME.THREE.SRGBColorSpace !== undefined) {
-              texture.colorSpace = AFRAME.THREE.SRGBColorSpace;
+          textureLoader.load(
+            this.data.envMapUrl,
+            (texture) => {
+              texture.mapping = AFRAME.THREE.EquirectangularReflectionMapping;
+              if (AFRAME.THREE.SRGBColorSpace !== undefined) {
+                texture.colorSpace = AFRAME.THREE.SRGBColorSpace;
+              } else if (AFRAME.THREE.sRGBEncoding !== undefined) {
+                texture.encoding = AFRAME.THREE.sRGBEncoding;
+              }
+              this.envMapTexture = texture;
+              // Force an update once the texture is downloaded
+              this.applyMaterials();
+            },
+            undefined,
+            (err) => {
+              console.warn("envMapTexture load error:", err);
             }
-            this.envMapTexture = texture;
-            // Force an update once the texture is downloaded
-            this.applyMaterials();
-          });
+          );
         }
 
         if (this.el.getObject3D('mesh')) {
@@ -51,11 +58,6 @@ if (typeof AFRAME !== 'undefined') {
         if (!obj) return;
 
         obj.traverse((node) => {
-          if (node.isLight) {
-            node.visible = false;
-            node.intensity = 0;
-          }
-
           if (node.isMesh) {
             if (node.geometry && !node.geometry.attributes.normal) {
               node.geometry.computeVertexNormals();
@@ -64,23 +66,52 @@ if (typeof AFRAME !== 'undefined') {
             if (node.material) {
               const materials = Array.isArray(node.material) ? node.material : [node.material];
               materials.forEach((mat) => {
-                
-                // Inject the downloaded environment map
+                // Ensure double sided rendering to prevent backface culling blackness
+                mat.side = AFRAME.THREE.DoubleSide;
+
+                // Inject the downloaded environment map if available
                 if (this.envMapTexture) {
                   mat.envMap = this.envMapTexture;
-                  mat.envMapIntensity = 1.0; 
+                  if (mat.envMapIntensity === undefined || mat.envMapIntensity === 0) {
+                    mat.envMapIntensity = 1.0;
+                  }
                 }
 
-                if (mat.metalness !== undefined) mat.metalness = this.data.metalness;
-                if (mat.roughness !== undefined) mat.roughness = this.data.roughness;
-                if (mat.emissive && typeof mat.emissive.set === 'function') {
+                // Only override PBR properties if explicitly configured (>= 0 or non-empty color)
+                if (this.data.metalness >= 0 && mat.metalness !== undefined) {
+                  mat.metalness = this.data.metalness;
+                }
+                if (this.data.roughness >= 0 && mat.roughness !== undefined) {
+                  mat.roughness = this.data.roughness;
+                }
+                if (this.data.emissive && this.data.emissive.trim() !== '' && mat.emissive && typeof mat.emissive.set === 'function') {
                   mat.emissive.set(this.data.emissive);
                 }
-                if (mat.emissiveIntensity !== undefined) mat.emissiveIntensity = this.data.emissiveIntensity;
-                mat.wireframe = this.data.wireframe;
-                mat.opacity = this.data.opacity;
-                mat.transparent = this.data.opacity < 1.0;
-                
+                if (this.data.emissiveIntensity >= 0 && mat.emissiveIntensity !== undefined) {
+                  mat.emissiveIntensity = this.data.emissiveIntensity;
+                }
+
+                mat.wireframe = !!this.data.wireframe;
+                if (this.data.opacity !== undefined && this.data.opacity < 1.0) {
+                  mat.opacity = this.data.opacity;
+                  mat.transparent = true;
+                }
+
+                // Update texture maps to correct sRGB color space & mark for WebGL upload
+                const maps = ['map', 'emissiveMap', 'roughnessMap', 'metalnessMap', 'normalMap', 'alphaMap'];
+                maps.forEach(mapName => {
+                  if (mat[mapName]) {
+                    if (mapName === 'map' || mapName === 'emissiveMap') {
+                      if (AFRAME.THREE.SRGBColorSpace !== undefined) {
+                        mat[mapName].colorSpace = AFRAME.THREE.SRGBColorSpace;
+                      } else if (AFRAME.THREE.sRGBEncoding !== undefined) {
+                        mat[mapName].encoding = AFRAME.THREE.sRGBEncoding;
+                      }
+                    }
+                    mat[mapName].needsUpdate = true;
+                  }
+                });
+
                 mat.needsUpdate = true;
               });
             }
@@ -98,6 +129,7 @@ if (typeof AFRAME !== 'undefined') {
       schema: { playing: { type: 'boolean', default: true } },
       init: function () {
         this.videos = [];
+        this.videoTextures = [];
         this.applyVideo = this.applyVideo.bind(this);
         this.el.addEventListener('model-loaded', this.applyVideo);
         if (this.el.getObject3D('mesh')) {
@@ -107,7 +139,10 @@ if (typeof AFRAME !== 'undefined') {
       applyVideo: function () {
         const obj = this.el.getObject3D('mesh');
         if (!obj) return;
-        
+
+        this.videos = [];
+        this.videoTextures = [];
+
         obj.traverse((node) => {
           if (node.isMesh && node.material) {
             const materials = Array.isArray(node.material) ? node.material : [node.material];
@@ -121,7 +156,7 @@ if (typeof AFRAME !== 'undefined') {
                   } else if (mat[mapName].source && mat[mapName].source.data && mat[mapName].source.data.tagName === 'VIDEO') {
                     video = mat[mapName].source.data;
                   }
-                  
+
                   if (video) {
                     video.loop = true;
                     video.muted = true;
@@ -129,16 +164,31 @@ if (typeof AFRAME !== 'undefined') {
                     video.setAttribute('playsinline', '');
                     video.setAttribute('webkit-playsinline', '');
                     video.crossOrigin = 'anonymous';
+
+                    this.videos.push(video);
+                    this.videoTextures.push(mat[mapName]);
+
                     if (this.data.playing) {
                       video.play().catch(e => console.error("Video play failed:", e));
                     }
-                    this.videos.push(video);
                   }
                 }
               });
             });
           }
         });
+      },
+      tick: function () {
+        // Keep video textures updated every frame so WebGL renders video frames
+        if (this.data.playing && this.videoTextures.length > 0) {
+          for (let i = 0; i < this.videoTextures.length; i++) {
+            const tex = this.videoTextures[i];
+            const vid = this.videos[i];
+            if (vid && !vid.paused && vid.readyState >= vid.HAVE_CURRENT_DATA) {
+              tex.needsUpdate = true;
+            }
+          }
+        }
       },
       update: function() {
         if (this.data.playing) {

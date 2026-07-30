@@ -14,8 +14,9 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const [error, setError] = useState(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [mediaPlaying, setMediaPlaying] = useState(true);
+  const [cameraEnabled, setCameraEnabled] = useState(!isTestMode);
 
-  // NEW DIAGNOSTIC STATE
+  // DIAGNOSTIC STATE
   const [diagnosticLog, setDiagnosticLog] = useState("");
   const [showDiagnostics, setShowDiagnostics] = useState(true);
 
@@ -94,17 +95,6 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     };
     fetchARPayload();
 
-    // Make sure body and #root are transparent so the AR camera video feed (z-index -2) is visible (if not in test mode)
-    if (!isTestMode) {
-      document.body.style.backgroundColor = 'transparent';
-      const rootEl = document.getElementById('root');
-      if (rootEl) rootEl.style.backgroundColor = 'transparent';
-    } else {
-      document.body.style.backgroundColor = '#0f172a';
-      const rootEl = document.getElementById('root');
-      if (rootEl) rootEl.style.backgroundColor = '#0f172a';
-    }
-
     return () => {
       document.body.style.backgroundColor = '';
       const rootEl = document.getElementById('root');
@@ -116,21 +106,85 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   }, [batchId]);
 
   useEffect(() => {
+    if (cameraEnabled) {
+      document.body.style.backgroundColor = 'transparent';
+      const rootEl = document.getElementById('root');
+      if (rootEl) rootEl.style.backgroundColor = 'transparent';
+    } else {
+      document.body.style.backgroundColor = '#0f172a';
+      const rootEl = document.getElementById('root');
+      if (rootEl) rootEl.style.backgroundColor = '#0f172a';
+
+      // Clean up webcam stream and video elements
+      const timer = setTimeout(() => {
+        const videos = document.querySelectorAll('video');
+        videos.forEach(video => {
+          if (video.srcObject && typeof video.srcObject.getTracks === 'function') {
+            video.srcObject.getTracks().forEach(track => track.stop());
+          }
+          video.srcObject = null;
+          video.remove();
+        });
+        
+        // Remove mindar UI overlay
+        const mindarUI = document.querySelectorAll('.mindar-ui-overlay, .mindar-ui-scanning, .mindar-ui-loading');
+        mindarUI.forEach(el => el.remove());
+      }, 100);
+
+      return () => clearTimeout(timer);
+    }
+  }, [cameraEnabled]);
+
+  useEffect(() => {
     const modelEl = document.getElementById('ar-model');
     const targetEl = document.getElementById('target-entity');
 
+    const updateMeshMaterials = () => {
+      if (!modelEl) return;
+      
+      // Trigger custom components if attached
+      if (modelEl.components && modelEl.components['dynamic-materials']) {
+        modelEl.components['dynamic-materials'].applyMaterials();
+      }
+      if (modelEl.components && modelEl.components['play-gltf-video']) {
+        modelEl.components['play-gltf-video'].applyVideo();
+      }
+
+      const mesh = modelEl.getObject3D('mesh');
+      if (mesh) {
+        mesh.traverse((node) => {
+          if (node.isMesh && node.material) {
+            const materials = Array.isArray(node.material) ? node.material : [node.material];
+            materials.forEach((mat) => {
+              mat.side = (window.AFRAME && window.AFRAME.THREE) ? window.AFRAME.THREE.DoubleSide : 2;
+              const maps = ['map', 'emissiveMap', 'roughnessMap', 'metalnessMap', 'normalMap', 'alphaMap'];
+              maps.forEach(mapName => {
+                if (mat[mapName]) {
+                  mat[mapName].needsUpdate = true;
+                }
+              });
+              mat.needsUpdate = true;
+            });
+          }
+        });
+      }
+    };
+
     const onModelLoad = () => {
       logToScreen("GLTF_LOAD", "Model geometry loaded successfully.");
+      updateMeshMaterials();
       const mesh = modelEl ? modelEl.getObject3D('mesh') : null;
       if (mesh) {
         mesh.traverse((node) => {
           if (node.isMesh) {
             const mat = node.material;
-            const hasMap = mat.map ? "YES" : "NO";
-            const colorHex = mat.color ? `#${mat.color.getHexString()}` : 'N/A';
-            const emissiveHex = mat.emissive ? `#${mat.emissive.getHexString()}` : 'N/A';
-            const details = `Type: ${mat.type} | Color: ${colorHex} | Emissive: ${emissiveHex} | Roughness: ${mat.roughness ?? 'N/A'} | Metalness: ${mat.metalness ?? 'N/A'} | Has Texture: ${hasMap}`;
-            logToScreen(`MATERIAL_INSPECT [${node.name}]`, details);
+            if (mat) {
+              const hasMap = mat.map ? "YES" : "NO";
+              const colorHex = mat.color ? `#${mat.color.getHexString()}` : 'N/A';
+              const emissiveHex = mat.emissive ? `#${mat.emissive.getHexString()}` : 'N/A';
+              const details = `Type: ${mat.type} | Color: ${colorHex} | Emissive: ${emissiveHex} | Roughness: ${mat.roughness ?? 'N/A'} | Metalness: ${mat.metalness ?? 'N/A'} | Has Texture: ${hasMap}`;
+              logToScreen(`MATERIAL_INSPECT [${node.name}]`, details);
+            }
           }
         });
       }
@@ -140,19 +194,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
     const onTargetFound = () => {
       logToScreen("TARGET_FOUND", "Image target detected!");
-      if (modelEl) {
-        const mesh = modelEl.getObject3D('mesh');
-        if (mesh) {
-          mesh.traverse((node) => {
-            if (node.isMesh && node.material) {
-              const materials = Array.isArray(node.material) ? node.material : [node.material];
-              materials.forEach((mat) => {
-                mat.needsUpdate = true;
-              });
-            }
-          });
-        }
-      }
+      updateMeshMaterials();
     };
 
     if (modelEl) {
@@ -251,16 +293,16 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     );
   }
 
-  // Extract config with defaults
+  // Extract config with default lighting & material overrides
   const cfg = arData.config || {};
   const ambientColor = cfg.ambientColor || '#ffffff';
   const ambientIntensity = cfg.ambientIntensity ?? 1.5;
   const dir1Color = cfg.dir1Color || '#ffffff';
   const dir1Intensity = cfg.dir1Intensity ?? 2.5;
-  const dir1Position = cfg.dir1Position || '1 2 1';
+  const dir1Position = cfg.dir1Position || '0 2 2';
   const dir2Color = cfg.dir2Color || '#ffffff';
   const dir2Intensity = cfg.dir2Intensity ?? 1.0;
-  const dir2Position = cfg.dir2Position || '-1 -2 -1';
+  const dir2Position = cfg.dir2Position || '-1 1 2';
   
   const showBuyButton = cfg.showBuyButton !== undefined ? cfg.showBuyButton : true;
   const buyButtonColor = cfg.buyButtonColor || '#000000';
@@ -275,11 +317,11 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const modelRotY = cfg.modelRotY ?? 0;
   const modelRotZ = cfg.modelRotZ ?? 0;
 
-  // Material Configs
-  const matMetalness = cfg.matMetalness ?? 0.0;
-  const matRoughness = cfg.matRoughness ?? 1.0;
-  const matEmissive = cfg.matEmissive || '#000000';
-  const matEmissiveIntensity = cfg.matEmissiveIntensity ?? 0.0;
+  // Material Configs (-1 means keep GLTF model original unless explicitly set)
+  const matMetalness = cfg.matMetalness !== undefined ? cfg.matMetalness : -1;
+  const matRoughness = cfg.matRoughness !== undefined ? cfg.matRoughness : -1;
+  const matEmissive = cfg.matEmissive || '';
+  const matEmissiveIntensity = cfg.matEmissiveIntensity !== undefined ? cfg.matEmissiveIntensity : -1;
   const matWireframe = cfg.matWireframe || false;
   const matOpacity = cfg.matOpacity ?? 1.0;
 
@@ -312,7 +354,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
       )}
 
       {/* AR Scene */}
-      {isTestMode ? (
+      {!cameraEnabled ? (
         <a-scene
           embedded
           color-space="sRGB"
@@ -327,15 +369,18 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             <a-asset-item id="metaModel" src={arData.gltfPath} crossOrigin="anonymous"></a-asset-item>
           </a-assets>
 
-          <a-camera position="0 0 0" look-controls="enabled: true" wasd-controls="enabled: false"></a-camera>
+          <a-camera position="0 0 0" look-controls="enabled: true" wasd-controls="enabled: false">
+            {/* Front Headlight attached to camera */}
+            <a-entity light="type: directional; color: #ffffff; intensity: 1.5; position: 0 0 1"></a-entity>
+          </a-camera>
 
-          {/* Place model directly in front of camera (similar to standard 3D viewer) */}
+          {/* Dynamic Lighting MUST be at root to avoid matrix scale crushing */}
+          <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
+          <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
+          <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
+
+          {/* Tracking/Test Target */}
           <a-entity id="target-entity" position="0 0 -2.5">
-            {/* Dynamic Lighting Moved Inside Target */}
-            <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
-            <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
-            <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
-
             <a-gltf-model
               id="ar-model"
               src="#metaModel"
@@ -364,14 +409,18 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             <a-asset-item id="metaModel" src={arData.gltfPath} crossOrigin="anonymous"></a-asset-item>
           </a-assets>
 
-          <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
+          <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false">
+            {/* Front Headlight attached to camera ensures phone camera facing side is always lit */}
+            <a-entity light="type: directional; color: #ffffff; intensity: 1.5; position: 0 0 1"></a-entity>
+          </a-camera>
 
+          {/* Dynamic Lighting MUST be at root to avoid matrix scale crushing */}
+          <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
+          <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
+          <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
+
+          {/* Tracking/Test Target */}
           <a-entity id="target-entity" mindar-image-target="targetIndex: 0">
-            {/* Dynamic Lighting Moved Inside Target */}
-            <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
-            <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
-            <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
-
             <a-gltf-model
               id="ar-model"
               src="#metaModel"
@@ -390,13 +439,39 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
       {/* Scanning Overlay (optional aesthetic) */}
       <div className="absolute inset-0 pointer-events-none border-[16px] border-black/20 mix-blend-overlay z-40"></div>
 
-      {/* Media Controls */}
+      {/* Controls Container */}
       <div style={{
         position: 'absolute',
         top: '20px',
         right: '20px',
-        zIndex: 1000
+        zIndex: 1000,
+        display: 'flex',
+        gap: '12px'
       }}>
+        {/* Camera/Tracking Toggle Button */}
+        <button 
+          onClick={() => setCameraEnabled(!cameraEnabled)}
+          style={{
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            color: 'white',
+            border: '1px solid white',
+            borderRadius: '50%',
+            width: '50px',
+            height: '50px',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            cursor: 'pointer',
+            transition: 'all 0.3s ease'
+          }}
+          title={cameraEnabled ? "Turn Camera Off" : "Turn Camera On"}
+        >
+          <span className="material-symbols-outlined">
+            {cameraEnabled ? 'videocam_off' : 'videocam'}
+          </span>
+        </button>
+
+        {/* Media Toggle Button */}
         <button 
           onClick={toggleMedia}
           style={{
@@ -409,8 +484,10 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             display: 'flex',
             justifyContent: 'center',
             alignItems: 'center',
-            cursor: 'pointer'
+            cursor: 'pointer',
+            transition: 'all 0.3s ease'
           }}
+          title={mediaPlaying ? "Pause Video/Animation" : "Play Video/Animation"}
         >
           <span className="material-symbols-outlined">
             {mediaPlaying ? 'pause' : 'play_arrow'}
