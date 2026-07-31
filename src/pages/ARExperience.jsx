@@ -15,6 +15,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [mediaPlaying, setMediaPlaying] = useState(true);
   const [cameraEnabled, setCameraEnabled] = useState(!isTestMode);
+  const [trackingStatus, setTrackingStatus] = useState('SEARCHING');
 
   // DIAGNOSTIC STATE
   const [diagnosticLog, setDiagnosticLog] = useState("");
@@ -79,6 +80,24 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         const savedConfig = firestoreConfig || data.ar_config || data.arExperience.config || {};
         logToScreen("FINAL_CONFIG", savedConfig);
 
+        if (data.trackingConfig && data.trackingConfig.mindUrl) {
+          try {
+            logToScreen("MIND_FILE_TEST", `Fetching .mind binary data...`);
+            const mindRes = await fetch(data.trackingConfig.mindUrl);
+            if (!mindRes.ok) {
+              logToScreen("MIND_FILE_STATUS", `HTTP Status: ${mindRes.status} ${mindRes.statusText}`);
+            } else {
+              const mindBuf = await mindRes.arrayBuffer();
+              logToScreen("MIND_FILE_STATUS", `HTTP 200 OK | File Size: ${mindBuf.byteLength} bytes`);
+              if (mindBuf.byteLength < 500) {
+                logToScreen("MIND_FILE_WARN", `WARNING: .mind file is under 500 bytes (${mindBuf.byteLength} B). It may contain zero compiled features!`);
+              }
+            }
+          } catch (mErr) {
+            logToScreen("MIND_FILE_WARN", `Fetch check error: ${mErr.message}`);
+          }
+        }
+
         setArData({
           gltfPath: data.arExperience.modelUrl,
           mindPath: data.trackingConfig.mindUrl,
@@ -136,6 +155,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   }, [cameraEnabled]);
 
   useEffect(() => {
+    const sceneEl = document.querySelector('a-scene');
     const modelEl = document.getElementById('ar-model');
     const targetEl = document.getElementById('target-entity');
 
@@ -194,9 +214,42 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
     const onTargetFound = () => {
       logToScreen("TARGET_FOUND", "Image target detected!");
+      setTrackingStatus('DETECTED');
       updateMeshMaterials();
     };
 
+    const onTargetLost = () => {
+      logToScreen("TARGET_LOST", "Image target lost from camera view.");
+      setTrackingStatus('SCANNING');
+    };
+
+    const onArReady = () => {
+      logToScreen("MINDAR_READY", "MindAR tracking engine initialized and active!");
+      setTrackingStatus('SCANNING');
+      
+      // Inspect HTML video element feed state
+      const videos = document.querySelectorAll('video');
+      if (videos.length === 0) {
+        logToScreen("CAMERA_WARN", "No HTML video element found in DOM.");
+      } else {
+        videos.forEach((v, idx) => {
+          logToScreen(`CAMERA_FEED [${idx}]`, `Width: ${v.videoWidth}px | Height: ${v.videoHeight}px | Paused: ${v.paused} | ReadyState: ${v.readyState}`);
+          if (v.paused) {
+            v.play().catch(e => logToScreen("CAMERA_PLAY_ERR", e.message));
+          }
+        });
+      }
+    };
+
+    const onArError = (e) => {
+      logToScreen("MINDAR_ERROR", e.detail || "MindAR tracking error occurred.");
+      setTrackingStatus('ERROR');
+    };
+
+    if (sceneEl) {
+      sceneEl.addEventListener('arReady', onArReady);
+      sceneEl.addEventListener('arError', onArError);
+    }
     if (modelEl) {
       modelEl.addEventListener('model-loaded', onModelLoad);
       modelEl.addEventListener('model-error', onModelError);
@@ -204,17 +257,46 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         updateMeshMaterials();
       }
     }
+    let observer = null;
     if (targetEl) {
       targetEl.addEventListener('targetFound', onTargetFound);
+      targetEl.addEventListener('targetLost', onTargetLost);
+
+      // Observe attribute changes on target entity (e.g. visible, position)
+      try {
+        observer = new MutationObserver((mutations) => {
+          mutations.forEach((mutation) => {
+            if (mutation.type === 'attributes') {
+              const val = targetEl.getAttribute(mutation.attributeName);
+              logToScreen(`TARGET_MUTATION [${mutation.attributeName}]`, typeof val === 'object' ? JSON.stringify(val) : String(val));
+              if (mutation.attributeName === 'visible' && (val === true || val === 'true')) {
+                setTrackingStatus('DETECTED');
+                updateMeshMaterials();
+              }
+            }
+          });
+        });
+        observer.observe(targetEl, { attributes: true });
+      } catch (obsErr) {
+        logToScreen("OBSERVER_ERR", obsErr.message);
+      }
     }
 
     return () => {
+      if (observer) {
+        observer.disconnect();
+      }
+      if (sceneEl) {
+        sceneEl.removeEventListener('arReady', onArReady);
+        sceneEl.removeEventListener('arError', onArError);
+      }
       if (modelEl) {
         modelEl.removeEventListener('model-loaded', onModelLoad);
         modelEl.removeEventListener('model-error', onModelError);
       }
       if (targetEl) {
         targetEl.removeEventListener('targetFound', onTargetFound);
+        targetEl.removeEventListener('targetLost', onTargetLost);
       }
     };
   }, [arData, cameraEnabled]);
@@ -399,7 +481,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         </a-scene>
       ) : (
         <a-scene
-          mindar-image={`imageTargetSrc: ${arData.mindPath}; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 5; uiLoading: no; uiScanning: no; uiError: no;`}
+          mindar-image={`imageTargetSrc: ${arData.mindPath}; uiLoading: no; uiScanning: no; uiError: no;`}
           embedded
           color-space="sRGB"
           renderer="colorManagement: true; physicallyCorrectLights: false;"
@@ -441,6 +523,35 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
       {/* Scanning Overlay (optional aesthetic) */}
       <div className="absolute inset-0 pointer-events-none border-[16px] border-black/20 mix-blend-overlay z-40"></div>
+
+      {/* Live Marker Tracking Status Badge */}
+      {cameraEnabled && (
+        <div style={{
+          position: 'absolute',
+          top: '20px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 1000,
+          pointerEvents: 'none'
+        }}>
+          {trackingStatus === 'DETECTED' ? (
+            <div className="px-4 py-2 bg-emerald-600/90 text-white font-bold text-xs uppercase tracking-widest rounded-full shadow-lg backdrop-blur-md flex items-center gap-2 border border-emerald-400/30">
+              <span className="w-2.5 h-2.5 bg-emerald-300 rounded-full animate-ping"></span>
+              Target Recognized
+            </div>
+          ) : trackingStatus === 'ERROR' ? (
+            <div className="px-4 py-2 bg-red-600/90 text-white font-bold text-xs uppercase tracking-widest rounded-full shadow-lg backdrop-blur-md flex items-center gap-2 border border-red-400/30">
+              <span className="w-2.5 h-2.5 bg-red-300 rounded-full"></span>
+              Tracking Error
+            </div>
+          ) : (
+            <div className="px-4 py-2 bg-slate-900/80 text-amber-300 font-bold text-xs uppercase tracking-widest rounded-full shadow-lg backdrop-blur-md flex items-center gap-2 border border-amber-500/30">
+              <span className="w-2.5 h-2.5 bg-amber-400 rounded-full animate-ping"></span>
+              Point Camera at Marker...
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Controls Container */}
       <div style={{
@@ -511,16 +622,29 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         <div className="absolute top-0 left-0 w-full h-[50dvh] bg-black/95 z-[9999] p-4 flex flex-col font-mono text-xs shadow-2xl border-b-2 border-red-500">
           <div className="flex justify-between items-center mb-3">
             <span className="text-red-500 font-bold text-sm tracking-widest">SYSTEM DIAGNOSTICS</span>
-            <div className="space-x-4">
+            <div className="space-x-2 flex items-center">
+              <button 
+                onClick={() => {
+                  const targetEl = document.getElementById('target-entity');
+                  if (targetEl) {
+                    targetEl.setAttribute('visible', 'true');
+                    logToScreen("SIMULATION", "Forced target-entity visible = true");
+                    setTrackingStatus('DETECTED');
+                  }
+                }} 
+                className="bg-amber-500 text-black px-3 py-1 font-bold text-xs rounded hover:bg-amber-400"
+              >
+                TEST DETECT
+              </button>
               <button 
                 onClick={() => navigator.clipboard.writeText(diagnosticLog)} 
-                className="bg-white text-black px-4 py-2 font-bold rounded"
+                className="bg-white text-black px-3 py-1 font-bold text-xs rounded"
               >
                 COPY
               </button>
               <button 
                 onClick={() => setShowDiagnostics(false)} 
-                className="text-neutral-400 underline p-2"
+                className="text-neutral-400 underline p-1 text-xs"
               >
                 CLOSE
               </button>
