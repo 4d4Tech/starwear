@@ -402,9 +402,9 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const modelRotY = cfg.modelRotY ?? 0;
   const modelRotZ = cfg.modelRotZ ?? 0;
 
-  // Material Configs (matching ARTest defaults)
-  const matMetalness = cfg.matMetalness !== undefined ? cfg.matMetalness : 0.0;
-  const matRoughness = cfg.matRoughness !== undefined ? cfg.matRoughness : 1.0;
+  // Material Configs (default to -1 to preserve GLTF embedded PBR maps)
+  const matMetalness = (cfg.matMetalness !== undefined && cfg.matMetalness >= 0) ? cfg.matMetalness : -1;
+  const matRoughness = (cfg.matRoughness !== undefined && cfg.matRoughness >= 0) ? cfg.matRoughness : -1;
   const matEmissive = cfg.matEmissive || '#000000';
   const matEmissiveIntensity = cfg.matEmissiveIntensity !== undefined ? cfg.matEmissiveIntensity : 0.0;
   const matWireframe = cfg.matWireframe || false;
@@ -481,8 +481,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         </a-scene>
       ) : (
         <a-scene
-          mindar-image={`imageTargetSrc: ${arData.mindPath}; uiLoading: no; uiScanning: no; uiError: no;`}
-          embedded
+          mindar-image={`imageTargetSrc: ${arData.mindPath}; autoStart: true; uiLoading: no; uiScanning: no; uiError: no;`}
           color-space="sRGB"
           renderer="colorManagement: true; physicallyCorrectLights: false;"
           vr-mode-ui="enabled: false"

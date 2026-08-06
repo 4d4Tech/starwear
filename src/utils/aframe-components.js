@@ -80,13 +80,9 @@ if (typeof AFRAME !== 'undefined') {
                 // Only override PBR properties if explicitly configured (>= 0 or non-empty color)
                 if (this.data.metalness >= 0 && mat.metalness !== undefined) {
                   mat.metalness = this.data.metalness;
-                } else if (this.data.metalness < 0 && mat.metalness !== undefined) {
-                  mat.metalness = 0.0;
                 }
                 if (this.data.roughness >= 0 && mat.roughness !== undefined) {
                   mat.roughness = this.data.roughness;
-                } else if (this.data.roughness < 0 && mat.roughness !== undefined) {
-                  mat.roughness = 1.0;
                 }
                 if (this.data.emissive && this.data.emissive.trim() !== '' && mat.emissive && typeof mat.emissive.set === 'function') {
                   mat.emissive.set(this.data.emissive);

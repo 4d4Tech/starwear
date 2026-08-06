@@ -33,9 +33,10 @@ const ARTest = () => {
   const [modelRotY, setModelRotY] = useState(0);
   const [modelRotZ, setModelRotZ] = useState(0);
 
-  // Material Properties
-  const [matMetalness, setMatMetalness] = useState(0.0);
-  const [matRoughness, setMatRoughness] = useState(1.0);
+  // Material Properties (-1 means preserve GLTF asset PBR settings)
+  const [useNativePBR, setUseNativePBR] = useState(true);
+  const [matMetalness, setMatMetalness] = useState(-1);
+  const [matRoughness, setMatRoughness] = useState(-1);
   const [matEmissive, setMatEmissive] = useState('#000000');
   const [matEmissiveIntensity, setMatEmissiveIntensity] = useState(0.0);
   const [matWireframe, setMatWireframe] = useState(false);
@@ -88,8 +89,20 @@ const ARTest = () => {
           if (cfg.modelRotX !== undefined) setModelRotX(cfg.modelRotX);
           if (cfg.modelRotY !== undefined) setModelRotY(cfg.modelRotY);
           if (cfg.modelRotZ !== undefined) setModelRotZ(cfg.modelRotZ);
-          if (cfg.matMetalness !== undefined) setMatMetalness(cfg.matMetalness);
-          if (cfg.matRoughness !== undefined) setMatRoughness(cfg.matRoughness);
+          
+          if (cfg.matMetalness !== undefined && cfg.matMetalness >= 0) {
+            setMatMetalness(cfg.matMetalness);
+            setUseNativePBR(false);
+          } else {
+            setMatMetalness(-1);
+            setUseNativePBR(true);
+          }
+          if (cfg.matRoughness !== undefined && cfg.matRoughness >= 0) {
+            setMatRoughness(cfg.matRoughness);
+          } else {
+            setMatRoughness(-1);
+          }
+
           if (cfg.matEmissive !== undefined) setMatEmissive(cfg.matEmissive);
           if (cfg.matEmissiveIntensity !== undefined) setMatEmissiveIntensity(cfg.matEmissiveIntensity);
           if (cfg.matWireframe !== undefined) setMatWireframe(cfg.matWireframe);
@@ -119,7 +132,9 @@ const ARTest = () => {
           dir1Color, dir1Intensity, dir1Position,
           dir2Color, dir2Intensity, dir2Position,
           modelScale, modelRotSpeed, modelRotX, modelRotY, modelRotZ,
-          matMetalness, matRoughness, matEmissive, matEmissiveIntensity, matWireframe, matOpacity,
+          matMetalness: useNativePBR ? -1 : (matMetalness < 0 ? 0.0 : matMetalness),
+          matRoughness: useNativePBR ? -1 : (matRoughness < 0 ? 1.0 : matRoughness),
+          matEmissive, matEmissiveIntensity, matWireframe, matOpacity,
           fogColor, fogDensity,
           showBuyButton, buyButtonColor,
           mediaPlaying
@@ -296,14 +311,42 @@ const ARTest = () => {
           <div>
             <h2 className="text-sm font-bold uppercase tracking-widest text-neutral-400 mb-3 border-b border-neutral-800 pb-1">Materials</h2>
             <div className="space-y-3">
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Metalness ({matMetalness.toFixed(2)})</span>
-                <input type="range" min="0" max="1" step="0.05" value={matMetalness} onChange={e => setMatMetalness(parseFloat(e.target.value))} className="w-full" />
+              <label className="flex items-center justify-between text-sm">
+                <span className="text-emerald-400 font-semibold">Preserve GLTF PBR Materials</span>
+                <input 
+                  type="checkbox" 
+                  checked={useNativePBR} 
+                  onChange={e => {
+                    const checked = e.target.checked;
+                    setUseNativePBR(checked);
+                    if (checked) {
+                      setMatMetalness(-1);
+                      setMatRoughness(-1);
+                    } else {
+                      setMatMetalness(0.0);
+                      setMatRoughness(1.0);
+                    }
+                  }} 
+                  className="w-5 h-5 accent-emerald-500 cursor-pointer" 
+                />
               </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Roughness ({matRoughness.toFixed(2)})</span>
-                <input type="range" min="0" max="1" step="0.05" value={matRoughness} onChange={e => setMatRoughness(parseFloat(e.target.value))} className="w-full" />
-              </label>
+
+              {useNativePBR ? (
+                <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded text-xs text-emerald-300">
+                  ✨ Preserving embedded GLTF textures, metalness & roughness maps.
+                </div>
+              ) : (
+                <>
+                  <label className="flex flex-col gap-1 text-sm">
+                    <span>Metalness ({matMetalness >= 0 ? matMetalness.toFixed(2) : 'Default'})</span>
+                    <input type="range" min="0" max="1" step="0.05" value={matMetalness >= 0 ? matMetalness : 0.0} onChange={e => setMatMetalness(parseFloat(e.target.value))} className="w-full" />
+                  </label>
+                  <label className="flex flex-col gap-1 text-sm">
+                    <span>Roughness ({matRoughness >= 0 ? matRoughness.toFixed(2) : 'Default'})</span>
+                    <input type="range" min="0" max="1" step="0.05" value={matRoughness >= 0 ? matRoughness : 1.0} onChange={e => setMatRoughness(parseFloat(e.target.value))} className="w-full" />
+                  </label>
+                </>
+              )}
               <label className="flex items-center justify-between text-sm">
                 <span>Emissive Color</span>
                 <input type="color" value={matEmissive} onChange={e => setMatEmissive(e.target.value)} className="w-16 h-8 bg-transparent cursor-pointer rounded" />
@@ -374,7 +417,10 @@ const ARTest = () => {
             <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
             <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
 
-            <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
+            <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false">
+              {/* Front Headlight attached to camera ensures phone camera facing side is always lit */}
+              <a-light type="directional" color="#ffffff" intensity="1.5" position="0 0 1"></a-light>
+            </a-camera>
 
             <a-entity position="0 0 -2.5">
               <a-gltf-model

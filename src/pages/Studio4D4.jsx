@@ -1753,7 +1753,8 @@ export default function Studio4D4() {
             }
 
             exportGLTF() {
-                const stripLights = document.getElementById('export-strip-lights').checked;
+                const stripLightsCheck = document.getElementById('export-strip-lights');
+                const stripLights = stripLightsCheck ? stripLightsCheck.checked : true;
                 const exporter = new GLTFExporter();
 
                 const exportScene = new THREE.Scene();
@@ -1771,21 +1772,27 @@ export default function Studio4D4() {
                     exportScene.add(clone);
                 });
 
-                exporter.parse(exportScene, (gltf) => {
-                    const blob = new Blob([gltf], { type: 'model/gltf-binary' });
-                    const url = URL.createObjectURL(blob);
-                    const link = document.createElement('a');
-                    link.style.display = 'none';
-                    link.href = url;
-                    link.download = 'Studio_Export.glb';
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                    URL.revokeObjectURL(url);
-                }, (err) => {
-                    console.error('Export error:', err);
-                    alert("An error occurred during export. Check console.");
-                }, { binary: true });
+                // Force Binary GLB format with embedded images for WebAR mobile renderer compatibility
+                exporter.parse(
+                    exportScene,
+                    (gltf) => {
+                        const blob = new Blob([gltf], { type: 'model/gltf-binary' });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.style.display = 'none';
+                        link.href = url;
+                        link.download = 'Studio_Export.glb';
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        URL.revokeObjectURL(url);
+                    },
+                    (err) => {
+                        console.error('Export error:', err);
+                        alert("An error occurred during export. Check console.");
+                    },
+                    { binary: true, embedImages: true }
+                );
             }
 
             animate() {
@@ -2031,13 +2038,16 @@ export default function Studio4D4() {
                 </div>
 
                 <div className="p-4 border-t border-slate-700 mt-auto bg-slate-800 flex-shrink-0">
+                    <div className="mb-2 p-2 bg-indigo-950/60 border border-indigo-500/30 rounded text-[11px] text-indigo-300">
+                        ✨ <strong>Required WebAR Format:</strong> Exports as single binary <code className="text-white bg-indigo-900/80 px-1 py-0.5 rounded">.GLB</code> with embedded PBR materials & textures.
+                    </div>
                     <label className="flex items-center gap-2 cursor-pointer mb-3">
-                        <input type="checkbox" id="export-strip-lights" className="rounded bg-slate-900 border-slate-700 text-indigo-500" />
-                        <span className="text-xs text-slate-400">Strip Lighting Data</span>
+                        <input type="checkbox" id="export-strip-lights" defaultChecked className="rounded bg-slate-900 border-slate-700 text-indigo-500" />
+                        <span className="text-xs text-slate-400">Strip Studio Lighting (Recommended for WebAR)</span>
                     </label>
                     <button id="btn-export" className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded shadow-lg transition-colors flex justify-center items-center gap-2">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
-                        Export .GLB
+                        Export .GLB (WebAR Format)
                     </button>
                 </div>
             </div>
