@@ -243,53 +243,326 @@ if (typeof AFRAME !== 'undefined') {
 
   // =========================================================================
   // 4. PLAY-GLTF-VIDEO COMPONENT
-  // Finds video textures embedded in the GLTF materials, ensures iOS/Android
-  // compatibility (playsinline, muted), and updates WebGL texture memory on tick.
+  // Finds and decodes video textures embedded in GLTF materials or supplied via src,
+  // ensures iOS Safari WebKit mobile compatibility (playsinline before src, muted,
+  // DOM attached, user gesture unlocking), and forces WebGL texture memory sync on every render frame.
   // =========================================================================
   if (!AFRAME.components['play-gltf-video']) {
+    const videoElementCache = new Map();
+
+    const unlockAllVideos = () => {
+      videoElementCache.forEach((video) => {
+        if (video) {
+          video.muted = true;
+          video.playsInline = true;
+          const p = video.play();
+          if (p && p.catch) p.catch(() => {});
+        }
+      });
+    };
+
+    if (typeof window !== 'undefined') {
+      ['touchstart', 'touchend', 'pointerdown', 'click'].forEach((evt) => {
+        window.addEventListener(evt, unlockAllVideos, { passive: true });
+        document.addEventListener(evt, unlockAllVideos, { passive: true });
+      });
+    }
+
+    const createOrActivateVideoElement = (videoOrUrl) => {
+      if (!videoOrUrl) return null;
+      if (videoOrUrl.tagName === 'VIDEO' || videoOrUrl instanceof HTMLVideoElement) {
+        return videoOrUrl;
+      }
+      if (typeof videoOrUrl !== 'string' || videoOrUrl.trim() === '') {
+        return null;
+      }
+
+      const url = videoOrUrl.trim();
+      if (videoElementCache.has(url)) {
+        const cached = videoElementCache.get(url);
+        if (cached && cached.isConnected) {
+          cached.muted = true;
+          if (cached.paused) cached.play().catch(() => {});
+          return cached;
+        }
+      }
+
+      const video = document.createElement('video');
+      
+      // CRITICAL FOR iOS SAFARI: Attributes must be set before assigning video.src
+      video.muted = true;
+      video.defaultMuted = true;
+      video.playsInline = true;
+      video.autoplay = true;
+      video.loop = true;
+      video.volume = 0;
+      video.preload = 'auto';
+      video.setAttribute('playsinline', '');
+      video.setAttribute('webkit-playsinline', '');
+      video.setAttribute('x5-playsinline', '');
+      video.setAttribute('x5-video-player-type', 'h5-page');
+      video.setAttribute('muted', '');
+      video.setAttribute('autoplay', '');
+      video.setAttribute('loop', '');
+      video.setAttribute('preload', 'auto');
+
+      if (/^https?:\/\//i.test(url)) {
+        video.crossOrigin = 'anonymous';
+      }
+      video.src = url;
+
+      // Ensure video is in active viewport DOM so iOS hardware media decoders remain active
+      let container = document.getElementById('aframe-video-hidden-box');
+      if (!container) {
+        container = document.createElement('div');
+        container.id = 'aframe-video-hidden-box';
+        container.style.cssText = 'position:fixed;top:0;left:0;width:4px;height:4px;opacity:0.01;pointer-events:none;z-index:-999;overflow:hidden;';
+        document.body.appendChild(container);
+      }
+      container.appendChild(video);
+
+      try {
+        video.load();
+      } catch {}
+
+      const tryPlay = () => {
+        video.muted = true;
+        const p = video.play();
+        if (p && p.catch) {
+          p.catch(() => {});
+        }
+      };
+
+      video.addEventListener('canplay', tryPlay);
+      video.addEventListener('canplaythrough', tryPlay);
+      video.addEventListener('loadeddata', tryPlay);
+      video.addEventListener('loadedmetadata', tryPlay);
+      tryPlay();
+
+      videoElementCache.set(url, video);
+      return video;
+    };
+
     AFRAME.registerComponent('play-gltf-video', {
-      schema: { playing: { type: 'boolean', default: true } },
+      schema: {
+        src: { type: 'string', default: '' },
+        playing: { type: 'boolean', default: true }
+      },
       init: function () {
         this.videos = [];
         this.videoTextures = [];
         this.applyVideo = this.applyVideo.bind(this);
+        this.unlockVideos = this.unlockVideos.bind(this);
+
         this.el.addEventListener('model-loaded', this.applyVideo);
         if (this.el.getObject3D('mesh')) {
           this.applyVideo();
+        }
+
+        // Global interaction listeners to unlock mobile autoplay restrictions if needed
+        ['pointerdown', 'touchstart', 'click', 'keydown'].forEach((evt) => {
+          window.addEventListener(evt, this.unlockVideos, { passive: true });
+        });
+
+        // Listen for targetFound and arReady on parent scene
+        const sceneEl = this.el.sceneEl;
+        if (sceneEl) {
+          sceneEl.addEventListener('targetFound', this.applyVideo);
+          sceneEl.addEventListener('arReady', this.applyVideo);
+        }
+      },
+      update: function (oldData) {
+        if (!oldData || oldData.src !== this.data.src) {
+          this.applyVideo();
+        }
+        if (!oldData || oldData.playing !== this.data.playing) {
+          if (this.data.playing) {
+            this.videos.forEach((v) => {
+              if (v && v.paused) v.play().catch(() => {});
+            });
+          } else {
+            this.videos.forEach((v) => {
+              if (v && !v.paused) v.pause();
+            });
+          }
+        }
+      },
+      tick: function () {
+        if (this.data.playing && this.videoTextures && this.videoTextures.length > 0) {
+          for (let i = 0; i < this.videoTextures.length; i++) {
+            const tex = this.videoTextures[i];
+            const vid = this.videos[i];
+            if (vid) {
+              if (vid.paused && vid.readyState >= 2 && this.data.playing) {
+                vid.play().catch(() => {});
+              }
+              if (!vid.paused && vid.readyState >= 2) {
+                tex.needsUpdate = true;
+              }
+            }
+          }
+        }
+      },
+      unlockVideos: function () {
+        if (this.data.playing && this.videos.length > 0) {
+          this.videos.forEach((v) => {
+            if (v && v.paused) {
+              v.play().catch(() => {});
+            }
+          });
         }
       },
       applyVideo: function () {
         const obj = this.el.getObject3D('mesh');
         if (!obj) return;
 
+        const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
         this.videos = [];
         this.videoTextures = [];
 
+        // 1. If explicit video src is provided on component, create VideoTexture and map to mesh
+        if (this.data.src && this.data.src.trim() !== '') {
+          const video = createOrActivateVideoElement(this.data.src);
+          if (video) {
+            const videoTexture = new THREE_LIB.VideoTexture(video);
+            if (THREE_LIB.SRGBColorSpace !== undefined) {
+              videoTexture.colorSpace = THREE_LIB.SRGBColorSpace;
+            }
+            videoTexture.minFilter = THREE_LIB.LinearFilter;
+            videoTexture.magFilter = THREE_LIB.LinearFilter;
+            videoTexture.generateMipmaps = false;
+            videoTexture.flipY = false;
+
+            this.videos.push(video);
+            this.videoTextures.push(videoTexture);
+
+            // Find all screen candidate meshes
+            const screenMeshes = [];
+            const allMeshes = [];
+            obj.traverse((node) => {
+              if (node.isMesh && node.material) {
+                allMeshes.push(node);
+                const name = (node.name || '').toLowerCase();
+                if (
+                  name.includes('video') || name.includes('screen') || name.includes('display') ||
+                  name.includes('curved') || name.includes('plane') || name.includes('front') ||
+                  node.userData?.hasVideo || node.userData?.videoUrl
+                ) {
+                  screenMeshes.push(node);
+                }
+              }
+            });
+
+            const targetMeshes = screenMeshes.length > 0 ? screenMeshes : allMeshes;
+            targetMeshes.forEach((node) => {
+              const materials = Array.isArray(node.material) ? node.material : [node.material];
+              materials.forEach((mat) => {
+                if (mat.map && mat.map.repeat) {
+                  videoTexture.repeat.copy(mat.map.repeat);
+                  videoTexture.offset.copy(mat.map.offset);
+                }
+                mat.map = videoTexture;
+                mat.emissiveMap = videoTexture;
+                if (mat.emissive && typeof mat.emissive.set === 'function') {
+                  mat.emissive.set(0xffffff);
+                }
+                mat.emissiveIntensity = 0.4;
+                mat.needsUpdate = true;
+              });
+            });
+          }
+        }
+
+        // 2. Discover embedded video textures, node.userData video URLs, and texture video URIs
         obj.traverse((node) => {
           if (node.isMesh && node.material) {
             const materials = Array.isArray(node.material) ? node.material : [node.material];
+            
+            // Check if node or material has a videoUrl in userData (e.g. from Studio 4D*4 export)
+            const nodeVideoUrl = node.userData?.videoUrl || node.userData?.videoSrc || node.userData?.video ||
+                                 materials[0]?.userData?.videoUrl || materials[0]?.userData?.videoSrc || '';
+
+            if (nodeVideoUrl && (!this.data.src || this.data.src.trim() === '')) {
+              const video = createOrActivateVideoElement(nodeVideoUrl);
+              if (video) {
+                const vTex = new THREE_LIB.VideoTexture(video);
+                if (THREE_LIB.SRGBColorSpace !== undefined) {
+                  vTex.colorSpace = THREE_LIB.SRGBColorSpace;
+                }
+                vTex.minFilter = THREE_LIB.LinearFilter;
+                vTex.magFilter = THREE_LIB.LinearFilter;
+                vTex.generateMipmaps = false;
+                vTex.flipY = false;
+
+                materials.forEach((mat) => {
+                  mat.map = vTex;
+                  mat.emissiveMap = vTex;
+                  if (mat.emissive && typeof mat.emissive.set === 'function') {
+                    mat.emissive.set(0xffffff);
+                  }
+                  mat.emissiveIntensity = 0.4;
+                  mat.needsUpdate = true;
+                });
+
+                if (!this.videos.includes(video)) this.videos.push(video);
+                if (!this.videoTextures.includes(vTex)) this.videoTextures.push(vTex);
+              }
+            }
+
             materials.forEach((mat) => {
-              const maps = ['map', 'emissiveMap', 'alphaMap'];
+              const maps = [
+                'map',
+                'emissiveMap',
+                'alphaMap',
+                'roughnessMap',
+                'metalnessMap',
+                'aoMap',
+                'bumpMap',
+                'normalMap',
+                'displacementMap'
+              ];
               maps.forEach((mapName) => {
                 if (mat[mapName]) {
+                  const tex = mat[mapName];
                   let video = null;
-                  if (mat[mapName].image && mat[mapName].image.tagName === 'VIDEO') {
-                    video = mat[mapName].image;
-                  } else if (mat[mapName].source && mat[mapName].source.data && mat[mapName].source.data.tagName === 'VIDEO') {
-                    video = mat[mapName].source.data;
+                  let vTex = null;
+
+                  // Case A: Texture is already a VideoTexture or image is a video tag
+                  if (tex.image && (tex.image.tagName === 'VIDEO' || tex.image instanceof HTMLVideoElement)) {
+                    video = createOrActivateVideoElement(tex.image);
+                    vTex = tex;
+                  } else if (tex.source && tex.source.data && (tex.source.data.tagName === 'VIDEO' || tex.source.data instanceof HTMLVideoElement)) {
+                    video = createOrActivateVideoElement(tex.source.data);
+                    vTex = tex;
+                  } else if (mat.userData && mat.userData.video) {
+                    video = createOrActivateVideoElement(mat.userData.video);
+                    vTex = tex;
+                  } else if (tex.isVideoTexture && tex.image) {
+                    video = createOrActivateVideoElement(tex.image);
+                    vTex = tex;
+                  }
+                  // Case B: Texture image URL is a video file (.mp4, .webm, .mov, etc.)
+                  else if (tex.image && typeof tex.image.src === 'string' && /\.(mp4|webm|mov|ogg)($|\?)/i.test(tex.image.src)) {
+                    video = createOrActivateVideoElement(tex.image.src);
+                    vTex = new THREE_LIB.VideoTexture(video);
+                    if (THREE_LIB.SRGBColorSpace !== undefined) {
+                      vTex.colorSpace = THREE_LIB.SRGBColorSpace;
+                    }
+                    vTex.minFilter = THREE_LIB.LinearFilter;
+                    vTex.magFilter = THREE_LIB.LinearFilter;
+                    vTex.generateMipmaps = false;
+                    vTex.flipY = false;
+                    mat[mapName] = vTex;
+                    mat.needsUpdate = true;
                   }
 
-                  if (video) {
-                    video.loop = true;
-                    video.muted = true;
-                    video.playsInline = true;
-                    video.setAttribute('playsinline', '');
-                    video.setAttribute('webkit-playsinline', '');
-                    video.crossOrigin = 'anonymous';
-
-                    this.videos.push(video);
-                    this.videoTextures.push(mat[mapName]);
-
+                  if (video && vTex) {
+                    if (!this.videos.includes(video)) {
+                      this.videos.push(video);
+                    }
+                    if (!this.videoTextures.includes(vTex)) {
+                      this.videoTextures.push(vTex);
+                    }
                     if (this.data.playing) {
                       video.play().catch(() => {});
                     }
@@ -305,8 +578,13 @@ if (typeof AFRAME !== 'undefined') {
           for (let i = 0; i < this.videoTextures.length; i++) {
             const tex = this.videoTextures[i];
             const vid = this.videos[i];
-            if (vid && !vid.paused && vid.readyState >= 2) {
-              tex.needsUpdate = true;
+            if (vid) {
+              if (vid.paused && vid.readyState >= 2) {
+                vid.play().catch(() => {});
+              }
+              if (!vid.paused) {
+                tex.needsUpdate = true;
+              }
             }
           }
         }
@@ -320,6 +598,14 @@ if (typeof AFRAME !== 'undefined') {
       },
       remove: function () {
         this.el.removeEventListener('model-loaded', this.applyVideo);
+        const sceneEl = this.el.sceneEl;
+        if (sceneEl) {
+          sceneEl.removeEventListener('targetFound', this.applyVideo);
+          sceneEl.removeEventListener('arReady', this.applyVideo);
+        }
+        ['pointerdown', 'touchstart', 'click', 'keydown'].forEach((evt) => {
+          window.removeEventListener(evt, this.unlockVideos);
+        });
         this.videos.forEach((v) => v.pause());
       }
     });

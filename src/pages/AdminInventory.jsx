@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { collection, getDocs, query, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { ref, uploadBytes, deleteObject } from 'firebase/storage';
+import { ref, uploadBytes, deleteObject, getDownloadURL } from 'firebase/storage';
 import { httpsCallable } from 'firebase/functions';
 import { db, storage, functions } from '../firebase';
 
@@ -19,8 +19,115 @@ const AdminInventory = () => {
   const [merchantId, setMerchantId] = useState('');
   const [glbFile, setGlbFile] = useState(null);
   const [targetImageFile, setTargetImageFile] = useState(null);
+  const [videoFile, setVideoFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadStep, setUploadStep] = useState('');
+
+  const formatFileSize = (bytes) => {
+    if (!bytes && bytes !== 0) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const pick3DModel = async () => {
+    if (window.showOpenFilePicker) {
+      try {
+        const [handle] = await window.showOpenFilePicker({
+          types: [{
+            description: '3D Model (.glb, .gltf)',
+            accept: {
+              'model/gltf-binary': ['.glb'],
+              'model/gltf+json': ['.gltf']
+            }
+          }],
+          multiple: false
+        });
+        const file = await handle.getFile();
+        if (file) setGlbFile(file);
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        console.warn("showOpenFilePicker error, falling back to input:", err);
+      }
+    }
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.glb,.gltf';
+    input.onchange = (e) => {
+      if (e.target.files && e.target.files[0]) {
+        setGlbFile(e.target.files[0]);
+      }
+    };
+    input.click();
+  };
+
+  const pickTargetImage = async () => {
+    if (window.showOpenFilePicker) {
+      try {
+        const [handle] = await window.showOpenFilePicker({
+          types: [{
+            description: 'Target Image',
+            accept: {
+              'image/*': ['.png', '.jpg', '.jpeg', '.webp']
+            }
+          }],
+          multiple: false
+        });
+        const file = await handle.getFile();
+        if (file) setTargetImageFile(file);
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        console.warn("showOpenFilePicker error, falling back to input:", err);
+      }
+    }
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/jpg,image/webp,.png,.jpg,.jpeg,.webp';
+    input.onchange = (e) => {
+      if (e.target.files && e.target.files[0]) {
+        setTargetImageFile(e.target.files[0]);
+      }
+    };
+    input.click();
+  };
+
+  const pickVideoFile = async () => {
+    if (window.showOpenFilePicker) {
+      try {
+        const [handle] = await window.showOpenFilePicker({
+          types: [{
+            description: 'Video Layer (.mp4, .webm, .mov)',
+            accept: {
+              'video/mp4': ['.mp4'],
+              'video/webm': ['.webm'],
+              'video/quicktime': ['.mov']
+            }
+          }],
+          multiple: false
+        });
+        const file = await handle.getFile();
+        if (file) setVideoFile(file);
+        return;
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        console.warn("showOpenFilePicker error, falling back to input:", err);
+      }
+    }
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov';
+    input.onchange = (e) => {
+      if (e.target.files && e.target.files[0]) {
+        setVideoFile(e.target.files[0]);
+      }
+    };
+    input.click();
+  };
 
   const fetchInventory = async () => {
     setLoading(true);
@@ -52,6 +159,7 @@ const AdminInventory = () => {
     setMerchantId('');
     setGlbFile(null);
     setTargetImageFile(null);
+    setVideoFile(null);
     setUploadStep('');
     setIsModalOpen(true);
   };
@@ -64,6 +172,7 @@ const AdminInventory = () => {
     setMerchantId(item.merchant_id || '');
     setGlbFile(null);
     setTargetImageFile(null);
+    setVideoFile(null);
     setUploadStep('');
     setIsModalOpen(true);
   };
@@ -77,6 +186,7 @@ const AdminInventory = () => {
     setMerchantId('');
     setGlbFile(null);
     setTargetImageFile(null);
+    setVideoFile(null);
     setUploadStep('');
   };
 
@@ -112,7 +222,20 @@ const AdminInventory = () => {
       const glbRef = ref(storage, glbPath);
       await uploadBytes(glbRef, glbFile);
 
-      // 4. Save to Firestore assets collection
+      // 4. Upload Video Layer (Optional)
+      let videoPath = '';
+      let videoUrl = '';
+      if (videoFile) {
+        setUploadStep('Uploading Video Layer...');
+        videoPath = `assets/${assetId}/${videoFile.name}`;
+        const videoRef = ref(storage, videoPath);
+        await uploadBytes(videoRef, videoFile);
+        try {
+          videoUrl = await getDownloadURL(videoRef);
+        } catch {}
+      }
+
+      // 5. Save to Firestore assets collection
       setUploadStep('Saving Asset Details...');
       await setDoc(doc(db, 'assets', assetId), {
         name: assetName,
@@ -120,16 +243,23 @@ const AdminInventory = () => {
         merchant_id: merchantId || 'default',
         gltf_file_path: glbPath,
         mind_file_path: mindPath,
+        video_file_path: videoPath,
+        video_url: videoUrl,
+        videoUrl: videoUrl,
         revenue_tier: "STANDARD",
         createdAt: new Date().toISOString()
       });
 
-      // 5. Create associated Batch document
+      // 6. Create associated Batch document
       setUploadStep('Creating Batch Document...');
       await setDoc(doc(db, 'batches', assetId), {
         merchant_id: merchantId || 'default',
         mind_file_path: mindPath,
+        video_file_path: videoPath,
+        video_url: videoUrl,
+        videoUrl: videoUrl,
         ar_config: {
+          videoUrl: videoUrl,
           ambientColor: '#ffffff',
           ambientIntensity: 1.5,
           dir1Color: '#ffffff',
@@ -175,6 +305,8 @@ const AdminInventory = () => {
     try {
       let mindPath = editingAsset.mind_file_path || '';
       let glbPath = editingAsset.gltf_file_path || '';
+      let videoPath = editingAsset.video_file_path || '';
+      let videoUrl = editingAsset.video_url || editingAsset.videoUrl || '';
 
       // 1. Recompile Target Image if a new file is uploaded
       if (targetImageFile) {
@@ -218,7 +350,27 @@ const AdminInventory = () => {
         glbPath = newGlbPath;
       }
 
-      // 3. Update 'assets' Firestore Document
+      // 3. Upload new Video Layer if a new file is provided
+      if (videoFile) {
+        setUploadStep('Uploading New Video Layer...');
+        const newVideoPath = `assets/${editingAsset.id}/${videoFile.name}`;
+        const videoRef = ref(storage, newVideoPath);
+        await uploadBytes(videoRef, videoFile);
+        try {
+          videoUrl = await getDownloadURL(videoRef);
+        } catch {}
+
+        if (editingAsset.video_file_path && editingAsset.video_file_path !== newVideoPath) {
+          try {
+            await deleteObject(ref(storage, editingAsset.video_file_path));
+          } catch (err) {
+            console.warn("Notice cleaning old video file:", err.message);
+          }
+        }
+        videoPath = newVideoPath;
+      }
+
+      // 4. Update 'assets' Firestore Document
       setUploadStep('Updating Asset Details...');
       await updateDoc(doc(db, 'assets', editingAsset.id), {
         name: assetName,
@@ -226,14 +378,20 @@ const AdminInventory = () => {
         merchant_id: merchantId || 'default',
         gltf_file_path: glbPath,
         mind_file_path: mindPath,
+        video_file_path: videoPath,
+        video_url: videoUrl,
+        videoUrl: videoUrl,
         updatedAt: new Date().toISOString()
       });
 
-      // 4. Update associated 'batches' Firestore Document
+      // 5. Update associated 'batches' Firestore Document
       setUploadStep('Updating Batch Details...');
       await setDoc(doc(db, 'batches', editingAsset.id), {
         merchant_id: merchantId || 'default',
         mind_file_path: mindPath,
+        video_file_path: videoPath,
+        video_url: videoUrl,
+        videoUrl: videoUrl,
         updatedAt: new Date().toISOString()
       }, { merge: true });
 
@@ -408,8 +566,12 @@ const AdminInventory = () => {
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-secondary mb-1">Document ID (Asset ID) *</label>
+                <label htmlFor="asset-id-input" className="block text-sm font-medium text-secondary mb-1">
+                  Document ID (Asset ID) *
+                </label>
                 <input
+                  id="asset-id-input"
+                  name="assetId"
                   type="text"
                   value={assetId}
                   onChange={(e) => setAssetId(e.target.value)}
@@ -424,8 +586,12 @@ const AdminInventory = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-secondary mb-1">Asset Name *</label>
+                <label htmlFor="asset-name-input" className="block text-sm font-medium text-secondary mb-1">
+                  Asset Name *
+                </label>
                 <input
+                  id="asset-name-input"
+                  name="assetName"
                   type="text"
                   value={assetName}
                   onChange={(e) => setAssetName(e.target.value)}
@@ -436,8 +602,12 @@ const AdminInventory = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-secondary mb-1">Merchant ID</label>
+                <label htmlFor="asset-merchant-id-input" className="block text-sm font-medium text-secondary mb-1">
+                  Merchant ID
+                </label>
                 <input
+                  id="asset-merchant-id-input"
+                  name="merchantId"
                   type="text"
                   value={merchantId}
                   onChange={(e) => setMerchantId(e.target.value)}
@@ -447,8 +617,12 @@ const AdminInventory = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-secondary mb-1">Description</label>
+                <label htmlFor="asset-desc-input" className="block text-sm font-medium text-secondary mb-1">
+                  Description
+                </label>
                 <textarea
+                  id="asset-desc-input"
+                  name="assetDescription"
                   value={assetDescription}
                   onChange={(e) => setAssetDescription(e.target.value)}
                   placeholder="Describe the AR asset..."
@@ -457,35 +631,238 @@ const AdminInventory = () => {
                 />
               </div>
 
+              {/* 3D Model File Input */}
               <div>
-                <label className="block text-sm font-medium text-secondary mb-1">
-                  3D Model File (.glb, .gltf) {!editingAsset && '*'}
-                </label>
-                <input
-                  type="file"
-                  accept=".glb,.gltf"
-                  onChange={(e) => setGlbFile(e.target.files[0])}
-                  className="w-full text-sm text-secondary file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-medium file:bg-primary/10 file:text-primary hover:file:bg-primary/20 transition-colors"
-                  required={!editingAsset}
-                />
-                {editingAsset && (
-                  <p className="text-xs text-secondary mt-1">Current: <span className="font-mono text-on-background">{editingAsset.gltf_file_path || 'None'}</span> (Leave empty to keep)</p>
+                <span className="block text-sm font-medium text-secondary mb-1.5">
+                  3D Model File (.glb, .gltf) {!editingAsset && <span className="text-red-500">*</span>}
+                </span>
+
+                {glbFile ? (
+                  <div className="flex items-center justify-between p-3.5 bg-surface-variant/50 border border-primary/30 rounded-lg">
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <span className="material-symbols-outlined text-primary text-2xl">view_in_ar</span>
+                      <div className="overflow-hidden">
+                        <p className="text-sm font-medium text-on-background truncate">{glbFile.name}</p>
+                        <p className="text-xs text-secondary">{formatFileSize(glbFile.size)}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={pick3DModel}
+                        className="text-xs font-medium text-primary hover:underline px-2 py-1 cursor-pointer"
+                      >
+                        Change
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setGlbFile(null);
+                        }}
+                        className="text-secondary hover:text-red-500 transition-colors p-1 cursor-pointer"
+                        title="Remove file"
+                      >
+                        <span className="material-symbols-outlined text-lg">close</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    onClick={pick3DModel}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                        setGlbFile(e.dataTransfer.files[0]);
+                      }
+                    }}
+                    className="border-2 border-dashed border-outline-variant hover:border-primary rounded-lg p-5 text-center bg-surface-variant/20 hover:bg-surface-variant/40 transition-all cursor-pointer group flex flex-col items-center justify-center"
+                  >
+                    <span className="material-symbols-outlined text-3xl text-secondary group-hover:text-primary transition-colors mb-1">
+                      view_in_ar
+                    </span>
+                    <p className="text-sm font-medium text-on-background">Click to choose or drop 3D Model</p>
+                    <p className="text-xs text-secondary mt-0.5 mb-2.5">Supports .glb, .gltf files</p>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        pick3DModel();
+                      }}
+                      className="bg-surface-variant hover:bg-surface-variant/80 text-primary border border-outline-variant/60 font-medium text-xs px-3.5 py-1.5 rounded-md transition-colors flex items-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                      <span className="material-symbols-outlined text-sm">folder_open</span>
+                      Browse 3D Model
+                    </button>
+                    {editingAsset && (
+                      <p className="text-xs text-secondary mt-2 border-t border-outline-variant/30 pt-1.5 font-mono truncate w-full text-center">
+                        Current: {editingAsset.gltf_file_path || 'None'} (Click to replace)
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
 
+              {/* Target Image File Input */}
               <div>
-                <label className="block text-sm font-medium text-secondary mb-1">
-                  Target Image (.jpg, .png) {!editingAsset && '*'}
-                </label>
-                <input
-                  type="file"
-                  accept="image/jpeg, image/png"
-                  onChange={(e) => setTargetImageFile(e.target.files[0])}
-                  className="w-full text-sm text-secondary file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-medium file:bg-primary/10 file:text-primary hover:file:bg-primary/20 transition-colors"
-                  required={!editingAsset}
-                />
-                {editingAsset && (
-                  <p className="text-xs text-secondary mt-1">Current Target: <span className="font-mono text-on-background">{editingAsset.mind_file_path || 'None'}</span> (Leave empty to keep)</p>
+                <span className="block text-sm font-medium text-secondary mb-1.5">
+                  Target Image (.jpg, .png) {!editingAsset && <span className="text-red-500">*</span>}
+                </span>
+
+                {targetImageFile ? (
+                  <div className="flex items-center justify-between p-3.5 bg-surface-variant/50 border border-primary/30 rounded-lg">
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <span className="material-symbols-outlined text-primary text-2xl">image</span>
+                      <div className="overflow-hidden">
+                        <p className="text-sm font-medium text-on-background truncate">{targetImageFile.name}</p>
+                        <p className="text-xs text-secondary">{formatFileSize(targetImageFile.size)}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={pickTargetImage}
+                        className="text-xs font-medium text-primary hover:underline px-2 py-1 cursor-pointer"
+                      >
+                        Change
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTargetImageFile(null);
+                        }}
+                        className="text-secondary hover:text-red-500 transition-colors p-1 cursor-pointer"
+                        title="Remove file"
+                      >
+                        <span className="material-symbols-outlined text-lg">close</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    onClick={pickTargetImage}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                        setTargetImageFile(e.dataTransfer.files[0]);
+                      }
+                    }}
+                    className="border-2 border-dashed border-outline-variant hover:border-primary rounded-lg p-5 text-center bg-surface-variant/20 hover:bg-surface-variant/40 transition-all cursor-pointer group flex flex-col items-center justify-center"
+                  >
+                    <span className="material-symbols-outlined text-3xl text-secondary group-hover:text-primary transition-colors mb-1">
+                      add_photo_alternate
+                    </span>
+                    <p className="text-sm font-medium text-on-background">Click to choose or drop Target Image</p>
+                    <p className="text-xs text-secondary mt-0.5 mb-2.5">Supports high-contrast .png, .jpg, .jpeg</p>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        pickTargetImage();
+                      }}
+                      className="bg-surface-variant hover:bg-surface-variant/80 text-primary border border-outline-variant/60 font-medium text-xs px-3.5 py-1.5 rounded-md transition-colors flex items-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                      <span className="material-symbols-outlined text-sm">folder_open</span>
+                      Browse Image
+                    </button>
+                    {editingAsset && (
+                      <p className="text-xs text-secondary mt-2 border-t border-outline-variant/30 pt-1.5 font-mono truncate w-full text-center">
+                        Current Target: {editingAsset.mind_file_path || 'None'} (Click to replace)
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Video Layer File Input (Optional) */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="block text-sm font-medium text-secondary">
+                    Video Layer (.mp4, .webm, .mov) <span className="text-xs text-secondary/70 font-normal">(Optional)</span>
+                  </span>
+                  {editingAsset?.video_url && (
+                    <span className="text-[11px] text-emerald-400 font-medium flex items-center gap-1">
+                      <span className="material-symbols-outlined text-[14px]">videocam</span> Active Video Layer
+                    </span>
+                  )}
+                </div>
+
+                {videoFile ? (
+                  <div className="flex items-center justify-between p-3.5 bg-surface-variant/50 border border-primary/30 rounded-lg">
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <span className="material-symbols-outlined text-primary text-2xl">movie</span>
+                      <div className="overflow-hidden">
+                        <p className="text-sm font-medium text-on-background truncate">{videoFile.name}</p>
+                        <p className="text-xs text-secondary">{formatFileSize(videoFile.size)}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={pickVideoFile}
+                        className="text-xs font-medium text-primary hover:underline px-2 py-1 cursor-pointer"
+                      >
+                        Change
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVideoFile(null);
+                        }}
+                        className="text-secondary hover:text-red-500 transition-colors p-1 cursor-pointer"
+                        title="Remove file"
+                      >
+                        <span className="material-symbols-outlined text-lg">close</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    onClick={pickVideoFile}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                        setVideoFile(e.dataTransfer.files[0]);
+                      }
+                    }}
+                    className="border-2 border-dashed border-outline-variant hover:border-primary rounded-lg p-5 text-center bg-surface-variant/20 hover:bg-surface-variant/40 transition-all cursor-pointer group flex flex-col items-center justify-center"
+                  >
+                    <span className="material-symbols-outlined text-3xl text-secondary group-hover:text-primary transition-colors mb-1">
+                      video_file
+                    </span>
+                    <p className="text-sm font-medium text-on-background">Click to choose or drop Video Layer</p>
+                    <p className="text-xs text-secondary mt-0.5 mb-2.5">Supports high-res .mp4, .webm, .mov (auto-loops on 3D meshes)</p>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        pickVideoFile();
+                      }}
+                      className="bg-surface-variant hover:bg-surface-variant/80 text-primary border border-outline-variant/60 font-medium text-xs px-3.5 py-1.5 rounded-md transition-colors flex items-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                      <span className="material-symbols-outlined text-sm">folder_open</span>
+                      Browse Video
+                    </button>
+                    {editingAsset && (
+                      <p className="text-xs text-secondary mt-2 border-t border-outline-variant/30 pt-1.5 font-mono truncate w-full text-center">
+                        Current Video: {editingAsset.video_file_path || editingAsset.video_url || 'None'} (Click to replace)
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
 

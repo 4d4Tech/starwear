@@ -68,17 +68,31 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
         if (!isMounted) return;
 
+        let videoUrl = data.arExperience?.videoUrl || data.arExperience?.video || data.videoUrl || data.video_url || mergedConfig.videoUrl || '';
+        if (!videoUrl) {
+          try {
+            const assetSnap = await getDoc(doc(db, 'assets', batchId));
+            if (assetSnap.exists()) {
+              const aData = assetSnap.data();
+              if (aData.video_url || aData.videoUrl) {
+                videoUrl = aData.video_url || aData.videoUrl;
+              }
+            }
+          } catch {}
+        }
+
         setArData({
           gltfPath: gltfUrl,
           mindPath: mindUrl,
-          config: mergedConfig
+          config: mergedConfig,
+          videoUrl: videoUrl
         });
 
         if (mergedConfig.mediaPlaying !== undefined) {
           setMediaPlaying(mergedConfig.mediaPlaying);
         }
 
-        logToScreen('CONFIG_READY', { gltfUrl, mindUrl, config: mergedConfig });
+        logToScreen('CONFIG_READY', { gltfUrl, mindUrl, videoUrl, config: mergedConfig });
 
         // Pre-validate target file size in the background
         if (mindUrl) {
@@ -123,13 +137,11 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
       const root = document.getElementById('root');
       if (root) root.style.backgroundColor = '#0b0f19';
 
-      // Clean up any lingering camera video tags when switched to preview mode
+      // Clean up ONLY the camera feed stream video tag when switched to preview mode
       const videos = document.querySelectorAll('video');
       videos.forEach((v) => {
         if (v.srcObject && typeof v.srcObject.getTracks === 'function') {
           v.srcObject.getTracks().forEach((track) => track.stop());
-        }
-        if (!v.closest('a-assets')) {
           v.srcObject = null;
           v.remove();
         }
@@ -162,6 +174,12 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           // Ignore vibration failures if unsupported by device permissions
         }
       }
+      // Ensure all 3D video layers start playing immediately upon target acquisition
+      document.querySelectorAll('video').forEach((v) => {
+        if (v && v.paused && !v.srcObject) {
+          v.play().catch(() => {});
+        }
+      });
     };
 
     const onTargetLost = (e) => {
@@ -171,6 +189,13 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
     const onModelLoad = () => {
       logToScreen('GLTF_LOAD', '3D model loaded and materials initialized.');
+      // Auto-play all video textures embedded in the 3D model
+      document.querySelectorAll('video').forEach((v) => {
+        if (v && v.paused && !v.srcObject) {
+          v.play().catch(() => {});
+        }
+      });
+
       const modelEl = document.getElementById('ar-model');
       if (modelEl) {
         const mesh = modelEl.getObject3D('mesh');
@@ -455,7 +480,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           <a-entity id="target-entity" mindar-image-target="targetIndex: 0">
             <a-gltf-model
               id="ar-model"
-              src="#metaModel"
+              src={arData.gltfPath}
               position="0 0 0"
               scale={`${modelScale} ${modelScale} ${modelScale}`}
               rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
@@ -468,7 +493,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                 : {})}
               model-auto-center="enabled: true"
               dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-              play-gltf-video={`playing: ${mediaPlaying}`}
+              play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}`}
               play-gltf-animation={`playing: ${mediaPlaying}`}
             ></a-gltf-model>
           </a-entity>
@@ -478,7 +503,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             <a-entity position="0 0 -2">
               <a-gltf-model
                 id="ar-model-forced"
-                src="#metaModel"
+                src={arData.gltfPath}
                 position="0 0 0"
                 scale={`${modelScale} ${modelScale} ${modelScale}`}
                 rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
@@ -491,7 +516,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                   : {})}
                 model-auto-center="enabled: true"
                 dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-                play-gltf-video={`playing: ${mediaPlaying}`}
+                play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}`}
                 play-gltf-animation={`playing: ${mediaPlaying}`}
               ></a-gltf-model>
             </a-entity>
@@ -518,10 +543,6 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             backgroundColor: '#0b0f19'
           }}
         >
-          <a-assets timeout="10000">
-            <a-asset-item id="metaModel" src={arData.gltfPath} crossOrigin="anonymous"></a-asset-item>
-          </a-assets>
-
           <a-camera position="0 0 2.5" look-controls="enabled: true" wasd-controls="enabled: false">
             <a-light type="directional" color="#ffffff" intensity="1.2" position="0 0 1"></a-light>
           </a-camera>
@@ -535,7 +556,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           <a-entity position="0 0 0">
             <a-gltf-model
               id="ar-model"
-              src="#metaModel"
+              src={arData.gltfPath}
               position="0 0 0"
               scale={`${modelScale} ${modelScale} ${modelScale}`}
               rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
@@ -548,7 +569,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                 : {})}
               model-auto-center="enabled: true"
               dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-              play-gltf-video={`playing: ${mediaPlaying}`}
+              play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}`}
               play-gltf-animation={`playing: ${mediaPlaying}`}
             ></a-gltf-model>
           </a-entity>

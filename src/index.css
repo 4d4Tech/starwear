@@ -148,3 +148,8 @@ video,
 .delete-asset {
   cursor: pointer;
 }
+
+.video-player {
+  width: 100% !important;
+  height: auto !important;
+}
