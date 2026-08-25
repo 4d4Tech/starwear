@@ -43,28 +43,33 @@ body {
   letter-spacing: 0.1em;
   font-weight: 600;
 }
+
 .text-body-md {
   font-size: 16px;
   line-height: 24px;
   font-weight: 400;
 }
+
 .text-body-lg {
   font-size: 18px;
   line-height: 28px;
   font-weight: 400;
 }
+
 .text-headline-xl {
   font-size: 80px;
   line-height: 90px;
   letter-spacing: 0.05em;
   font-weight: 800;
 }
+
 .text-headline-lg {
   font-size: 48px;
   line-height: 56px;
   letter-spacing: 0.02em;
   font-weight: 700;
 }
+
 .text-headline-lg-mobile {
   font-size: 32px;
   line-height: 40px;
@@ -121,18 +126,25 @@ body {
 
 /* Hide scrollbar for clean horizontal scrolls */
 .no-scrollbar::-webkit-scrollbar {
-    display: none;
+  display: none;
 }
+
 .no-scrollbar {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
 
 /* Force AR elements to cover the screen without letterboxing */
-video, .a-canvas {
+video,
+.a-canvas {
   object-fit: cover !important;
   width: 100vw !important;
   height: 100dvh !important;
   top: 0 !important;
   left: 0 !important;
+}
+
+.edit-asset,
+.delete-asset {
+  cursor: pointer;
 }

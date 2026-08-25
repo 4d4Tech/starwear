@@ -397,42 +397,44 @@ const ARTest = () => {
       </div>
 
       {/* 3D Viewer */}
-      <div className="flex-1 relative bg-neutral-800 overflow-hidden">
+      <div className="flex-1 relative bg-neutral-900 overflow-hidden">
         {arData ? (
           <a-scene
             embedded
             color-space="sRGB"
-            renderer="colorManagement: true; physicallyCorrectLights: false;"
+            renderer="colorManagement: true; physicallyCorrectLights: true; antialias: true;"
             vr-mode-ui="enabled: false"
             device-orientation-permission-ui="enabled: false"
-            fog={`type: exponential; color: ${fogColor}; density: ${fogDensity}`}
+            scene-environment="exposure: 1.0"
+            fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
             style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
           >
-            <a-assets>
-              <a-asset-item id="metaModel" src={arData.arExperience.modelUrl} crossOrigin="anonymous"></a-asset-item>
+            <a-assets timeout="10000">
+              <a-asset-item id="metaModel" src={arData.arExperience?.modelUrl} crossOrigin="anonymous"></a-asset-item>
             </a-assets>
 
-            {/* Dynamic Lighting */}
+            <a-camera position="0 0 2.5" look-controls="enabled: true" wasd-controls="enabled: false">
+              {/* Front Headlight attached to camera ensures model is always lit */}
+              <a-light type="directional" color="#ffffff" intensity="1.2" position="0 0 1"></a-light>
+            </a-camera>
+
+            {/* Dynamic Lighting Rig */}
             <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
             <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
             <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
 
-            <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false">
-              {/* Front Headlight attached to camera ensures phone camera facing side is always lit */}
-              <a-light type="directional" color="#ffffff" intensity="1.5" position="0 0 1"></a-light>
-            </a-camera>
-
-            <a-entity position="0 0 -2.5">
+            <a-entity position="0 0 0">
               <a-gltf-model
                 id="ar-model"
-                play-gltf-video={`playing: ${mediaPlaying}`}
-                play-gltf-animation={`playing: ${mediaPlaying}`}
-                dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
                 src="#metaModel"
-                rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
                 position="0 0 0"
                 scale={`${modelScale} ${modelScale} ${modelScale}`}
+                rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
                 {...(modelRotSpeed > 0 ? { animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${modelRotY + 360} ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;` } : {})}
+                model-auto-center="enabled: true"
+                dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
+                play-gltf-video={`playing: ${mediaPlaying}`}
+                play-gltf-animation={`playing: ${mediaPlaying}`}
               >
               </a-gltf-model>
             </a-entity>
