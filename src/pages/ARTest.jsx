@@ -1,20 +1,545 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import 'aframe';
+import * as THREE from 'three';
 import BuyNowButton from '../components/BuyNowButton';
-import { db, functions, analytics } from '../firebase';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { db, storage, functions, analytics } from '../firebase';
+import { doc, getDoc, getDocFromServer, setDoc, collection, getDocs } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+
+if (typeof THREE !== 'undefined' && THREE.Cache) {
+  THREE.Cache.enabled = false;
+  THREE.Cache.clear();
+}
 import { httpsCallable } from 'firebase/functions';
 import { logEvent } from 'firebase/analytics';
 import { loadStripe } from '@stripe/stripe-js';
 import '../utils/aframe-components';
 
+// =========================================================================
+// 1. REUSABLE TYPED SLIDER CONTROL WITH DUAL-WAY DATA BINDING
+// =========================================================================
+const NumberSliderInput = ({
+  label,
+  value,
+  onChange,
+  min = 0,
+  max = 100,
+  step = 1,
+  unit = '',
+  color = 'indigo', // 'rose' | 'emerald' | 'sky' | 'indigo' | 'amber' | 'purple'
+  precision = 2,
+  description = '',
+  stepButtons = true,
+  resetValue = undefined,
+  showRange = true
+}) => {
+  const [textVal, setTextVal] = useState(String(value));
+  const [isFocused, setIsFocused] = useState(false);
+
+  useEffect(() => {
+    if (!isFocused) {
+      if (typeof value === 'number' && !isNaN(value)) {
+        setTextVal(Number.isInteger(step) && step >= 1 ? String(Math.round(value)) : String(Number(value.toFixed(precision))));
+      } else {
+        setTextVal(String(value ?? 0));
+      }
+    }
+  }, [value, isFocused, precision, step]);
+
+  const handleTextChange = (e) => {
+    const raw = e.target.value;
+    setTextVal(raw);
+    const parsed = parseFloat(raw);
+    if (!isNaN(parsed)) {
+      onChange(parsed);
+    }
+  };
+
+  const handleBlur = () => {
+    setIsFocused(false);
+    let parsed = parseFloat(textVal);
+    if (isNaN(parsed)) {
+      parsed = resetValue !== undefined ? resetValue : min;
+    }
+    const clamped = Math.max(min, Math.min(max, parsed));
+    const finalVal = Number(clamped.toFixed(precision));
+    onChange(finalVal);
+    setTextVal(String(finalVal));
+  };
+
+  const handleNudge = (delta) => {
+    const current = typeof value === 'number' && !isNaN(value) ? value : 0;
+    const nextVal = Number(Math.max(min, Math.min(max, current + delta)).toFixed(precision));
+    onChange(nextVal);
+    setTextVal(String(nextVal));
+  };
+
+  const colorStyles = {
+    rose: {
+      accent: 'accent-rose-500',
+      text: 'text-rose-400',
+      border: 'border-rose-500/40 focus-within:border-rose-400',
+      bg: 'bg-rose-950/20',
+      badge: 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+    },
+    emerald: {
+      accent: 'accent-emerald-500',
+      text: 'text-emerald-400',
+      border: 'border-emerald-500/40 focus-within:border-emerald-400',
+      bg: 'bg-emerald-950/20',
+      badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+    },
+    sky: {
+      accent: 'accent-sky-500',
+      text: 'text-sky-400',
+      border: 'border-sky-500/40 focus-within:border-sky-400',
+      bg: 'bg-sky-950/20',
+      badge: 'bg-sky-500/20 text-sky-300 border-sky-500/30'
+    },
+    indigo: {
+      accent: 'accent-indigo-500',
+      text: 'text-indigo-400',
+      border: 'border-indigo-500/40 focus-within:border-indigo-400',
+      bg: 'bg-indigo-950/20',
+      badge: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
+    },
+    amber: {
+      accent: 'accent-amber-500',
+      text: 'text-amber-400',
+      border: 'border-amber-500/40 focus-within:border-amber-400',
+      bg: 'bg-amber-950/20',
+      badge: 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+    },
+    purple: {
+      accent: 'accent-purple-500',
+      text: 'text-purple-400',
+      border: 'border-purple-500/40 focus-within:border-purple-400',
+      bg: 'bg-purple-950/20',
+      badge: 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+    },
+    cyan: {
+      accent: 'accent-cyan-500',
+      text: 'text-cyan-400',
+      border: 'border-cyan-500/40 focus-within:border-cyan-400',
+      bg: 'bg-cyan-950/20',
+      badge: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
+    }
+  };
+
+  const theme = colorStyles[color] || colorStyles.indigo;
+
+  return (
+    <div className="flex flex-col gap-1.5 p-2 rounded-lg bg-neutral-900/70 border border-neutral-800 hover:border-neutral-700 transition-colors">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          <span className="text-xs font-semibold text-neutral-300 truncate">{label}</span>
+          {description && (
+            <span className="text-[10px] text-neutral-500" title={description}>ⓘ</span>
+          )}
+        </div>
+
+        <div className={`flex items-center rounded bg-black/60 border ${theme.border} px-1 py-0.5 shadow-inner transition-colors`}>
+          {stepButtons && (
+            <button
+              type="button"
+              onClick={() => handleNudge(-step)}
+              className="w-5 h-5 flex items-center justify-center text-xs text-neutral-400 hover:text-white hover:bg-neutral-800 rounded transition-colors"
+              title={`Subtract ${step}`}
+            >
+              -
+            </button>
+          )}
+          <input
+            type="number"
+            min={min}
+            max={max}
+            step={step}
+            value={textVal}
+            onChange={handleTextChange}
+            onFocus={() => setIsFocused(true)}
+            onBlur={handleBlur}
+            className={`w-16 px-1 text-right text-xs font-mono font-bold ${theme.text} bg-transparent outline-none appearance-none`}
+          />
+          {unit && (
+            <span className="text-[10px] font-mono text-neutral-500 px-0.5">{unit}</span>
+          )}
+          {stepButtons && (
+            <button
+              type="button"
+              onClick={() => handleNudge(step)}
+              className="w-5 h-5 flex items-center justify-center text-xs text-neutral-400 hover:text-white hover:bg-neutral-800 rounded transition-colors"
+              title={`Add ${step}`}
+            >
+              +
+            </button>
+          )}
+          {resetValue !== undefined && value !== resetValue && (
+            <button
+              type="button"
+              onClick={() => {
+                onChange(resetValue);
+                setTextVal(String(resetValue));
+              }}
+              className="ml-1 text-[10px] text-neutral-500 hover:text-amber-400"
+              title={`Reset to ${resetValue}${unit}`}
+            >
+              ↺
+            </button>
+          )}
+        </div>
+      </div>
+
+      {showRange && (
+        <div className="flex items-center gap-2 pt-0.5">
+          <span className="text-[10px] font-mono text-neutral-600 w-8">{min}{unit}</span>
+          <input
+            type="range"
+            min={min}
+            max={max}
+            step={step}
+            value={typeof value === 'number' && !isNaN(value) ? value : min}
+            onChange={(e) => {
+              const val = parseFloat(e.target.value);
+              onChange(val);
+              setTextVal(String(val));
+            }}
+            className={`flex-1 h-1.5 bg-neutral-800 rounded-lg appearance-none cursor-pointer ${theme.accent}`}
+          />
+          <span className="text-[10px] font-mono text-neutral-600 w-8 text-right">{max}{unit}</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// =========================================================================
+// 2. INTERACTIVE CIRCULAR ROTATION DIAL COMPONENT
+// =========================================================================
+const RotationDial = ({
+  axis = 'X',
+  angle = 0,
+  onChange,
+  color = 'rose',
+  description = ''
+}) => {
+  const dialRef = useRef(null);
+
+  const normalizedAngle = ((((angle + 180) % 360) + 360) % 360) - 180;
+
+  const calculateAngleFromPointer = useCallback((clientX, clientY, snapTo15 = false) => {
+    if (!dialRef.current) return;
+    const rect = dialRef.current.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const dx = clientX - cx;
+    const dy = clientY - cy;
+
+    const rad = Math.atan2(dx, -dy);
+    let deg = Math.round((rad * 180) / Math.PI);
+
+    if (snapTo15) {
+      deg = Math.round(deg / 15) * 15;
+    }
+
+    onChange(deg);
+  }, [onChange]);
+
+  const handlePointerDown = (e) => {
+    e.preventDefault();
+    calculateAngleFromPointer(e.clientX, e.clientY, e.shiftKey);
+
+    const handlePointerMove = (moveEvent) => {
+      calculateAngleFromPointer(moveEvent.clientX, moveEvent.clientY, moveEvent.shiftKey);
+    };
+
+    const handlePointerUp = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+  };
+
+  const axisThemes = {
+    rose: {
+      accent: 'text-rose-400',
+      ring: 'stroke-rose-500/50',
+      needle: '#f43f5e',
+      glow: 'shadow-[0_0_12px_rgba(244,63,94,0.3)]',
+      border: 'border-rose-500/30 bg-rose-950/10'
+    },
+    emerald: {
+      accent: 'text-emerald-400',
+      ring: 'stroke-emerald-500/50',
+      needle: '#10b981',
+      glow: 'shadow-[0_0_12px_rgba(16,185,129,0.3)]',
+      border: 'border-emerald-500/30 bg-emerald-950/10'
+    },
+    sky: {
+      accent: 'text-sky-400',
+      ring: 'stroke-sky-500/50',
+      needle: '#0ea5e9',
+      glow: 'shadow-[0_0_12px_rgba(14,165,233,0.3)]',
+      border: 'border-sky-500/30 bg-sky-950/10'
+    }
+  };
+
+  const theme = axisThemes[color] || axisThemes.rose;
+
+  const dialRadius = 20;
+  const cx = 28;
+  const cy = 28;
+  const angleRad = (normalizedAngle * Math.PI) / 180;
+  const pointerX = cx + dialRadius * Math.sin(angleRad);
+  const pointerY = cy - dialRadius * Math.cos(angleRad);
+
+  return (
+    <div className={`p-2.5 rounded-lg border ${theme.border} flex flex-col gap-2`}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <span className={`w-5 h-5 rounded flex items-center justify-center text-xs font-bold font-mono bg-black/60 border border-neutral-700 ${theme.accent}`}>
+            {axis}
+          </span>
+          <span className="text-xs font-semibold text-neutral-200">{description || `Rotation ${axis}`}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className={`text-xs font-mono font-bold ${theme.accent} px-1.5 py-0.5 rounded bg-black/60 border border-neutral-800`}>
+            {normalizedAngle}°
+          </span>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3">
+        <div
+          ref={dialRef}
+          onPointerDown={handlePointerDown}
+          className={`relative w-14 h-14 rounded-full bg-neutral-950 border border-neutral-800 cursor-grab active:cursor-grabbing flex-shrink-0 flex items-center justify-center select-none ${theme.glow}`}
+          title="Drag dial or click to rotate (Hold Shift to snap 15°)"
+        >
+          <svg className="w-full h-full" viewBox="0 0 56 56">
+            <circle cx="28" cy="28" r="24" fill="none" stroke="#262626" strokeWidth="1" />
+            <circle cx="28" cy="28" r="20" fill="none" stroke="#1f1f1f" strokeWidth="2" />
+
+            <line x1="28" y1="5" x2="28" y2="9" stroke="#525252" strokeWidth="1.5" />
+            <line x1="51" y1="28" x2="47" y2="28" stroke="#525252" strokeWidth="1.5" />
+            <line x1="28" y1="51" x2="28" y2="47" stroke="#525252" strokeWidth="1.5" />
+            <line x1="5" y1="28" x2="9" y2="28" stroke="#525252" strokeWidth="1.5" />
+
+            <line
+              x1="28"
+              y1="28"
+              x2={pointerX}
+              y2={pointerY}
+              stroke={theme.needle}
+              strokeWidth="2.5"
+              strokeLinecap="round"
+            />
+
+            <circle cx="28" cy="28" r="3" fill="#ffffff" />
+            <circle cx={pointerX} cy={pointerY} r="3.5" fill={theme.needle} stroke="#ffffff" strokeWidth="1" />
+          </svg>
+          <span className="absolute top-0.5 text-[8px] font-mono text-neutral-500 pointer-events-none">0°</span>
+        </div>
+
+        <div className="flex-1 min-w-0">
+          <NumberSliderInput
+            label=""
+            value={normalizedAngle}
+            onChange={onChange}
+            min={-180}
+            max={180}
+            step={1}
+            unit="°"
+            color={color}
+            precision={0}
+            showRange={true}
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-6 gap-1 pt-1 border-t border-neutral-800/60">
+        {[-90, -45, 0, 45, 90, 180].map((presetDeg) => (
+          <button
+            key={presetDeg}
+            type="button"
+            onClick={() => onChange(presetDeg)}
+            className={`px-1 py-1 rounded text-[10px] font-mono font-medium transition-colors border ${normalizedAngle === presetDeg
+              ? `${theme.border} ${theme.accent} bg-neutral-800 font-bold`
+              : 'bg-neutral-900 hover:bg-neutral-800 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+              }`}
+          >
+            {presetDeg > 0 ? `+${presetDeg}°` : `${presetDeg}°`}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// =========================================================================
+// 3. OBJECT POSITIONING D-PAD & STEPPER COMPONENT
+// =========================================================================
+const PositioningDpad = ({
+  posX,
+  posY,
+  posZ,
+  onChangeX,
+  onChangeY,
+  onChangeZ,
+  onReset
+}) => {
+  const [plane, setPlane] = useState('xy');
+  const [stepSize, setStepSize] = useState(0.05);
+
+  const nudge = (axis, delta) => {
+    if (axis === 'x') onChangeX(Number((posX + delta).toFixed(3)));
+    if (axis === 'y') onChangeY(Number((posY + delta).toFixed(3)));
+    if (axis === 'z') onChangeZ(Number((posZ + delta).toFixed(3)));
+  };
+
+  return (
+    <div className="p-3 bg-neutral-900/80 border border-neutral-800 rounded-lg space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+          <span className="material-symbols-outlined text-sm text-sky-400">gamepad</span>
+          2D Placement Nudge Pad
+        </span>
+
+        <div className="flex items-center gap-1 bg-black/60 p-0.5 rounded border border-neutral-800">
+          {[0.01, 0.05, 0.1, 0.5].map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => setStepSize(s)}
+              className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-medium transition-colors ${stepSize === s
+                ? 'bg-neutral-700 text-white font-bold'
+                : 'text-neutral-500 hover:text-neutral-300'
+                }`}
+            >
+              {s * 100}cm
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-1 p-0.5 bg-black/60 rounded border border-neutral-800 text-xs">
+        <button
+          type="button"
+          onClick={() => setPlane('xy')}
+          className={`py-1 rounded text-xs font-medium transition-colors flex items-center justify-center gap-1 ${plane === 'xy'
+            ? 'bg-neutral-800 text-emerald-400 font-bold border border-emerald-500/30'
+            : 'text-neutral-400 hover:text-neutral-200'
+            }`}
+        >
+          <span>X / Y Plane</span>
+          <span className="text-[10px] text-neutral-500">(Left/Right & Up/Down)</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setPlane('xz')}
+          className={`py-1 rounded text-xs font-medium transition-colors flex items-center justify-center gap-1 ${plane === 'xz'
+            ? 'bg-neutral-800 text-sky-400 font-bold border border-sky-500/30'
+            : 'text-neutral-400 hover:text-neutral-200'
+            }`}
+        >
+          <span>X / Z Plane</span>
+          <span className="text-[10px] text-neutral-500">(Floor & Depth)</span>
+        </button>
+      </div>
+
+      <div className="flex flex-col items-center justify-center py-2">
+        <button
+          type="button"
+          onClick={() => nudge(plane === 'xy' ? 'y' : 'z', plane === 'xy' ? stepSize : -stepSize)}
+          className="w-12 h-10 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 hover:border-neutral-500 active:scale-95 rounded-t-lg flex flex-col items-center justify-center text-neutral-200 transition-all shadow-md"
+          title={plane === 'xy' ? `Move Up +Y (${stepSize}m)` : `Move Closer / Forward -Z (${stepSize}m)`}
+        >
+          <span className="material-symbols-outlined text-sm">arrow_upward</span>
+          <span className="text-[9px] font-mono text-neutral-400">{plane === 'xy' ? '+Y' : '-Z'}</span>
+        </button>
+
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => nudge('x', -stepSize)}
+            className="w-12 h-10 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 hover:border-neutral-500 active:scale-95 rounded-l-lg flex flex-col items-center justify-center text-neutral-200 transition-all shadow-md"
+            title={`Move Left -X (${stepSize}m)`}
+          >
+            <span className="material-symbols-outlined text-sm">arrow_back</span>
+            <span className="text-[9px] font-mono text-rose-400">-X</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onReset}
+            className="w-14 h-10 bg-neutral-950 hover:bg-neutral-800 border border-neutral-700 hover:border-amber-400 active:scale-95 rounded flex flex-col items-center justify-center text-amber-400 hover:text-amber-300 transition-all shadow-inner"
+            title="Reset Position to Center (0, 0, 0)"
+          >
+            <span className="material-symbols-outlined text-xs">adjust</span>
+            <span className="text-[8px] font-mono font-bold uppercase tracking-tighter">Origin</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => nudge('x', stepSize)}
+            className="w-12 h-10 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 hover:border-neutral-500 active:scale-95 rounded-r-lg flex flex-col items-center justify-center text-neutral-200 transition-all shadow-md"
+            title={`Move Right +X (${stepSize}m)`}
+          >
+            <span className="material-symbols-outlined text-sm">arrow_forward</span>
+            <span className="text-[9px] font-mono text-rose-400">+X</span>
+          </button>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => nudge(plane === 'xy' ? 'y' : 'z', plane === 'xy' ? -stepSize : stepSize)}
+          className="w-12 h-10 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 hover:border-neutral-500 active:scale-95 rounded-b-lg flex flex-col items-center justify-center text-neutral-200 transition-all shadow-md"
+          title={plane === 'xy' ? `Move Down -Y (${stepSize}m)` : `Move Back / Distance +Z (${stepSize}m)`}
+        >
+          <span className="text-[9px] font-mono text-neutral-400">{plane === 'xy' ? '-Y' : '+Z'}</span>
+          <span className="material-symbols-outlined text-sm">arrow_downward</span>
+        </button>
+      </div>
+
+      <div className="flex items-center justify-around py-1.5 px-2 bg-black/60 rounded border border-neutral-800 text-[11px] font-mono">
+        <span className="text-rose-400">X: {posX.toFixed(2)}m</span>
+        <span className="text-emerald-400">Y: {posY.toFixed(2)}m</span>
+        <span className="text-sky-400">Z: {posZ.toFixed(2)}m</span>
+      </div>
+    </div>
+  );
+};
+
+// =========================================================================
+// MAIN ARTEST COMPONENT
+// =========================================================================
 const ARTest = () => {
   const [batchId, setBatchId] = useState('');
   const [arData, setArData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Scene Properties State
+  // Active Control Panel Tab: 'transform' | 'hierarchy' | 'lighting' | 'materials' | 'scene'
+  const [activeTab, setActiveTab] = useState('transform');
+
+  // Multi-Mesh & Object Selection State
+  const [meshList, setMeshList] = useState([]);
+  const [selectedMeshUuid, setSelectedMeshUuid] = useState(null); // null = entire model (root)
+  const [searchFilter, setSearchFilter] = useState('');
+
+  // Global Model Transform States (for entire model root)
+  const [modelScale, setModelScale] = useState(0.4);
+  const [modelRotSpeed, setModelRotSpeed] = useState(10000);
+  const [modelRotX, setModelRotX] = useState(90);
+  const [modelRotY, setModelRotY] = useState(0);
+  const [modelRotZ, setModelRotZ] = useState(0);
+
+  const [modelPosX, setModelPosX] = useState(0);
+  const [modelPosY, setModelPosY] = useState(0);
+  const [modelPosZ, setModelPosZ] = useState(0);
+
+  // Scene Lighting Properties State
   const [ambientColor, setAmbientColor] = useState('#ffffff');
   const [ambientIntensity, setAmbientIntensity] = useState(1.5);
 
@@ -25,13 +550,6 @@ const ARTest = () => {
   const [dir2Color, setDir2Color] = useState('#ffffff');
   const [dir2Intensity, setDir2Intensity] = useState(1.0);
   const [dir2Position, setDir2Position] = useState('-1 -2 -1');
-
-  // Model & Transform
-  const [modelScale, setModelScale] = useState(0.4);
-  const [modelRotSpeed, setModelRotSpeed] = useState(10000);
-  const [modelRotX, setModelRotX] = useState(90);
-  const [modelRotY, setModelRotY] = useState(0);
-  const [modelRotZ, setModelRotZ] = useState(0);
 
   // Material Properties (-1 means preserve GLTF asset PBR settings)
   const [useNativePBR, setUseNativePBR] = useState(true);
@@ -54,27 +572,752 @@ const ARTest = () => {
   // Video Layer & Local Asset Testing States
   const [activeVideoUrl, setActiveVideoUrl] = useState('');
   const [customVideoUrl, setCustomVideoUrl] = useState('');
+  const [videoTargetMesh, setVideoTargetMesh] = useState('auto'); // 'auto' | 'all' | mesh name/uuid
+  const [videoFlipX, setVideoFlipX] = useState(false); // Mirror horizontal orientation
   const [localGlbUrl, setLocalGlbUrl] = useState('');
   const [localGlbName, setLocalGlbName] = useState('');
   const [localVideoName, setLocalVideoName] = useState('');
+  const [selectedVideoFile, setSelectedVideoFile] = useState(null);
+  const [selectedGlbFile, setSelectedGlbFile] = useState(null);
 
   const [savingConfig, setSavingConfig] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState('');
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState('');
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+
+  // Camera Target Tracking & Precision States (MindAR)
+  const [trackingFilterMinCF, setTrackingFilterMinCF] = useState(0.0005);
+  const [trackingFilterBeta, setTrackingFilterBeta] = useState(0.01);
+  const [trackingMissTolerance, setTrackingMissTolerance] = useState(6);
+  const [trackingWarmupTolerance, setTrackingWarmupTolerance] = useState(2);
+  const [trackingMaxTrack, setTrackingMaxTrack] = useState(1);
+  const [trackingTargetIndex, setTrackingTargetIndex] = useState(0);
+  const [trackingShowStats, setTrackingShowStats] = useState(false);
+  const [trackingUiLoading, setTrackingUiLoading] = useState('no');
+  const [trackingUiScanning, setTrackingUiScanning] = useState('no');
+  const [trackingUiError, setTrackingUiError] = useState('yes');
+  const [trackingScope, setTrackingScope] = useState('batch'); // 'batch' | 'global'
+  const [savingTracking, setSavingTracking] = useState(false);
+  const [trackingSuccessMsg, setTrackingSuccessMsg] = useState('');
+  const [activeTrackingPreset, setActiveTrackingPreset] = useState('balanced');
+
+  const applyTrackingPreset = (presetKey) => {
+    setActiveTrackingPreset(presetKey);
+    if (presetKey === 'balanced') {
+      setTrackingFilterMinCF(0.0005);
+      setTrackingFilterBeta(0.01);
+      setTrackingMissTolerance(6);
+      setTrackingWarmupTolerance(2);
+      setTrackingMaxTrack(1);
+    } else if (presetKey === 'smooth') {
+      setTrackingFilterMinCF(0.0001);
+      setTrackingFilterBeta(0.005);
+      setTrackingMissTolerance(8);
+      setTrackingWarmupTolerance(3);
+      setTrackingMaxTrack(1);
+    } else if (presetKey === 'fast') {
+      setTrackingFilterMinCF(0.005);
+      setTrackingFilterBeta(0.1);
+      setTrackingMissTolerance(4);
+      setTrackingWarmupTolerance(1);
+      setTrackingMaxTrack(1);
+    } else if (presetKey === 'resilient') {
+      setTrackingFilterMinCF(0.0005);
+      setTrackingFilterBeta(0.01);
+      setTrackingMissTolerance(14);
+      setTrackingWarmupTolerance(2);
+      setTrackingMaxTrack(1);
+    }
+  };
+
+  // Helper: Scan and detect all individual meshes inside the 3D model
+  const scanMeshes = useCallback(() => {
+    const modelEl = document.getElementById('ar-model');
+    if (!modelEl) return;
+    const model3D = modelEl.getObject3D('mesh');
+    if (!model3D) return;
+
+    const detected = [];
+    let idx = 1;
+
+    model3D.traverse((node) => {
+      if (node.isMesh) {
+        const rotDegX = Math.round((node.rotation.x * 180) / Math.PI);
+        const rotDegY = Math.round((node.rotation.y * 180) / Math.PI);
+        const rotDegZ = Math.round((node.rotation.z * 180) / Math.PI);
+
+        let hexColor = '#ffffff';
+        let metalness = 0;
+        let roughness = 1;
+        let emissive = '#000000';
+        let emissiveIntensity = 0;
+        let opacity = 1;
+        let wireframe = false;
+
+        if (node.material) {
+          const mat = Array.isArray(node.material) ? node.material[0] : node.material;
+          if (mat.color && typeof mat.color.getHexString === 'function') {
+            hexColor = '#' + mat.color.getHexString();
+          }
+          if (mat.metalness !== undefined) metalness = mat.metalness;
+          if (mat.roughness !== undefined) roughness = mat.roughness;
+          if (mat.emissive && typeof mat.emissive.getHexString === 'function') {
+            emissive = '#' + mat.emissive.getHexString();
+          }
+          if (mat.emissiveIntensity !== undefined) emissiveIntensity = mat.emissiveIntensity;
+          if (mat.opacity !== undefined) opacity = mat.opacity;
+          wireframe = !!mat.wireframe;
+        }
+
+        detected.push({
+          uuid: node.uuid,
+          name: node.name || `Mesh_${idx}`,
+          materialName: (node.material ? (Array.isArray(node.material) ? node.material[0].name : node.material.name) : '') || `Material_${idx}`,
+          visible: node.visible !== false,
+          position: { x: Number(node.position.x.toFixed(3)), y: Number(node.position.y.toFixed(3)), z: Number(node.position.z.toFixed(3)) },
+          rotation: { x: rotDegX, y: rotDegY, z: rotDegZ },
+          scale: { x: Number(node.scale.x.toFixed(2)), y: Number(node.scale.y.toFixed(2)), z: Number(node.scale.z.toFixed(2)) },
+          material: {
+            color: hexColor,
+            metalness,
+            roughness,
+            emissive,
+            emissiveIntensity,
+            opacity,
+            wireframe
+          }
+        });
+        idx++;
+      }
+    });
+
+    setMeshList(detected);
+  }, []);
+
+  // Load Global Tracking Defaults from Firestore (settings/tracking) on mount
+  useEffect(() => {
+    const loadGlobalTracking = async () => {
+      try {
+        const snap = await getDoc(doc(db, 'settings', 'tracking'));
+        if (snap.exists()) {
+          const tData = snap.data();
+          if (tData.filterMinCF !== undefined) setTrackingFilterMinCF(Number(tData.filterMinCF));
+          if (tData.filterBeta !== undefined) setTrackingFilterBeta(Number(tData.filterBeta));
+          if (tData.missTolerance !== undefined) setTrackingMissTolerance(Number(tData.missTolerance));
+          if (tData.warmupTolerance !== undefined) setTrackingWarmupTolerance(Number(tData.warmupTolerance));
+          if (tData.maxTrack !== undefined) setTrackingMaxTrack(Number(tData.maxTrack));
+          if (tData.targetIndex !== undefined) setTrackingTargetIndex(Number(tData.targetIndex));
+          if (tData.showStats !== undefined) setTrackingShowStats(!!tData.showStats);
+          if (tData.uiLoading !== undefined) setTrackingUiLoading(tData.uiLoading);
+          if (tData.uiScanning !== undefined) setTrackingUiScanning(tData.uiScanning);
+          if (tData.uiError !== undefined) setTrackingUiError(tData.uiError);
+        }
+      } catch (err) {
+        console.warn('Could not load global tracking settings:', err);
+      }
+    };
+    loadGlobalTracking();
+  }, []);
+
+  // Listen for model-loaded event on #ar-model to detect meshes automatically and apply overrides if any
+  useEffect(() => {
+    const modelEl = document.getElementById('ar-model');
+    if (!modelEl) return;
+
+    const handleLoaded = () => {
+      const model3D = modelEl.getObject3D('mesh');
+      if (model3D && arData?.config?.meshOverrides) {
+        const overrides = arData.config.meshOverrides;
+        model3D.traverse((node) => {
+          if (node.isMesh) {
+            const ovr = overrides[node.name] || overrides[node.uuid];
+            if (ovr) {
+              if (ovr.position) node.position.set(ovr.position.x, ovr.position.y, ovr.position.z);
+              if (ovr.rotation) {
+                node.rotation.set(
+                  ((ovr.rotation.x || 0) * Math.PI) / 180,
+                  ((ovr.rotation.y || 0) * Math.PI) / 180,
+                  ((ovr.rotation.z || 0) * Math.PI) / 180
+                );
+              }
+              if (ovr.scale) {
+                const sx = typeof ovr.scale === 'number' ? ovr.scale : (ovr.scale.x || 1);
+                node.scale.set(sx, sx, sx);
+              }
+              if (ovr.visible !== undefined) node.visible = !!ovr.visible;
+              if (ovr.material && node.material) {
+                const mats = Array.isArray(node.material) ? node.material : [node.material];
+                mats.forEach((m) => {
+                  if (ovr.material.color && m.color) m.color.set(ovr.material.color);
+                  if (ovr.material.metalness !== undefined && m.metalness !== undefined) m.metalness = ovr.material.metalness;
+                  if (ovr.material.roughness !== undefined && m.roughness !== undefined) m.roughness = ovr.material.roughness;
+                  if (ovr.material.emissive && m.emissive) m.emissive.set(ovr.material.emissive);
+                  if (ovr.material.opacity !== undefined) {
+                    m.opacity = ovr.material.opacity;
+                    if (m.opacity < 1.0) m.transparent = true;
+                  }
+                  if (ovr.material.wireframe !== undefined) m.wireframe = !!ovr.material.wireframe;
+                  m.needsUpdate = true;
+                });
+              }
+            }
+          }
+        });
+      }
+      scanMeshes();
+      if (typeof applyFlipXToScene === 'function') {
+        applyFlipXToScene(videoFlipX);
+      }
+    };
+
+    modelEl.addEventListener('model-loaded', handleLoaded);
+    if (modelEl.getObject3D('mesh')) {
+      handleLoaded();
+    }
+
+    return () => {
+      modelEl.removeEventListener('model-loaded', handleLoaded);
+    };
+  }, [localGlbUrl, arData, scanMeshes, videoFlipX]);
+
+  // Click-to-Select 3D Mesh in Scene Viewer (Raycasting)
+  useEffect(() => {
+    let pointerDownPos = null;
+
+    const handlePointerDown = (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      pointerDownPos = { x: e.clientX, y: e.clientY };
+    };
+
+    const handlePointerUp = (e) => {
+      if (!pointerDownPos) return;
+      const dist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
+      pointerDownPos = null;
+
+      if (dist > 6) return; // Drag/orbit gesture
+
+      const sceneEl = document.querySelector('a-scene');
+      if (!sceneEl || !sceneEl.camera) return;
+      const canvas = sceneEl.canvas;
+      if (!canvas) return;
+
+      const rect = canvas.getBoundingClientRect();
+      if (
+        e.clientX < rect.left || e.clientX > rect.right ||
+        e.clientY < rect.top || e.clientY > rect.bottom
+      ) return;
+
+      const mouse = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1
+      );
+
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(mouse, sceneEl.camera);
+
+      const modelEl = document.getElementById('ar-model');
+      if (!modelEl) return;
+      const model3D = modelEl.getObject3D('mesh');
+      if (!model3D) return;
+
+      const intersects = raycaster.intersectObject(model3D, true);
+      if (intersects.length > 0) {
+        const hit = intersects[0].object;
+        if (hit && hit.isMesh) {
+          setSelectedMeshUuid(hit.uuid);
+        }
+      } else {
+        setSelectedMeshUuid(null);
+      }
+    };
+
+    const sceneContainer = document.getElementById('ar-scene-container');
+    if (sceneContainer) {
+      sceneContainer.addEventListener('pointerdown', handlePointerDown);
+      sceneContainer.addEventListener('pointerup', handlePointerUp);
+    }
+
+    return () => {
+      if (sceneContainer) {
+        sceneContainer.removeEventListener('pointerdown', handlePointerDown);
+        sceneContainer.removeEventListener('pointerup', handlePointerUp);
+      }
+    };
+  }, [meshList]);
+
+  // Visual 3D Selection Box Helper on the selected mesh
+  useEffect(() => {
+    const sceneEl = document.querySelector('a-scene');
+    if (!sceneEl || !sceneEl.object3D) return;
+    const threeScene = sceneEl.object3D;
+
+    const oldHelper = threeScene.getObjectByName('selected-mesh-box-helper');
+    if (oldHelper) {
+      threeScene.remove(oldHelper);
+      if (oldHelper.geometry) oldHelper.geometry.dispose();
+    }
+
+    if (selectedMeshUuid) {
+      const modelEl = document.getElementById('ar-model');
+      if (!modelEl) return;
+      const model3D = modelEl.getObject3D('mesh');
+      if (!model3D) return;
+
+      let targetNode = null;
+      model3D.traverse((node) => {
+        if (node.uuid === selectedMeshUuid && node.isMesh) {
+          targetNode = node;
+        }
+      });
+
+      if (targetNode) {
+        const helper = new THREE.BoxHelper(targetNode, 0x6366f1);
+        helper.name = 'selected-mesh-box-helper';
+        helper.renderOrder = 999;
+        if (helper.material) {
+          helper.material.depthTest = false;
+          helper.material.transparent = true;
+          helper.material.opacity = 0.85;
+        }
+        threeScene.add(helper);
+      }
+    }
+
+    return () => {
+      const helper = threeScene.getObjectByName('selected-mesh-box-helper');
+      if (helper) {
+        threeScene.remove(helper);
+        if (helper.geometry) helper.geometry.dispose();
+      }
+    };
+  }, [selectedMeshUuid, meshList]);
+
+  // Helper: Find selected mesh object metadata from state
+  const selectedMesh = meshList.find((m) => m.uuid === selectedMeshUuid) || null;
+
+  // Real-Time Video Texture Mapping to 3D Model in Viewport on Upload
+  useEffect(() => {
+    const videoUrl = activeVideoUrl || customVideoUrl || arData?.videoUrl || '';
+    const modelEl = document.getElementById('ar-model');
+    if (!modelEl) return;
+    const model3D = modelEl.getObject3D('mesh');
+    if (!model3D || !videoUrl) return;
+
+    // Create or find hidden DOM video element
+    let video = document.getElementById('artest-active-video-element');
+    if (!video) {
+      video = document.createElement('video');
+      video.id = 'artest-active-video-element';
+      video.muted = true;
+      video.defaultMuted = true;
+      video.playsInline = true;
+      video.autoplay = true;
+      video.loop = true;
+      video.setAttribute('playsinline', '');
+      video.setAttribute('webkit-playsinline', '');
+      video.setAttribute('muted', '');
+      video.setAttribute('autoplay', '');
+      video.setAttribute('loop', '');
+      video.style.cssText = 'position:fixed;top:0;left:0;width:4px;height:4px;opacity:0.01;pointer-events:none;z-index:-999;';
+      document.body.appendChild(video);
+    }
+
+    if (video.src !== videoUrl) {
+      if (/^https?:\/\//i.test(videoUrl)) {
+        video.crossOrigin = 'anonymous';
+      }
+      video.src = videoUrl;
+      try {
+        video.load();
+      } catch { }
+    }
+
+    const startPlayback = () => {
+      video.muted = true;
+      if (mediaPlaying) {
+        video.play().catch(() => { });
+      } else {
+        video.pause();
+      }
+    };
+
+    video.addEventListener('canplay', startPlayback);
+    startPlayback();
+
+    const videoTexture = new THREE.VideoTexture(video);
+    if (THREE.SRGBColorSpace !== undefined) {
+      videoTexture.colorSpace = THREE.SRGBColorSpace;
+    }
+    videoTexture.minFilter = THREE.LinearFilter;
+    videoTexture.magFilter = THREE.LinearFilter;
+    videoTexture.generateMipmaps = false;
+    videoTexture.flipY = false;
+
+    const targetParam = (videoTargetMesh || 'auto').trim().toLowerCase();
+    const screenKeywords = [
+      'video', 'screen', 'display', 'curved', 'plane', 'front', 'panel',
+      'cloth', 'graphic', 'print', 'texture', 'layer', 'tee', 'shirt', 'hoodie', 'fabric'
+    ];
+
+    const matchedMeshes = [];
+    const allMeshes = [];
+    const autoScreenMeshes = [];
+
+    model3D.traverse((node) => {
+      if (node.isMesh && node.material) {
+        allMeshes.push(node);
+        const nodeName = (node.name || '').toLowerCase();
+        const nodeUuid = (node.uuid || '').toLowerCase();
+
+        if (targetParam === 'all') {
+          matchedMeshes.push(node);
+        } else if (targetParam !== 'auto' && (nodeName === targetParam || nodeUuid === targetParam)) {
+          matchedMeshes.push(node);
+        } else {
+          if (screenKeywords.some((kw) => nodeName.includes(kw)) || node.userData?.hasVideo || node.userData?.videoUrl) {
+            autoScreenMeshes.push(node);
+          }
+        }
+      }
+    });
+
+    let finalTargetMeshes = matchedMeshes;
+    if (finalTargetMeshes.length === 0) {
+      finalTargetMeshes = autoScreenMeshes.length > 0 ? autoScreenMeshes : allMeshes;
+    }
+
+    finalTargetMeshes.forEach((node) => {
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      materials.forEach((mat) => {
+        if (videoFlipX) {
+          videoTexture.wrapS = THREE.RepeatWrapping;
+          videoTexture.repeat.set(-1, 1);
+          videoTexture.offset.set(1, 0);
+        } else {
+          videoTexture.wrapS = THREE.ClampToEdgeWrapping;
+          videoTexture.repeat.set(1, 1);
+          videoTexture.offset.set(0, 0);
+        }
+        videoTexture.matrixAutoUpdate = true;
+        if (videoTexture.updateMatrix) videoTexture.updateMatrix();
+        videoTexture.needsUpdate = true;
+        mat.map = videoTexture;
+        mat.emissiveMap = videoTexture;
+        if (mat.emissive && typeof mat.emissive.set === 'function') {
+          mat.emissive.set(0xffffff);
+        }
+        mat.emissiveIntensity = 0.5;
+        mat.needsUpdate = true;
+      });
+    });
+
+    return () => {
+      video.removeEventListener('canplay', startPlayback);
+    };
+  }, [activeVideoUrl, customVideoUrl, arData, videoTargetMesh, videoFlipX, mediaPlaying, meshList]);
+
+  // Live Mirror Video Layer / Mesh Texture Inversion (Flip X)
+  const applyFlipXToScene = useCallback((isFlipped) => {
+    const modelEl = document.getElementById('ar-model');
+    if (!modelEl) return;
+    const model3D = modelEl.getObject3D('mesh');
+    if (!model3D) return;
+
+    const targetParam = (videoTargetMesh || 'auto').trim().toLowerCase();
+    const screenKeywords = [
+      'video', 'screen', 'display', 'curved', 'plane', 'front', 'panel',
+      'cloth', 'graphic', 'print', 'texture', 'layer', 'tee', 'shirt', 'hoodie', 'fabric'
+    ];
+
+    const matchedMeshes = [];
+    const allMeshes = [];
+    const autoScreenMeshes = [];
+
+    model3D.traverse((node) => {
+      if (node.isMesh) {
+        allMeshes.push(node);
+        const nodeName = (node.name || '').toLowerCase();
+        const nodeUuid = (node.uuid || '').toLowerCase();
+
+        if (selectedMeshUuid && (node.uuid === selectedMeshUuid || node.name === selectedMeshUuid)) {
+          matchedMeshes.push(node);
+        } else if (targetParam === 'all') {
+          matchedMeshes.push(node);
+        } else if (targetParam !== 'auto' && (nodeName === targetParam || nodeUuid === targetParam)) {
+          matchedMeshes.push(node);
+        } else {
+          if (screenKeywords.some((kw) => nodeName.includes(kw)) || node.userData?.hasVideo || node.userData?.videoUrl) {
+            autoScreenMeshes.push(node);
+          }
+        }
+      }
+    });
+
+    let finalTargetMeshes = matchedMeshes;
+    if (finalTargetMeshes.length === 0) {
+      finalTargetMeshes = autoScreenMeshes.length > 0 ? autoScreenMeshes : allMeshes;
+    }
+
+    finalTargetMeshes.forEach((node) => {
+      if (node.material) {
+        const mats = Array.isArray(node.material) ? node.material : [node.material];
+        mats.forEach((m) => {
+          ['map', 'emissiveMap'].forEach((mapName) => {
+            if (m[mapName]) {
+              const tex = m[mapName];
+              if (isFlipped) {
+                tex.wrapS = THREE.RepeatWrapping;
+                tex.repeat.set(-1, 1);
+                tex.offset.set(1, 0);
+              } else {
+                tex.wrapS = THREE.ClampToEdgeWrapping;
+                tex.repeat.set(1, 1);
+                tex.offset.set(0, 0);
+              }
+              tex.matrixAutoUpdate = true;
+              if (tex.updateMatrix) tex.updateMatrix();
+              tex.needsUpdate = true;
+            }
+          });
+          m.needsUpdate = true;
+        });
+      }
+    });
+  }, [selectedMeshUuid, videoTargetMesh]);
+
+  // Reactive Effect to apply FlipX whenever videoFlipX, mesh target, or model changes
+  useEffect(() => {
+    applyFlipXToScene(videoFlipX);
+  }, [videoFlipX, applyFlipXToScene, localGlbUrl, meshList]);
+
+  // Direct Perspective View Angles Switcher (Front, Back, Left, Right, Top, Bottom)
+  const setCameraView = (viewName) => {
+    const sceneEl = document.querySelector('a-scene');
+    const cameraEl = document.getElementById('scene-camera') || (sceneEl && sceneEl.camera && sceneEl.camera.el);
+    if (!cameraEl) return;
+
+    let posX = 0, posY = 0, posZ = 2.5;
+    let pitchDeg = 0, yawDeg = 0;
+
+    switch (viewName) {
+      case 'front':
+        posX = 0; posY = 0; posZ = 2.5;
+        pitchDeg = 0; yawDeg = 0;
+        break;
+      case 'back':
+        posX = 0; posY = 0; posZ = -2.5;
+        pitchDeg = 0; yawDeg = 180;
+        break;
+      case 'left':
+        posX = -2.5; posY = 0; posZ = 0;
+        pitchDeg = 0; yawDeg = -90;
+        break;
+      case 'right':
+        posX = 2.5; posY = 0; posZ = 0;
+        pitchDeg = 0; yawDeg = 90;
+        break;
+      case 'top':
+        posX = 0; posY = 2.5; posZ = 0.0001;
+        pitchDeg = -89.9; yawDeg = 0;
+        break;
+      case 'bottom':
+        posX = 0; posY = -2.5; posZ = 0.0001;
+        pitchDeg = 89.9; yawDeg = 0;
+        break;
+      case 'reset':
+      default:
+        posX = 0; posY = 0; posZ = 2.5;
+        pitchDeg = 0; yawDeg = 0;
+        break;
+    }
+
+    cameraEl.setAttribute('position', `${posX} ${posY} ${posZ}`);
+    if (cameraEl.object3D) {
+      cameraEl.object3D.position.set(posX, posY, posZ);
+    }
+
+    // Reset internal pitch & yaw of look-controls
+    const lookControls = cameraEl.components && cameraEl.components['look-controls'];
+    if (lookControls) {
+      if (lookControls.pitchObject) {
+        lookControls.pitchObject.rotation.x = THREE.MathUtils.degToRad(pitchDeg);
+      }
+      if (lookControls.yawObject) {
+        lookControls.yawObject.rotation.y = THREE.MathUtils.degToRad(yawDeg);
+      }
+    }
+  };
+
+  // Handlers to update either individual mesh or root model transform/materials
+  const handleRotationChange = (axis, deg) => {
+    if (!selectedMeshUuid) {
+      if (axis === 'x') setModelRotX(deg);
+      if (axis === 'y') setModelRotY(deg);
+      if (axis === 'z') setModelRotZ(deg);
+      return;
+    }
+
+    const modelEl = document.getElementById('ar-model');
+    const model3D = modelEl?.getObject3D('mesh');
+    if (model3D) {
+      model3D.traverse((node) => {
+        if (node.uuid === selectedMeshUuid && node.isMesh) {
+          const rad = (deg * Math.PI) / 180;
+          if (axis === 'x') node.rotation.x = rad;
+          if (axis === 'y') node.rotation.y = rad;
+          if (axis === 'z') node.rotation.z = rad;
+        }
+      });
+    }
+
+    setMeshList((prev) =>
+      prev.map((m) =>
+        m.uuid === selectedMeshUuid
+          ? { ...m, rotation: { ...m.rotation, [axis]: deg } }
+          : m
+      )
+    );
+  };
+
+  const handlePositionChange = (axis, val) => {
+    if (!selectedMeshUuid) {
+      if (axis === 'x') setModelPosX(val);
+      if (axis === 'y') setModelPosY(val);
+      if (axis === 'z') setModelPosZ(val);
+      return;
+    }
+
+    const modelEl = document.getElementById('ar-model');
+    const model3D = modelEl?.getObject3D('mesh');
+    if (model3D) {
+      model3D.traverse((node) => {
+        if (node.uuid === selectedMeshUuid && node.isMesh) {
+          node.position[axis] = val;
+        }
+      });
+    }
+
+    setMeshList((prev) =>
+      prev.map((m) =>
+        m.uuid === selectedMeshUuid
+          ? { ...m, position: { ...m.position, [axis]: val } }
+          : m
+      )
+    );
+  };
+
+  const handleScaleChange = (val) => {
+    if (!selectedMeshUuid) {
+      setModelScale(val);
+      return;
+    }
+
+    const modelEl = document.getElementById('ar-model');
+    const model3D = modelEl?.getObject3D('mesh');
+    if (model3D) {
+      model3D.traverse((node) => {
+        if (node.uuid === selectedMeshUuid && node.isMesh) {
+          node.scale.set(val, val, val);
+        }
+      });
+    }
+
+    setMeshList((prev) =>
+      prev.map((m) =>
+        m.uuid === selectedMeshUuid
+          ? { ...m, scale: { x: val, y: val, z: val } }
+          : m
+      )
+    );
+  };
+
+  const handleMeshVisibilityToggle = (uuid) => {
+    const modelEl = document.getElementById('ar-model');
+    const model3D = modelEl?.getObject3D('mesh');
+    if (model3D) {
+      model3D.traverse((node) => {
+        if (node.uuid === uuid && node.isMesh) {
+          node.visible = !node.visible;
+        }
+      });
+    }
+
+    setMeshList((prev) =>
+      prev.map((m) => (m.uuid === uuid ? { ...m, visible: !m.visible } : m))
+    );
+  };
+
+  const handleMeshMaterialChange = (prop, val) => {
+    if (!selectedMeshUuid) return;
+
+    const modelEl = document.getElementById('ar-model');
+    const model3D = modelEl?.getObject3D('mesh');
+    if (model3D) {
+      model3D.traverse((node) => {
+        if (node.uuid === selectedMeshUuid && node.isMesh && node.material) {
+          const mats = Array.isArray(node.material) ? node.material : [node.material];
+          mats.forEach((mat) => {
+            if (prop === 'color' && mat.color) mat.color.set(val);
+            if (prop === 'metalness' && mat.metalness !== undefined) mat.metalness = val;
+            if (prop === 'roughness' && mat.roughness !== undefined) mat.roughness = val;
+            if (prop === 'emissive' && mat.emissive) mat.emissive.set(val);
+            if (prop === 'emissiveIntensity' && mat.emissiveIntensity !== undefined) mat.emissiveIntensity = val;
+            if (prop === 'opacity') {
+              mat.opacity = val;
+              if (val < 1.0) mat.transparent = true;
+            }
+            if (prop === 'wireframe') mat.wireframe = !!val;
+            mat.needsUpdate = true;
+          });
+        }
+      });
+    }
+
+    setMeshList((prev) =>
+      prev.map((m) =>
+        m.uuid === selectedMeshUuid
+          ? { ...m, material: { ...m.material, [prop]: val } }
+          : m
+      )
+    );
+  };
+
+  const resetCurrentTargetTransform = () => {
+    if (!selectedMeshUuid) {
+      setModelRotX(90);
+      setModelRotY(0);
+      setModelRotZ(0);
+      setModelPosX(0);
+      setModelPosY(0);
+      setModelPosZ(0);
+      setModelScale(0.4);
+    } else {
+      handleRotationChange('x', 0);
+      handleRotationChange('y', 0);
+      handleRotationChange('z', 0);
+      handlePositionChange('x', 0);
+      handlePositionChange('y', 0);
+      handlePositionChange('z', 0);
+      handleScaleChange(1.0);
+    }
+  };
 
   const pickLocalModel = (e) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+      setSelectedGlbFile(file);
       const url = URL.createObjectURL(file);
       setLocalGlbUrl(url);
       setLocalGlbName(file.name);
+      setSelectedMeshUuid(null);
       setArData((prev) => ({
         ...(prev || {}),
         arExperience: {
           ...(prev?.arExperience || {}),
           modelUrl: url,
-          scale: '0.4 0.4 0.4',
-          position: '0 0 0',
-          rotation: '90 0 0'
+          scale: `${modelScale} ${modelScale} ${modelScale}`,
+          position: `${modelPosX} ${modelPosY} ${modelPosZ}`,
+          rotation: `${modelRotX} ${modelRotY} ${modelRotZ}`
         },
         videoUrl: activeVideoUrl || prev?.videoUrl || ''
       }));
@@ -84,6 +1327,7 @@ const ARTest = () => {
   const pickLocalVideo = (e) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+      setSelectedVideoFile(file);
       const url = URL.createObjectURL(file);
       setActiveVideoUrl(url);
       setCustomVideoUrl('');
@@ -95,6 +1339,7 @@ const ARTest = () => {
   const applyCustomVideoUrl = (url) => {
     setCustomVideoUrl(url);
     setActiveVideoUrl(url);
+    setSelectedVideoFile(null);
     setLocalVideoName('');
     setMediaPlaying(true);
   };
@@ -105,11 +1350,19 @@ const ARTest = () => {
 
     setLoading(true);
     setError(null);
+    setSaveSuccessMsg('');
+    setUploadProgress('');
     setLocalGlbUrl('');
     setLocalGlbName('');
+    setSelectedVideoFile(null);
+    setSelectedGlbFile(null);
+    setSelectedMeshUuid(null);
 
     try {
-      const response = await fetch(`https://loomrouter-5qjmmwdvcq-uc.a.run.app/s/${batchId.trim()}`);
+      const response = await fetch(`https://loomrouter-5qjmmwdvcq-uc.a.run.app/s/${batchId.trim()}?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' }
+      });
       if (!response.ok) {
         throw new Error("Batch not found or inactive.");
       }
@@ -117,70 +1370,119 @@ const ARTest = () => {
       let videoUrl = data.arExperience?.videoUrl || data.arExperience?.video || data.videoUrl || '';
 
       const batchRef = doc(db, 'batches', batchId.trim());
-      const batchSnap = await getDoc(batchRef);
-      if (batchSnap.exists()) {
+      let batchSnap = null;
+      try {
+        batchSnap = await getDocFromServer(batchRef);
+      } catch {
+        batchSnap = await getDoc(batchRef);
+      }
+      let batchConfig = null;
+
+      if (batchSnap && batchSnap.exists()) {
         const batchData = batchSnap.data();
         if (batchData.video_url || batchData.videoUrl) {
           videoUrl = batchData.video_url || batchData.videoUrl;
         }
         if (batchData.ar_config) {
-          const cfg = batchData.ar_config;
-          if (cfg.videoUrl) videoUrl = cfg.videoUrl;
-          if (cfg.ambientColor !== undefined) setAmbientColor(cfg.ambientColor);
-          if (cfg.ambientIntensity !== undefined) setAmbientIntensity(cfg.ambientIntensity);
-          if (cfg.dir1Color !== undefined) setDir1Color(cfg.dir1Color);
-          if (cfg.dir1Intensity !== undefined) setDir1Intensity(cfg.dir1Intensity);
-          if (cfg.dir1Position !== undefined) setDir1Position(cfg.dir1Position);
-          if (cfg.dir2Color !== undefined) setDir2Color(cfg.dir2Color);
-          if (cfg.dir2Intensity !== undefined) setDir2Intensity(cfg.dir2Intensity);
-          if (cfg.dir2Position !== undefined) setDir2Position(cfg.dir2Position);
-          if (cfg.modelScale !== undefined) setModelScale(cfg.modelScale);
-          if (cfg.modelRotSpeed !== undefined) setModelRotSpeed(cfg.modelRotSpeed);
-          if (cfg.modelRotX !== undefined) setModelRotX(cfg.modelRotX);
-          if (cfg.modelRotY !== undefined) setModelRotY(cfg.modelRotY);
-          if (cfg.modelRotZ !== undefined) setModelRotZ(cfg.modelRotZ);
-
-          if (cfg.matMetalness !== undefined && cfg.matMetalness >= 0) {
-            setMatMetalness(cfg.matMetalness);
-            setUseNativePBR(false);
-          } else {
-            setMatMetalness(-1);
-            setUseNativePBR(true);
-          }
-          if (cfg.matRoughness !== undefined && cfg.matRoughness >= 0) {
-            setMatRoughness(cfg.matRoughness);
-          } else {
-            setMatRoughness(-1);
-          }
-
-          if (cfg.matEmissive !== undefined) setMatEmissive(cfg.matEmissive);
-          if (cfg.matEmissiveIntensity !== undefined) setMatEmissiveIntensity(cfg.matEmissiveIntensity);
-          if (cfg.matWireframe !== undefined) setMatWireframe(cfg.matWireframe);
-          if (cfg.matOpacity !== undefined) setMatOpacity(cfg.matOpacity);
-          if (cfg.fogColor !== undefined) setFogColor(cfg.fogColor);
-          if (cfg.fogDensity !== undefined) setFogDensity(cfg.fogDensity);
-          if (cfg.showBuyButton !== undefined) setShowBuyButton(cfg.showBuyButton);
-          if (cfg.buyButtonColor !== undefined) setBuyButtonColor(cfg.buyButtonColor);
-          if (cfg.mediaPlaying !== undefined) setMediaPlaying(cfg.mediaPlaying);
+          batchConfig = batchData.ar_config;
         }
       }
 
-      if (!videoUrl) {
+      if (!batchConfig) {
         try {
-          const assetSnap = await getDoc(doc(db, 'assets', batchId.trim()));
-          if (assetSnap.exists()) {
+          const assetRef = doc(db, 'assets', batchId.trim());
+          let assetSnap = null;
+          try {
+            assetSnap = await getDocFromServer(assetRef);
+          } catch {
+            assetSnap = await getDoc(assetRef);
+          }
+          if (assetSnap && assetSnap.exists()) {
             const aData = assetSnap.data();
             if (aData.video_url || aData.videoUrl) {
               videoUrl = aData.video_url || aData.videoUrl;
+            }
+            if (aData.ar_config) {
+              batchConfig = aData.ar_config;
             }
           }
         } catch { }
       }
 
+      const cfg = batchConfig || data.arExperience?.config || data.ar_config || {};
+
+      if (cfg.videoUrl || cfg.video_url) videoUrl = cfg.videoUrl || cfg.video_url;
+      if (cfg.ambientColor !== undefined) setAmbientColor(cfg.ambientColor);
+      if (cfg.ambientIntensity !== undefined) setAmbientIntensity(cfg.ambientIntensity);
+      if (cfg.dir1Color !== undefined) setDir1Color(cfg.dir1Color);
+      if (cfg.dir1Intensity !== undefined) setDir1Intensity(cfg.dir1Intensity);
+      if (cfg.dir1Position !== undefined) setDir1Position(cfg.dir1Position);
+      if (cfg.dir2Color !== undefined) setDir2Color(cfg.dir2Color);
+      if (cfg.dir2Intensity !== undefined) setDir2Intensity(cfg.dir2Intensity);
+      if (cfg.dir2Position !== undefined) setDir2Position(cfg.dir2Position);
+      if (cfg.modelScale !== undefined) setModelScale(cfg.modelScale);
+      if (cfg.modelRotSpeed !== undefined) setModelRotSpeed(cfg.modelRotSpeed);
+      if (cfg.modelRotX !== undefined) setModelRotX(cfg.modelRotX);
+      if (cfg.modelRotY !== undefined) setModelRotY(cfg.modelRotY);
+      if (cfg.modelRotZ !== undefined) setModelRotZ(cfg.modelRotZ);
+
+      if (cfg.modelPosX !== undefined) setModelPosX(cfg.modelPosX);
+      else if (cfg.modelPosition) {
+        const parts = cfg.modelPosition.split(' ').map(Number);
+        if (parts.length >= 3 && !parts.some(isNaN)) {
+          setModelPosX(parts[0]);
+          setModelPosY(parts[1]);
+          setModelPosZ(parts[2]);
+        }
+      }
+      if (cfg.modelPosY !== undefined) setModelPosY(cfg.modelPosY);
+      if (cfg.modelPosZ !== undefined) setModelPosZ(cfg.modelPosZ);
+
+      if (cfg.matMetalness !== undefined && cfg.matMetalness >= 0) {
+        setMatMetalness(cfg.matMetalness);
+        setUseNativePBR(false);
+      } else {
+        setMatMetalness(-1);
+        setUseNativePBR(true);
+      }
+      if (cfg.matRoughness !== undefined && cfg.matRoughness >= 0) {
+        setMatRoughness(cfg.matRoughness);
+      } else {
+        setMatRoughness(-1);
+      }
+
+      if (cfg.matEmissive !== undefined) setMatEmissive(cfg.matEmissive);
+      if (cfg.matEmissiveIntensity !== undefined) setMatEmissiveIntensity(cfg.matEmissiveIntensity);
+      if (cfg.matWireframe !== undefined) setMatWireframe(cfg.matWireframe);
+      if (cfg.matOpacity !== undefined) setMatOpacity(cfg.matOpacity);
+      if (cfg.fogColor !== undefined) setFogColor(cfg.fogColor);
+      if (cfg.fogDensity !== undefined) setFogDensity(cfg.fogDensity);
+      if (cfg.showBuyButton !== undefined) setShowBuyButton(cfg.showBuyButton);
+      if (cfg.buyButtonColor !== undefined) setBuyButtonColor(cfg.buyButtonColor);
+      if (cfg.mediaPlaying !== undefined) setMediaPlaying(cfg.mediaPlaying);
+      if (cfg.videoTargetMesh !== undefined) setVideoTargetMesh(cfg.videoTargetMesh);
+      if (cfg.videoFlipX !== undefined) setVideoFlipX(!!cfg.videoFlipX);
+
+      // Populate Camera Tracking Settings if configured on batch
+      const tCfg = cfg.trackingConfig || cfg.tracking || null;
+      if (tCfg) {
+        if (tCfg.filterMinCF !== undefined) setTrackingFilterMinCF(Number(tCfg.filterMinCF));
+        if (tCfg.filterBeta !== undefined) setTrackingFilterBeta(Number(tCfg.filterBeta));
+        if (tCfg.missTolerance !== undefined) setTrackingMissTolerance(Number(tCfg.missTolerance));
+        if (tCfg.warmupTolerance !== undefined) setTrackingWarmupTolerance(Number(tCfg.warmupTolerance));
+        if (tCfg.maxTrack !== undefined) setTrackingMaxTrack(Number(tCfg.maxTrack));
+        if (tCfg.targetIndex !== undefined) setTrackingTargetIndex(Number(tCfg.targetIndex));
+        if (tCfg.showStats !== undefined) setTrackingShowStats(!!tCfg.showStats);
+        if (tCfg.uiLoading !== undefined) setTrackingUiLoading(tCfg.uiLoading);
+        if (tCfg.uiScanning !== undefined) setTrackingUiScanning(tCfg.uiScanning);
+        if (tCfg.uiError !== undefined) setTrackingUiError(tCfg.uiError);
+      }
+
       setActiveVideoUrl(videoUrl);
       setArData({
         ...data,
-        videoUrl
+        videoUrl,
+        config: cfg
       });
     } catch (err) {
       setError(err.message);
@@ -190,38 +1492,258 @@ const ARTest = () => {
   };
 
   const handleSaveConfig = async () => {
-    if (!batchId.trim()) return;
+    if (!batchId.trim()) {
+      alert('Please enter a Batch ID in the input above before saving.');
+      return;
+    }
+
     setSavingConfig(true);
+    setSaveSuccessMsg('');
+    setUploadProgress('');
+
     try {
-      const batchRef = doc(db, 'batches', batchId.trim());
-      await updateDoc(batchRef, {
-        video_url: activeVideoUrl || customVideoUrl || arData?.videoUrl || '',
-        videoUrl: activeVideoUrl || customVideoUrl || arData?.videoUrl || '',
-        ar_config: {
-          videoUrl: activeVideoUrl || customVideoUrl || arData?.videoUrl || '',
-          ambientColor, ambientIntensity,
-          dir1Color, dir1Intensity, dir1Position,
-          dir2Color, dir2Intensity, dir2Position,
-          modelScale, modelRotSpeed, modelRotX, modelRotY, modelRotZ,
-          matMetalness: useNativePBR ? -1 : (matMetalness < 0 ? 0.0 : matMetalness),
-          matRoughness: useNativePBR ? -1 : (matRoughness < 0 ? 1.0 : matRoughness),
-          matEmissive, matEmissiveIntensity, matWireframe, matOpacity,
-          fogColor, fogDensity,
-          showBuyButton, buyButtonColor,
-          mediaPlaying
-        }
+      let finalVideoUrl = activeVideoUrl || customVideoUrl || arData?.videoUrl || '';
+      let videoFilePath = arData?.config?.video_file_path || arData?.video_file_path || '';
+      let finalGltfUrl = localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || '';
+      let gltfFilePath = arData?.gltf_file_path || '';
+
+      // 1. Upload Video File to Firebase Storage bucket if a new file was chosen
+      if (selectedVideoFile) {
+        setUploadProgress('Uploading video layer to Storage bucket...');
+        const cleanName = selectedVideoFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const storagePath = `assets/${batchId.trim()}/${cleanName}`;
+        const videoRef = ref(storage, storagePath);
+
+        await uploadBytes(videoRef, selectedVideoFile);
+        const downloadUrl = await getDownloadURL(videoRef);
+
+        finalVideoUrl = downloadUrl;
+        videoFilePath = storagePath;
+        setActiveVideoUrl(downloadUrl);
+        setLocalVideoName(selectedVideoFile.name);
+      }
+
+      // 2. Upload GLB 3D Model file to Firebase Storage bucket if a new file was chosen
+      if (selectedGlbFile) {
+        setUploadProgress('Uploading 3D model (.glb) to Storage bucket...');
+        const cleanGlbName = selectedGlbFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const glbStoragePath = `assets/${batchId.trim()}/${cleanGlbName}`;
+        const glbRef = ref(storage, glbStoragePath);
+
+        await uploadBytes(glbRef, selectedGlbFile);
+        const glbDownloadUrl = await getDownloadURL(glbRef);
+
+        finalGltfUrl = glbDownloadUrl;
+        gltfFilePath = glbStoragePath;
+      }
+
+      setUploadProgress('Saving batch configuration to Firestore...');
+
+      // 3. Build meshOverrides dictionary
+      const meshOverrides = {};
+      meshList.forEach((m) => {
+        meshOverrides[m.name] = {
+          position: m.position,
+          rotation: m.rotation,
+          scale: m.scale,
+          visible: m.visible,
+          material: m.material
+        };
       });
-      alert('Configuration saved to batch successfully!');
+
+      const arConfigPayload = {
+        videoUrl: finalVideoUrl,
+        video_url: finalVideoUrl,
+        video_file_path: videoFilePath,
+        videoTargetMesh,
+        videoFlipX,
+        ambientColor,
+        ambientIntensity,
+        dir1Color,
+        dir1Intensity,
+        dir1Position,
+        dir2Color,
+        dir2Intensity,
+        dir2Position,
+        modelScale,
+        modelRotSpeed,
+        modelRotX,
+        modelRotY,
+        modelRotZ,
+        modelRotation: `${modelRotX} ${modelRotY} ${modelRotZ}`,
+        modelPosX,
+        modelPosY,
+        modelPosZ,
+        modelPosition: `${modelPosX} ${modelPosY} ${modelPosZ}`,
+        matMetalness: useNativePBR ? -1 : (matMetalness < 0 ? 0.0 : matMetalness),
+        matRoughness: useNativePBR ? -1 : (matRoughness < 0 ? 1.0 : matRoughness),
+        matEmissive,
+        matEmissiveIntensity,
+        matWireframe,
+        matOpacity,
+        useNativePBR,
+        fogColor,
+        fogDensity,
+        showBuyButton,
+        buyButtonColor,
+        mediaPlaying,
+        meshOverrides,
+        trackingConfig: {
+          filterMinCF: Number(trackingFilterMinCF),
+          filterBeta: Number(trackingFilterBeta),
+          missTolerance: Number(trackingMissTolerance),
+          warmupTolerance: Number(trackingWarmupTolerance),
+          maxTrack: Number(trackingMaxTrack),
+          targetIndex: Number(trackingTargetIndex),
+          showStats: Boolean(trackingShowStats),
+          uiLoading: trackingUiLoading,
+          uiScanning: trackingUiScanning,
+          uiError: trackingUiError
+        },
+        updatedAt: new Date().toISOString()
+      };
+
+      const payload = {
+        video_url: finalVideoUrl,
+        videoUrl: finalVideoUrl,
+        video_file_path: videoFilePath,
+        ...(gltfFilePath ? { gltf_file_path: gltfFilePath } : {}),
+        ar_config: arConfigPayload
+      };
+
+      // Save to both batches and assets collections with merge: true to guarantee persistence
+      const batchRef = doc(db, 'batches', batchId.trim());
+      const assetRef = doc(db, 'assets', batchId.trim());
+
+      await Promise.all([
+        setDoc(batchRef, payload, { merge: true }),
+        setDoc(assetRef, payload, { merge: true })
+      ]);
+
+      // Update local arData state immediately so current session is in sync
+      setArData((prev) => ({
+        ...(prev || {}),
+        videoUrl: finalVideoUrl,
+        video_url: finalVideoUrl,
+        video_file_path: videoFilePath,
+        gltf_file_path: gltfFilePath || prev?.gltf_file_path,
+        config: arConfigPayload,
+        arExperience: {
+          ...(prev?.arExperience || {}),
+          modelUrl: finalGltfUrl || prev?.arExperience?.modelUrl,
+          videoUrl: finalVideoUrl,
+          config: arConfigPayload
+        }
+      }));
+
+      // Clear pending raw file selections once saved
+      setSelectedVideoFile(null);
+      setSelectedGlbFile(null);
+
+      const timeStr = new Date().toLocaleTimeString();
+      setSaveSuccessMsg(`Video & config saved to Storage & Batch at ${timeStr}`);
+      setTimeout(() => setSaveSuccessMsg(''), 6000);
     } catch (err) {
-      console.error(err);
+      console.error('Error saving configuration:', err);
       alert('Error saving configuration: ' + err.message);
     } finally {
       setSavingConfig(false);
+      setUploadProgress('');
+    }
+  };
+
+  // Dedicated Save Handler for Camera Target Tracking Settings
+  const handleSaveTracking = async (overrideScope) => {
+    const scope = overrideScope || trackingScope;
+    setSavingTracking(true);
+    setTrackingSuccessMsg('');
+
+    const trackingPayload = {
+      filterMinCF: Number(trackingFilterMinCF),
+      filterBeta: Number(trackingFilterBeta),
+      missTolerance: Number(trackingMissTolerance),
+      warmupTolerance: Number(trackingWarmupTolerance),
+      maxTrack: Number(trackingMaxTrack),
+      targetIndex: Number(trackingTargetIndex),
+      showStats: Boolean(trackingShowStats),
+      uiLoading: trackingUiLoading,
+      uiScanning: trackingUiScanning,
+      uiError: trackingUiError,
+      updatedAt: new Date().toISOString()
+    };
+
+    try {
+      if (scope === 'global') {
+        // 1. Save global defaults document to settings/tracking
+        await setDoc(doc(db, 'settings', 'tracking'), trackingPayload, { merge: true });
+
+        // 2. Propagate to all existing batch and asset documents in Firestore
+        let updatedCount = 0;
+        try {
+          const batchesSnap = await getDocs(collection(db, 'batches'));
+          const updatePromises = [];
+          batchesSnap.forEach((bDoc) => {
+            updatedCount++;
+            updatePromises.push(
+              setDoc(doc(db, 'batches', bDoc.id), { ar_config: { trackingConfig: trackingPayload } }, { merge: true })
+            );
+            updatePromises.push(
+              setDoc(doc(db, 'assets', bDoc.id), { ar_config: { trackingConfig: trackingPayload } }, { merge: true })
+            );
+          });
+          if (updatePromises.length > 0) {
+            await Promise.all(updatePromises);
+          }
+        } catch (propagateErr) {
+          console.warn('Batch propagation warning:', propagateErr);
+        }
+
+        const timeStr = new Date().toLocaleTimeString();
+        setTrackingSuccessMsg(`Applied tracking settings globally to ALL ${updatedCount} batches at ${timeStr}!`);
+      } else {
+        // Active batch scope
+        if (!batchId.trim()) {
+          alert('Please enter an active Batch ID in the input above to apply to the active batch, or choose Global to apply to all.');
+          setSavingTracking(false);
+          return;
+        }
+
+        const bId = batchId.trim();
+        const batchRef = doc(db, 'batches', bId);
+        const assetRef = doc(db, 'assets', bId);
+
+        await Promise.all([
+          setDoc(batchRef, { ar_config: { trackingConfig: trackingPayload } }, { merge: true }),
+          setDoc(assetRef, { ar_config: { trackingConfig: trackingPayload } }, { merge: true })
+        ]);
+
+        const timeStr = new Date().toLocaleTimeString();
+        setTrackingSuccessMsg(`Saved tracking settings for batch "${bId}" at ${timeStr}!`);
+      }
+
+      // Sync local arData state
+      setArData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          config: {
+            ...(prev.config || {}),
+            trackingConfig: trackingPayload
+          }
+        };
+      });
+
+      setTimeout(() => setTrackingSuccessMsg(''), 6000);
+    } catch (err) {
+      console.error('Error saving tracking settings:', err);
+      alert('Error saving tracking settings: ' + err.message);
+    } finally {
+      setSavingTracking(false);
     }
   };
 
   const toggleMedia = () => {
-    setMediaPlaying(prev => !prev);
+    setMediaPlaying((prev) => !prev);
   };
 
   const handleCheckout = async () => {
@@ -257,304 +1779,1462 @@ const ARTest = () => {
     }
   };
 
-  return (
-    <div className="w-screen min-h-[100dvh] bg-neutral-900 text-white font-sans flex flex-col md:flex-row">
-      {/* Sidebar Controls */}
-      <div className="w-full md:w-80 bg-black border-r border-neutral-800 z-50 flex flex-col shadow-xl flex-shrink-0 h-[100dvh] overflow-y-auto">
-        <div className="p-4 border-b border-neutral-800">
-          <h1 className="text-xl font-bold tracking-wider text-white mb-3">3D SCENE TESTER</h1>
-          <form onSubmit={handleLoad} className="flex flex-col gap-2">
-            <input
-              type="text"
-              placeholder="Enter Batch ID"
-              value={batchId}
-              onChange={(e) => setBatchId(e.target.value)}
-              className="w-full px-4 py-2 bg-neutral-800 text-white border border-neutral-700 rounded focus:outline-none focus:border-white transition-colors"
-            />
-            <button
-              type="submit"
-              disabled={loading || !batchId.trim()}
-              className="w-full px-6 py-2 bg-white text-black font-bold uppercase tracking-widest hover:bg-neutral-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs"
-            >
-              {loading ? 'Loading...' : 'Load from Batch'}
-            </button>
-          </form>
+  // Filtered mesh hierarchy list
+  const filteredMeshes = meshList.filter((m) =>
+    m.name.toLowerCase().includes(searchFilter.toLowerCase()) ||
+    m.materialName.toLowerCase().includes(searchFilter.toLowerCase())
+  );
 
-          {/* Quick Local GLB Loader */}
-          <div className="mt-3 pt-3 border-t border-neutral-800 flex flex-col gap-1.5">
-            <label className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">Or Test Local 3D Model (.glb):</label>
-            <label className="flex items-center justify-center gap-1.5 px-3 py-2 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 hover:border-neutral-500 rounded text-xs font-medium cursor-pointer transition-colors text-neutral-200 truncate">
-              <span className="material-symbols-outlined text-[16px]">folder_open</span>
-              {localGlbName ? `3D: ${localGlbName}` : 'Choose Local GLB Model'}
-              <input type="file" accept=".glb,.gltf" onChange={pickLocalModel} className="hidden" />
-            </label>
+  // Active target transform values
+  const currentRotX = selectedMesh ? selectedMesh.rotation.x : modelRotX;
+  const currentRotY = selectedMesh ? selectedMesh.rotation.y : modelRotY;
+  const currentRotZ = selectedMesh ? selectedMesh.rotation.z : modelRotZ;
+
+  const currentPosX = selectedMesh ? selectedMesh.position.x : modelPosX;
+  const currentPosY = selectedMesh ? selectedMesh.position.y : modelPosY;
+  const currentPosZ = selectedMesh ? selectedMesh.position.z : modelPosZ;
+
+  const currentScale = selectedMesh ? selectedMesh.scale.x : modelScale;
+
+  return (
+    <div className="w-screen min-h-[100dvh] bg-neutral-950 text-white font-sans flex flex-col md:flex-row overflow-hidden">
+      {/* ========================================================================= */}
+      {/* SIDEBAR CONTROL DOCK                                                      */}
+      {/* ========================================================================= */}
+      <div className="w-full md:w-96 lg:w-[420px] bg-black border-r border-neutral-800 z-50 flex flex-col shadow-2xl flex-shrink-0 h-[100dvh]">
+        {/* Top Header & Batch Form */}
+        <div className="p-4 border-b border-neutral-800 bg-neutral-950/80">
+          <div className="flex items-center justify-between mb-2">
+            <h1 className="text-base font-bold tracking-wider text-white flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-pulse"></span>
+              3D SCENE & AR TESTER
+            </h1>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-neutral-800 text-neutral-400 border border-neutral-700">
+              v2.5 STUDIO
+            </span>
           </div>
 
-          {arData && (
+          <form onSubmit={handleLoad} className="flex flex-col gap-2">
+            <div className="flex gap-1.5">
+              <input
+                type="text"
+                placeholder="Enter Batch ID"
+                value={batchId}
+                onChange={(e) => setBatchId(e.target.value)}
+                className="flex-1 px-3 py-1.5 bg-neutral-900 text-white border border-neutral-700 rounded text-xs focus:outline-none focus:border-indigo-400 font-mono transition-colors"
+              />
+              <button
+                type="submit"
+                disabled={loading || !batchId.trim()}
+                className="px-4 py-1.5 bg-white text-black font-bold uppercase tracking-wider hover:bg-neutral-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs"
+              >
+                {loading ? 'Loading...' : 'Load'}
+              </button>
+            </div>
+          </form>
+
+          {/* Quick Local GLB Loader & Save Action */}
+          <div className="mt-2.5 pt-2.5 border-t border-neutral-800/80 flex items-center gap-2">
+            <label className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 hover:border-neutral-500 rounded text-xs font-medium cursor-pointer transition-colors text-neutral-200 truncate">
+              <span className="material-symbols-outlined text-[15px] text-indigo-400">folder_open</span>
+              <span className="truncate">{localGlbName ? `3D: ${localGlbName}` : 'Test Local GLB Model'}</span>
+              <input type="file" accept=".glb,.gltf" onChange={pickLocalModel} className="hidden" />
+            </label>
+
             <button
+              type="button"
               onClick={handleSaveConfig}
-              disabled={savingConfig}
-              className="w-full mt-3 px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs"
+              disabled={savingConfig || !batchId.trim()}
+              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-emerald-950/40"
+              title="Save Configuration to Firebase Batch"
             >
-              {savingConfig ? 'Saving...' : 'Save Config & Video to Batch'}
+              <span className="material-symbols-outlined text-sm">save</span>
+              <span>{savingConfig ? 'Saving...' : 'Save to Batch'}</span>
             </button>
+          </div>
+
+          {/* Progress / Uploading Banner */}
+          {savingConfig && (
+            <div className="mt-2 p-2 bg-indigo-950/70 border border-indigo-500/60 rounded text-indigo-200 text-[11px] font-mono flex items-center gap-2 animate-pulse shadow-md">
+              <span className="material-symbols-outlined text-sm text-indigo-400 animate-spin">progress_activity</span>
+              <span>{uploadProgress || 'Saving changes to Firebase...'}</span>
+            </div>
+          )}
+
+          {/* Success Banner */}
+          {saveSuccessMsg && (
+            <div className="mt-2 p-2 bg-emerald-950/60 border border-emerald-500/50 rounded text-emerald-300 text-[11px] font-mono flex items-center gap-1.5 animate-fade-in">
+              <span className="material-symbols-outlined text-sm text-emerald-400">check_circle</span>
+              <span>{saveSuccessMsg}</span>
+            </div>
           )}
         </div>
 
         {error && (
-          <div className="p-4 mx-4 mt-4 bg-red-950/50 border border-red-500 rounded text-red-500 text-sm">
-            {error}
+          <div className="p-3 mx-4 mt-3 bg-red-950/50 border border-red-500/50 rounded-lg text-red-400 text-xs flex items-center gap-2">
+            <span className="material-symbols-outlined text-sm">error</span>
+            <span>{error}</span>
           </div>
         )}
 
-        <div className="p-4 space-y-6">
-          {/* ============================================================= */}
-          {/* VIDEO LAYER CONTROLS                                         */}
-          {/* ============================================================= */}
-          <div className="p-3 bg-neutral-800/80 border border-indigo-500/40 rounded-lg space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-widest text-indigo-400 flex items-center gap-1">
-                <span className="material-symbols-outlined text-sm">movie</span> Video Layer Inspector
-              </span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${activeVideoUrl ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-neutral-700 text-neutral-400'}`}>
-                {activeVideoUrl ? 'ACTIVE' : 'NONE'}
+        {/* Dynamic Multi-Mesh Target Selector Banner */}
+        <div className="px-4 py-2.5 bg-neutral-900/90 border-b border-neutral-800 flex flex-col gap-1.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-400">Active Target:</span>
+              <span className={`text-xs font-bold px-2 py-0.5 rounded flex items-center gap-1 border ${selectedMesh
+                ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40 shadow-sm'
+                : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                }`}>
+                <span className="material-symbols-outlined text-xs">
+                  {selectedMesh ? 'interests' : 'language'}
+                </span>
+                <span className="truncate max-w-[170px]">
+                  {selectedMesh ? selectedMesh.name : 'Entire 3D Model (Root)'}
+                </span>
               </span>
             </div>
 
-            {/* Video File Picker */}
-            <label className="flex items-center justify-center gap-1.5 px-3 py-2 bg-indigo-950/40 hover:bg-indigo-900/60 border border-indigo-500/30 hover:border-indigo-400 rounded text-xs font-medium cursor-pointer transition-colors text-indigo-200">
-              <span className="material-symbols-outlined text-[16px]">video_file</span>
-              {localVideoName ? `Video: ${localVideoName}` : 'Choose Local Video (.mp4, .webm)'}
-              <input type="file" accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov" onChange={pickLocalVideo} className="hidden" />
-            </label>
+            {selectedMesh && (
+              <button
+                type="button"
+                onClick={() => setSelectedMeshUuid(null)}
+                className="text-[10px] font-mono px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border border-neutral-700 hover:text-white transition-colors"
+                title="Switch back to Root Model settings"
+              >
+                ✕ Deselect
+              </button>
+            )}
+          </div>
 
-            {/* Video URL Input */}
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] text-neutral-400">Or Paste Video URL:</label>
-              <div className="flex gap-1">
-                <input
-                  type="text"
-                  placeholder="https://.../video.mp4"
-                  value={customVideoUrl || (activeVideoUrl.startsWith('http') ? activeVideoUrl : '')}
-                  onChange={(e) => applyCustomVideoUrl(e.target.value)}
-                  className="flex-1 px-2.5 py-1.5 bg-neutral-900 border border-neutral-700 rounded text-xs text-neutral-200 focus:outline-none focus:border-indigo-400 font-mono"
-                />
-                {activeVideoUrl && (
+          <div className="flex items-center justify-between text-[10px] text-neutral-500">
+            <span>{meshList.length > 0 ? `📦 ${meshList.length} Meshes Detected` : 'No meshes loaded yet'}</span>
+            <span className="text-indigo-400 font-mono">💡 Click 3D parts in scene to edit</span>
+          </div>
+        </div>
+
+        {/* Tab Navigation Strip */}
+        <div className="flex border-b border-neutral-800 bg-neutral-900/60 p-1 gap-1 text-xs select-none">
+          <button
+            type="button"
+            onClick={() => setActiveTab('transform')}
+            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'transform'
+              ? 'bg-neutral-800 text-white font-bold shadow border border-neutral-700'
+              : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
+              }`}
+          >
+            <span className="material-symbols-outlined text-sm text-indigo-400">transform</span>
+            <span>Transform</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('hierarchy')}
+            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'hierarchy'
+              ? 'bg-neutral-800 text-white font-bold shadow border border-neutral-700'
+              : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
+              }`}
+          >
+            <span className="material-symbols-outlined text-sm text-purple-400">layers</span>
+            <span>Objects ({meshList.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('lighting')}
+            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'lighting'
+              ? 'bg-neutral-800 text-white font-bold shadow border border-neutral-700'
+              : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
+              }`}
+          >
+            <span className="material-symbols-outlined text-sm text-amber-400">lightbulb</span>
+            <span>Lighting</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('materials')}
+            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'materials'
+              ? 'bg-neutral-800 text-white font-bold shadow border border-neutral-700'
+              : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
+              }`}
+          >
+            <span className="material-symbols-outlined text-sm text-emerald-400">texture</span>
+            <span>Materials</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('scene')}
+            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'scene'
+              ? 'bg-neutral-800 text-white font-bold shadow border border-neutral-700'
+              : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
+              }`}
+          >
+            <span className="material-symbols-outlined text-sm text-sky-400">movie</span>
+            <span>Scene</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('tracking')}
+            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'tracking'
+              ? 'bg-neutral-800 text-cyan-300 font-bold shadow border border-cyan-500/50'
+              : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
+              }`}
+          >
+            <span className="material-symbols-outlined text-sm text-cyan-400">center_focus_strong</span>
+            <span>Tracking</span>
+          </button>
+        </div>
+
+        {/* Scrollable Control Settings Area */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-6">
+          {/* ========================================================================= */}
+          {/* TAB 1: TRANSFORM & ORIENTATION / POSITION CONTROLS                         */}
+          {/* ========================================================================= */}
+          {activeTab === 'transform' && (
+            <div className="space-y-5">
+              {/* Orientation & Rotation Section */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-rose-400">3d_rotation</span>
+                    {selectedMesh ? `Rotation: ${selectedMesh.name}` : 'Root Model Orientation'}
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={resetCurrentTargetTransform}
+                    className="text-[10px] font-mono text-neutral-400 hover:text-amber-300"
+                    title="Reset to default orientation"
+                  >
+                    Reset Dials
+                  </button>
+                </div>
+
+                {/* 3-Axis Interactive Rotation Dials */}
+                <div className="space-y-2.5">
+                  <RotationDial
+                    axis="X"
+                    angle={currentRotX}
+                    onChange={(deg) => handleRotationChange('x', deg)}
+                    color="rose"
+                    description="Pitch (Tilt Front/Back)"
+                  />
+                  <RotationDial
+                    axis="Y"
+                    angle={currentRotY}
+                    onChange={(deg) => handleRotationChange('y', deg)}
+                    color="emerald"
+                    description="Yaw (Turn Left/Right)"
+                  />
+                  <RotationDial
+                    axis="Z"
+                    angle={currentRotZ}
+                    onChange={(deg) => handleRotationChange('z', deg)}
+                    color="sky"
+                    description="Roll (Tilt Sideways)"
+                  />
+                </div>
+              </div>
+
+              {/* Object 3D Positioning Section */}
+              <div className="space-y-3 pt-3 border-t border-neutral-800/80">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-emerald-400">open_with</span>
+                    {selectedMesh ? `Position: ${selectedMesh.name}` : 'Object Positioning (X, Y, Z)'}
+                  </h2>
                   <button
                     type="button"
                     onClick={() => {
-                      setActiveVideoUrl('');
-                      setCustomVideoUrl('');
-                      setLocalVideoName('');
+                      handlePositionChange('x', 0);
+                      handlePositionChange('y', 0);
+                      handlePositionChange('z', 0);
                     }}
-                    className="px-2 bg-neutral-700 hover:bg-red-900/50 text-neutral-300 hover:text-red-300 rounded text-xs transition-colors"
-                    title="Clear Video"
+                    className="text-[10px] font-mono text-neutral-400 hover:text-amber-300"
+                    title="Center Position to (0, 0, 0)"
                   >
-                    ✕
+                    Reset (0,0,0)
                   </button>
+                </div>
+
+                {/* Position Sliders with direct typed number inputs */}
+                <div className="space-y-2">
+                  <NumberSliderInput
+                    label="Position X (Lateral)"
+                    value={currentPosX}
+                    onChange={(val) => handlePositionChange('x', val)}
+                    min={-3.0}
+                    max={3.0}
+                    step={0.01}
+                    unit="m"
+                    color="rose"
+                    precision={2}
+                    resetValue={0}
+                    description="Left (-) / Right (+) displacement in meters"
+                  />
+                  <NumberSliderInput
+                    label="Position Y (Elevation)"
+                    value={currentPosY}
+                    onChange={(val) => handlePositionChange('y', val)}
+                    min={-3.0}
+                    max={3.0}
+                    step={0.01}
+                    unit="m"
+                    color="emerald"
+                    precision={2}
+                    resetValue={0}
+                    description="Down (-) / Up (+) elevation in meters"
+                  />
+                  <NumberSliderInput
+                    label="Position Z (Depth)"
+                    value={currentPosZ}
+                    onChange={(val) => handlePositionChange('z', val)}
+                    min={-3.0}
+                    max={3.0}
+                    step={0.01}
+                    unit="m"
+                    color="sky"
+                    precision={2}
+                    resetValue={0}
+                    description="Back (-) / Forward (+) depth distance in meters"
+                  />
+                </div>
+
+                {/* 2D Placement D-Pad Controller */}
+                <PositioningDpad
+                  posX={currentPosX}
+                  posY={currentPosY}
+                  posZ={currentPosZ}
+                  onChangeX={(val) => handlePositionChange('x', val)}
+                  onChangeY={(val) => handlePositionChange('y', val)}
+                  onChangeZ={(val) => handlePositionChange('z', val)}
+                  onReset={() => {
+                    handlePositionChange('x', 0);
+                    handlePositionChange('y', 0);
+                    handlePositionChange('z', 0);
+                  }}
+                />
+              </div>
+
+              {/* Scale & Auto-Spin Animation */}
+              <div className="space-y-3 pt-3 border-t border-neutral-800/80">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-purple-400">aspect_ratio</span>
+                    Scale & Animation
+                  </h2>
+                </div>
+
+                <NumberSliderInput
+                  label={selectedMesh ? `Scale: ${selectedMesh.name}` : "Overall Model Scale"}
+                  value={currentScale}
+                  onChange={handleScaleChange}
+                  min={0.05}
+                  max={3.0}
+                  step={0.05}
+                  unit="x"
+                  color="purple"
+                  precision={2}
+                  resetValue={selectedMesh ? 1.0 : 0.4}
+                />
+
+                {!selectedMesh && (
+                  <div className="space-y-1.5 pt-1">
+                    <NumberSliderInput
+                      label="Auto-Spin Speed (ms)"
+                      value={modelRotSpeed}
+                      onChange={setModelRotSpeed}
+                      min={0}
+                      max={30000}
+                      step={1000}
+                      unit="ms"
+                      color="indigo"
+                      precision={0}
+                      resetValue={10000}
+                      description="Duration for full 360° spin (0 = Paused)"
+                    />
+                  </div>
                 )}
               </div>
             </div>
+          )}
 
-            {/* Live Video Preview Box */}
-            {activeVideoUrl && (
-              <div className="relative rounded overflow-hidden bg-black border border-indigo-500/50 mt-1 shadow-inner">
-                <video
-                  key={activeVideoUrl}
-                  src={activeVideoUrl}
-                  autoPlay={mediaPlaying}
-                  loop
-                  muted
-                  playsInline
-                  className="object-contain bg-black video-player"
-                />
-                <div className="absolute top-1 left-1 bg-black/80 backdrop-blur px-1.5 py-0.5 rounded text-[9px] text-emerald-400 font-mono font-bold flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                  PREVIEW MONITOR
+          {/* ========================================================================= */}
+          {/* TAB 2: OBJECT HIERARCHY & DETECTED MESHES LIST                            */}
+          {/* ========================================================================= */}
+          {activeTab === 'hierarchy' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between border-b border-neutral-800 pb-2">
+                <div>
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-purple-400">view_in_ar</span>
+                    Detected 3D Objects ({meshList.length})
+                  </h2>
+                  <p className="text-[10px] text-neutral-500">Click any mesh below or directly inside the 3D scene to inspect</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={scanMeshes}
+                  className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 rounded text-[10px] font-medium text-neutral-300 flex items-center gap-1"
+                  title="Rescan model meshes"
+                >
+                  <span className="material-symbols-outlined text-xs">refresh</span> Rescan
+                </button>
+              </div>
+
+              {/* Search Filter */}
+              {meshList.length > 3 && (
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="Search objects or materials..."
+                    value={searchFilter}
+                    onChange={(e) => setSearchFilter(e.target.value)}
+                    className="w-full px-3 py-1.5 pl-8 bg-neutral-900 border border-neutral-800 rounded text-xs text-neutral-200 focus:outline-none focus:border-indigo-500 font-mono"
+                  />
+                  <span className="material-symbols-outlined absolute left-2.5 top-2 text-neutral-500 text-sm">
+                    search
+                  </span>
+                </div>
+              )}
+
+              {/* Root Selection Card */}
+              <div
+                onClick={() => setSelectedMeshUuid(null)}
+                className={`p-3 rounded-lg border cursor-pointer transition-all flex items-center justify-between ${!selectedMeshUuid
+                  ? 'bg-emerald-950/40 border-emerald-500 shadow-md ring-1 ring-emerald-500/50'
+                  : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700'
+                  }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${!selectedMeshUuid ? 'bg-emerald-500/20 text-emerald-400' : 'bg-neutral-800 text-neutral-400'}`}>
+                    <span className="material-symbols-outlined text-lg">language</span>
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
+                      Entire 3D Model (Root Anchor)
+                      {!selectedMeshUuid && <span className="text-[9px] bg-emerald-500/30 text-emerald-300 px-1.5 py-0.2 rounded font-mono">ACTIVE</span>}
+                    </h3>
+                    <p className="text-[10px] text-neutral-400">Controls scene scale, global orientation & placement</p>
+                  </div>
                 </div>
               </div>
-            )}
 
-            {/* Playback Controls */}
-            <div className="flex items-center justify-between pt-1 border-t border-neutral-700/60 text-xs">
-              <span className="text-neutral-300">Playback State</span>
-              <button
-                type="button"
-                onClick={toggleMedia}
-                className={`px-3 py-1 rounded font-medium text-xs transition-colors ${mediaPlaying ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-neutral-700 hover:bg-neutral-600 text-neutral-300'}`}
-              >
-                {mediaPlaying ? '▶ Playing' : '⏸ Paused'}
-              </button>
+              {/* List of Detected Meshes */}
+              <div className="space-y-1.5 max-h-[50vh] overflow-y-auto pr-1">
+                {filteredMeshes.map((mesh, i) => {
+                  const isSelected = selectedMeshUuid === mesh.uuid;
+                  return (
+                    <div
+                      key={mesh.uuid}
+                      onClick={() => setSelectedMeshUuid(mesh.uuid)}
+                      className={`p-2.5 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${isSelected
+                        ? 'bg-indigo-950/50 border-indigo-500 shadow-md ring-1 ring-indigo-500/50'
+                        : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700'
+                        }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className={`w-7 h-7 rounded flex items-center justify-center font-mono text-[11px] font-bold ${isSelected ? 'bg-indigo-500/30 text-indigo-300' : 'bg-neutral-800 text-neutral-400 group-hover:text-neutral-200'
+                          }`}>
+                          {i + 1}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-neutral-200 truncate">{mesh.name}</span>
+                            {isSelected && (
+                              <span className="text-[8px] bg-indigo-500/30 text-indigo-300 px-1 py-0.2 rounded font-mono font-bold">
+                                SELECTED
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 text-[10px] text-neutral-500 font-mono truncate">
+                            <span>Mat: {mesh.materialName || 'Default'}</span>
+                            <span>•</span>
+                            <span className="text-rose-400">R:({mesh.rotation.x}°,{mesh.rotation.y}°)</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={() => handleMeshVisibilityToggle(mesh.uuid)}
+                          className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${mesh.visible
+                            ? 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+                            : 'text-neutral-600 bg-neutral-900'
+                            }`}
+                          title={mesh.visible ? 'Hide mesh' : 'Show mesh'}
+                        >
+                          <span className="material-symbols-outlined text-sm">
+                            {mesh.visible ? 'visibility' : 'visibility_off'}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedMeshUuid(mesh.uuid);
+                            setActiveTab('transform');
+                          }}
+                          className="px-2 py-1 bg-neutral-800 hover:bg-indigo-600 rounded text-[10px] font-mono text-neutral-300 hover:text-white transition-colors"
+                          title="Open Dials & Settings for this mesh"
+                        >
+                          Edit
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {meshList.length === 0 && (
+                  <div className="p-4 text-center text-neutral-500 text-xs bg-neutral-900/30 rounded-lg border border-neutral-800/60">
+                    No 3D meshes detected. Load a batch or select a local .glb file.
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
-          <div>
-            <h2 className="text-sm font-bold uppercase tracking-widest text-neutral-400 mb-3 border-b border-neutral-800 pb-1">Ambient Light</h2>
-            <div className="space-y-3">
-              <label className="flex items-center justify-between text-sm">
-                <span>Color</span>
-                <input type="color" value={ambientColor} onChange={e => setAmbientColor(e.target.value)} className="w-16 h-8 bg-transparent cursor-pointer rounded" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Intensity ({ambientIntensity.toFixed(1)})</span>
-                <input type="range" min="0" max="5" step="0.1" value={ambientIntensity} onChange={e => setAmbientIntensity(parseFloat(e.target.value))} className="w-full" />
-              </label>
-            </div>
-          </div>
-
-          <div>
-            <h2 className="text-sm font-bold uppercase tracking-widest text-neutral-400 mb-3 border-b border-neutral-800 pb-1">Directional Light 1</h2>
-            <div className="space-y-3">
-              <label className="flex items-center justify-between text-sm">
-                <span>Color</span>
-                <input type="color" value={dir1Color} onChange={e => setDir1Color(e.target.value)} className="w-16 h-8 bg-transparent cursor-pointer rounded" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Intensity ({dir1Intensity.toFixed(1)})</span>
-                <input type="range" min="0" max="10" step="0.1" value={dir1Intensity} onChange={e => setDir1Intensity(parseFloat(e.target.value))} className="w-full" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Position</span>
-                <input type="text" value={dir1Position} onChange={e => setDir1Position(e.target.value)} className="px-2 py-1 bg-neutral-800 text-white border border-neutral-700 rounded focus:outline-none focus:border-neutral-500" />
-              </label>
-            </div>
-          </div>
-
-          <div>
-            <h2 className="text-sm font-bold uppercase tracking-widest text-neutral-400 mb-3 border-b border-neutral-800 pb-1">Directional Light 2</h2>
-            <div className="space-y-3">
-              <label className="flex items-center justify-between text-sm">
-                <span>Color</span>
-                <input type="color" value={dir2Color} onChange={e => setDir2Color(e.target.value)} className="w-16 h-8 bg-transparent cursor-pointer rounded" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Intensity ({dir2Intensity.toFixed(1)})</span>
-                <input type="range" min="0" max="10" step="0.1" value={dir2Intensity} onChange={e => setDir2Intensity(parseFloat(e.target.value))} className="w-full" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Position</span>
-                <input type="text" value={dir2Position} onChange={e => setDir2Position(e.target.value)} className="px-2 py-1 bg-neutral-800 text-white border border-neutral-700 rounded focus:outline-none focus:border-neutral-500" />
-              </label>
-            </div>
-          </div>
-
-          <div>
-            <h2 className="text-sm font-bold uppercase tracking-widest text-neutral-400 mb-3 border-b border-neutral-800 pb-1">Transform</h2>
-            <div className="space-y-3">
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Scale ({modelScale.toFixed(2)})</span>
-                <input type="range" min="0.1" max="2.0" step="0.1" value={modelScale} onChange={e => setModelScale(parseFloat(e.target.value))} className="w-full" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Rotation X ({modelRotX}°)</span>
-                <input type="range" min="-180" max="180" step="1" value={modelRotX} onChange={e => setModelRotX(parseInt(e.target.value))} className="w-full" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Rotation Y ({modelRotY}°)</span>
-                <input type="range" min="-180" max="180" step="1" value={modelRotY} onChange={e => setModelRotY(parseInt(e.target.value))} className="w-full" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Rotation Z ({modelRotZ}°)</span>
-                <input type="range" min="-180" max="180" step="1" value={modelRotZ} onChange={e => setModelRotZ(parseInt(e.target.value))} className="w-full" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Rotation Speed (ms)</span>
-                <input type="range" min="0" max="20000" step="1000" value={modelRotSpeed} onChange={e => setModelRotSpeed(parseInt(e.target.value))} className="w-full" />
-                <span className="text-xs text-neutral-500">0 = Paused</span>
-              </label>
-            </div>
-          </div>
-
-          <div>
-            <h2 className="text-sm font-bold uppercase tracking-widest text-neutral-400 mb-3 border-b border-neutral-800 pb-1">Materials</h2>
-            <div className="space-y-3">
-              <label className="flex items-center justify-between text-sm">
-                <span className="text-emerald-400 font-semibold">Preserve GLTF PBR Materials</span>
-                <input
-                  type="checkbox"
-                  checked={useNativePBR}
-                  onChange={e => {
-                    const checked = e.target.checked;
-                    setUseNativePBR(checked);
-                    if (checked) {
-                      setMatMetalness(-1);
-                      setMatRoughness(-1);
-                    } else {
-                      setMatMetalness(0.0);
-                      setMatRoughness(1.0);
-                    }
-                  }}
-                  className="w-5 h-5 accent-emerald-500 cursor-pointer"
+          {/* ========================================================================= */}
+          {/* TAB 3: LIGHTING CONTROLS                                                  */}
+          {/* ========================================================================= */}
+          {activeTab === 'lighting' && (
+            <div className="space-y-5">
+              <div className="space-y-3">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-amber-400">wb_sunny</span>
+                  Ambient Environment Light
+                </h2>
+                <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                  <span className="text-xs font-semibold text-neutral-300">Light Color</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono text-neutral-400">{ambientColor}</span>
+                    <input
+                      type="color"
+                      value={ambientColor}
+                      onChange={(e) => setAmbientColor(e.target.value)}
+                      className="w-10 h-7 bg-transparent cursor-pointer rounded border border-neutral-700"
+                    />
+                  </div>
+                </div>
+                <NumberSliderInput
+                  label="Ambient Intensity"
+                  value={ambientIntensity}
+                  onChange={setAmbientIntensity}
+                  min={0.0}
+                  max={5.0}
+                  step={0.1}
+                  unit="x"
+                  color="amber"
+                  precision={1}
+                  resetValue={1.5}
                 />
-              </label>
+              </div>
 
-              {useNativePBR ? (
-                <div className="p-2.5 bg-emerald-950/40 border border-emerald-500/30 rounded text-xs text-emerald-300">
-                  ✨ Preserving embedded GLTF textures, metalness & roughness maps.
+              <div className="space-y-3 pt-3 border-t border-neutral-800/80">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-amber-400">flashlight_on</span>
+                  Directional Key Light (Source 1)
+                </h2>
+                <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                  <span className="text-xs font-semibold text-neutral-300">Light Color</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono text-neutral-400">{dir1Color}</span>
+                    <input
+                      type="color"
+                      value={dir1Color}
+                      onChange={(e) => setDir1Color(e.target.value)}
+                      className="w-10 h-7 bg-transparent cursor-pointer rounded border border-neutral-700"
+                    />
+                  </div>
+                </div>
+                <NumberSliderInput
+                  label="Key Light Intensity"
+                  value={dir1Intensity}
+                  onChange={setDir1Intensity}
+                  min={0.0}
+                  max={10.0}
+                  step={0.1}
+                  unit="x"
+                  color="amber"
+                  precision={1}
+                  resetValue={2.5}
+                />
+                <div className="flex flex-col gap-1 p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                  <span className="text-xs font-semibold text-neutral-300">Light 1 3D Position (X Y Z)</span>
+                  <input
+                    type="text"
+                    value={dir1Position}
+                    onChange={(e) => setDir1Position(e.target.value)}
+                    className="px-2.5 py-1.5 bg-black border border-neutral-700 rounded text-xs font-mono text-amber-300 focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3 pt-3 border-t border-neutral-800/80">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-sky-400">highlight</span>
+                  Directional Fill Light (Source 2)
+                </h2>
+                <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                  <span className="text-xs font-semibold text-neutral-300">Light Color</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono text-neutral-400">{dir2Color}</span>
+                    <input
+                      type="color"
+                      value={dir2Color}
+                      onChange={(e) => setDir2Color(e.target.value)}
+                      className="w-10 h-7 bg-transparent cursor-pointer rounded border border-neutral-700"
+                    />
+                  </div>
+                </div>
+                <NumberSliderInput
+                  label="Fill Light Intensity"
+                  value={dir2Intensity}
+                  onChange={setDir2Intensity}
+                  min={0.0}
+                  max={10.0}
+                  step={0.1}
+                  unit="x"
+                  color="sky"
+                  precision={1}
+                  resetValue={1.0}
+                />
+                <div className="flex flex-col gap-1 p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                  <span className="text-xs font-semibold text-neutral-300">Light 2 3D Position (X Y Z)</span>
+                  <input
+                    type="text"
+                    value={dir2Position}
+                    onChange={(e) => setDir2Position(e.target.value)}
+                    className="px-2.5 py-1.5 bg-black border border-neutral-700 rounded text-xs font-mono text-sky-300 focus:outline-none focus:border-sky-400"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* TAB 4: MATERIALS & SHADERS                                                */}
+          {/* ========================================================================= */}
+          {activeTab === 'materials' && (
+            <div className="space-y-4">
+              {selectedMesh ? (
+                <div className="p-3 bg-indigo-950/40 border border-indigo-500/40 rounded-lg space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-sm">texture</span>
+                      Mesh Material: {selectedMesh.name}
+                    </span>
+                    <span className="text-[10px] font-mono text-indigo-400">{selectedMesh.materialName}</span>
+                  </div>
+
+                  {/* Individual Mesh Color Tint */}
+                  <div className="flex items-center justify-between p-2 rounded bg-neutral-900 border border-neutral-800">
+                    <span className="text-xs font-semibold text-neutral-300">Color Tint</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono text-neutral-400">{selectedMesh.material.color}</span>
+                      <input
+                        type="color"
+                        value={selectedMesh.material.color}
+                        onChange={(e) => handleMeshMaterialChange('color', e.target.value)}
+                        className="w-8 h-6 bg-transparent cursor-pointer rounded border border-neutral-700"
+                      />
+                    </div>
+                  </div>
+
+                  <NumberSliderInput
+                    label="Mesh Metalness"
+                    value={selectedMesh.material.metalness}
+                    onChange={(val) => handleMeshMaterialChange('metalness', val)}
+                    min={0.0}
+                    max={1.0}
+                    step={0.05}
+                    color="amber"
+                    precision={2}
+                  />
+
+                  <NumberSliderInput
+                    label="Mesh Roughness"
+                    value={selectedMesh.material.roughness}
+                    onChange={(val) => handleMeshMaterialChange('roughness', val)}
+                    min={0.0}
+                    max={1.0}
+                    step={0.05}
+                    color="amber"
+                    precision={2}
+                  />
+
+                  <NumberSliderInput
+                    label="Mesh Opacity"
+                    value={selectedMesh.material.opacity}
+                    onChange={(val) => handleMeshMaterialChange('opacity', val)}
+                    min={0.0}
+                    max={1.0}
+                    step={0.05}
+                    color="indigo"
+                    precision={2}
+                  />
                 </div>
               ) : (
-                <>
-                  <label className="flex flex-col gap-1 text-sm">
-                    <span>Metalness ({matMetalness >= 0 ? matMetalness.toFixed(2) : 'Default'})</span>
-                    <input type="range" min="0" max="1" step="0.05" value={matMetalness >= 0 ? matMetalness : 0.0} onChange={e => setMatMetalness(parseFloat(e.target.value))} className="w-full" />
-                  </label>
-                  <label className="flex flex-col gap-1 text-sm">
-                    <span>Roughness ({matRoughness >= 0 ? matRoughness.toFixed(2) : 'Default'})</span>
-                    <input type="range" min="0" max="1" step="0.05" value={matRoughness >= 0 ? matRoughness : 1.0} onChange={e => setMatRoughness(parseFloat(e.target.value))} className="w-full" />
-                  </label>
-                </>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-emerald-950/30 border border-emerald-500/40">
+                    <div className="flex flex-col">
+                      <span className="text-xs font-bold text-emerald-300">Preserve GLTF PBR Maps</span>
+                      <span className="text-[10px] text-emerald-400/80">Uses embedded textures, roughness, and metalness</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={useNativePBR}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setUseNativePBR(checked);
+                        if (checked) {
+                          setMatMetalness(-1);
+                          setMatRoughness(-1);
+                        } else {
+                          setMatMetalness(0.0);
+                          setMatRoughness(1.0);
+                        }
+                      }}
+                      className="w-5 h-5 accent-emerald-500 cursor-pointer"
+                    />
+                  </div>
+
+                  {!useNativePBR ? (
+                    <div className="space-y-3 p-3 bg-neutral-900/80 border border-neutral-800 rounded-lg">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-amber-400">Global PBR Overrides</span>
+                      <NumberSliderInput
+                        label="Surface Metalness"
+                        value={matMetalness >= 0 ? matMetalness : 0.0}
+                        onChange={setMatMetalness}
+                        min={0.0}
+                        max={1.0}
+                        step={0.05}
+                        color="amber"
+                        precision={2}
+                        resetValue={0.0}
+                      />
+                      <NumberSliderInput
+                        label="Surface Roughness"
+                        value={matRoughness >= 0 ? matRoughness : 1.0}
+                        onChange={setMatRoughness}
+                        min={0.0}
+                        max={1.0}
+                        step={0.05}
+                        color="amber"
+                        precision={2}
+                        resetValue={1.0}
+                      />
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-neutral-900/50 border border-neutral-800 rounded-lg text-xs text-neutral-400 leading-relaxed">
+                      ✨ Native PBR mode is active. Material textures, diffuse maps, specular highlights, and roughness maps embedded inside the GLB model are strictly preserved.
+                    </div>
+                  )}
+
+                  <div className="space-y-3 pt-2">
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                      <span className="text-xs font-semibold text-neutral-300">Emissive Glow Color</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono text-neutral-400">{matEmissive}</span>
+                        <input
+                          type="color"
+                          value={matEmissive}
+                          onChange={(e) => setMatEmissive(e.target.value)}
+                          className="w-10 h-7 bg-transparent cursor-pointer rounded border border-neutral-700"
+                        />
+                      </div>
+                    </div>
+                    <NumberSliderInput
+                      label="Emissive Glow Intensity"
+                      value={matEmissiveIntensity}
+                      onChange={setMatEmissiveIntensity}
+                      min={0.0}
+                      max={5.0}
+                      step={0.1}
+                      color="purple"
+                      precision={1}
+                      resetValue={0.0}
+                    />
+                  </div>
+
+                  <div className="space-y-3 pt-2">
+                    <NumberSliderInput
+                      label="Material Opacity"
+                      value={matOpacity}
+                      onChange={setMatOpacity}
+                      min={0.0}
+                      max={1.0}
+                      step={0.05}
+                      color="indigo"
+                      precision={2}
+                      resetValue={1.0}
+                    />
+                    <div className="flex items-center justify-between p-2.5 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                      <span className="text-xs font-semibold text-neutral-300">Wireframe Mesh Debug</span>
+                      <input
+                        type="checkbox"
+                        checked={matWireframe}
+                        onChange={(e) => setMatWireframe(e.target.checked)}
+                        className="w-5 h-5 accent-white cursor-pointer"
+                      />
+                    </div>
+                  </div>
+                </div>
               )}
-              <label className="flex items-center justify-between text-sm">
-                <span>Emissive Color</span>
-                <input type="color" value={matEmissive} onChange={e => setMatEmissive(e.target.value)} className="w-16 h-8 bg-transparent cursor-pointer rounded" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Emissive Intensity ({matEmissiveIntensity.toFixed(1)})</span>
-                <input type="range" min="0" max="5" step="0.1" value={matEmissiveIntensity} onChange={e => setMatEmissiveIntensity(parseFloat(e.target.value))} className="w-full" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Opacity ({matOpacity.toFixed(2)})</span>
-                <input type="range" min="0" max="1" step="0.05" value={matOpacity} onChange={e => setMatOpacity(parseFloat(e.target.value))} className="w-full" />
-              </label>
-              <label className="flex items-center justify-between text-sm">
-                <span>Wireframe</span>
-                <input type="checkbox" checked={matWireframe} onChange={e => setMatWireframe(e.target.checked)} className="w-5 h-5 accent-white cursor-pointer" />
-              </label>
             </div>
-          </div>
+          )}
 
-          <div>
-            <h2 className="text-sm font-bold uppercase tracking-widest text-neutral-400 mb-3 border-b border-neutral-800 pb-1">Environment</h2>
-            <div className="space-y-3">
-              <label className="flex items-center justify-between text-sm">
-                <span>Fog Color</span>
-                <input type="color" value={fogColor} onChange={e => setFogColor(e.target.value)} className="w-16 h-8 bg-transparent cursor-pointer rounded" />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span>Fog Density ({fogDensity.toFixed(3)})</span>
-                <input type="range" min="0" max="0.5" step="0.01" value={fogDensity} onChange={e => setFogDensity(parseFloat(e.target.value))} className="w-full" />
-              </label>
-            </div>
-          </div>
+          {/* ========================================================================= */}
+          {/* TAB 5: MEDIA LAYER, ENVIRONMENT & UI OVERLAYS                             */}
+          {/* ========================================================================= */}
+          {activeTab === 'scene' && (
+            <div className="space-y-5">
+              <div className="p-3 bg-neutral-900/90 border border-indigo-500/40 rounded-lg space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-widest text-indigo-400 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm">movie</span> Video Texture Layer
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {selectedVideoFile && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
+                        PENDING STORAGE SAVE
+                      </span>
+                    )}
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${activeVideoUrl ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-neutral-800 text-neutral-400'}`}>
+                      {activeVideoUrl ? (activeVideoUrl.startsWith('blob:') ? 'LOCAL PREVIEW' : 'SAVED TO CLOUD') : 'NONE'}
+                    </span>
+                  </div>
+                </div>
 
-          <div>
-            <h2 className="text-sm font-bold uppercase tracking-widest text-neutral-400 mb-3 border-b border-neutral-800 pb-1">UI Overlays</h2>
-            <div className="space-y-3">
-              <label className="flex items-center justify-between text-sm">
-                <span>Show "Buy Now" Button</span>
-                <input type="checkbox" checked={showBuyButton} onChange={e => setShowBuyButton(e.target.checked)} className="w-5 h-5 accent-white cursor-pointer" />
-              </label>
-              <label className="flex items-center justify-between text-sm">
-                <span>Button Color</span>
-                <input type="color" value={buyButtonColor} onChange={e => setBuyButtonColor(e.target.value)} disabled={!showBuyButton} className="w-16 h-8 bg-transparent cursor-pointer rounded disabled:opacity-50" />
-              </label>
+                <label className="flex items-center justify-center gap-1.5 px-3 py-2 bg-indigo-950/40 hover:bg-indigo-900/60 border border-indigo-500/30 hover:border-indigo-400 rounded text-xs font-medium cursor-pointer transition-colors text-indigo-200">
+                  <span className="material-symbols-outlined text-[16px]">video_file</span>
+                  {localVideoName ? `Video: ${localVideoName}` : 'Choose Local Video (.mp4, .webm)'}
+                  <input type="file" accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov" onChange={pickLocalVideo} className="hidden" />
+                </label>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] text-neutral-400">Or Paste Video URL:</label>
+                  <div className="flex gap-1">
+                    <input
+                      type="text"
+                      placeholder="https://.../video.mp4"
+                      value={customVideoUrl || (activeVideoUrl.startsWith('http') ? activeVideoUrl : '')}
+                      onChange={(e) => applyCustomVideoUrl(e.target.value)}
+                      className="flex-1 px-2.5 py-1.5 bg-black border border-neutral-700 rounded text-xs text-neutral-200 focus:outline-none focus:border-indigo-400 font-mono"
+                    />
+                    {activeVideoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveVideoUrl('');
+                          setCustomVideoUrl('');
+                          setLocalVideoName('');
+                        }}
+                        className="px-2 bg-neutral-800 hover:bg-red-900/50 text-neutral-300 hover:text-red-300 rounded text-xs transition-colors"
+                        title="Clear Video"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {activeVideoUrl && (
+                  <div className="relative rounded overflow-hidden bg-black border border-indigo-500/50 mt-1 shadow-inner">
+                    <video
+                      key={activeVideoUrl}
+                      src={activeVideoUrl}
+                      autoPlay={mediaPlaying}
+                      loop
+                      muted
+                      playsInline
+                      className="object-contain bg-black video-player max-h-36 w-full"
+                    />
+                    <div className="absolute top-1 left-1 bg-black/80 backdrop-blur px-1.5 py-0.5 rounded text-[9px] text-emerald-400 font-mono font-bold flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                      PREVIEW MONITOR
+                    </div>
+                  </div>
+                )}
+
+                {/* Target Mesh Layer Selector */}
+                <div className="flex flex-col gap-1.5 pt-2 border-t border-neutral-800">
+                  <label className="text-[11px] font-bold text-neutral-300 flex items-center justify-between">
+                    <span className="flex items-center gap-1">
+                      <span className="material-symbols-outlined text-xs text-indigo-400">layers</span>
+                      Map Video To Layer:
+                    </span>
+                    <span className="text-[10px] font-mono text-indigo-400">
+                      {videoTargetMesh === 'auto' ? 'Auto-Detect' : videoTargetMesh === 'all' ? 'All Meshes' : (meshList.find(m => m.name === videoTargetMesh || m.uuid === videoTargetMesh)?.name || videoTargetMesh)}
+                    </span>
+                  </label>
+                  <select
+                    value={videoTargetMesh}
+                    onChange={(e) => setVideoTargetMesh(e.target.value)}
+                    className="w-full px-2.5 py-1.5 bg-black border border-neutral-700 rounded text-xs text-neutral-200 focus:outline-none focus:border-indigo-400 font-mono"
+                  >
+                    <option value="auto">Auto-Detect (Screen / Display / Graphic / Cloth)</option>
+                    <option value="all">Entire 3D Model (All Meshes)</option>
+                    {meshList.map((m, i) => (
+                      <option key={m.uuid} value={m.name || m.uuid}>
+                        Mesh {i + 1}: {m.name} ({m.materialName || 'Mat'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Mirror Video Toggle */}
+                <div className="flex items-center justify-between p-2 rounded bg-neutral-900/80 border border-neutral-800">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-semibold text-neutral-300">Mirror Video (Flip X)</span>
+                    <span className="text-[10px] text-neutral-500">Un-mirror / flip video horizontally</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={videoFlipX}
+                    onChange={(e) => {
+                      const nextVal = e.target.checked;
+                      setVideoFlipX(nextVal);
+                      applyFlipXToScene(nextVal);
+                    }}
+                    className="w-5 h-5 accent-indigo-500 cursor-pointer"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-1 border-t border-neutral-800 text-xs">
+                  <span className="text-neutral-300">Playback State</span>
+                  <button
+                    type="button"
+                    onClick={toggleMedia}
+                    className={`px-3 py-1 rounded font-medium text-xs transition-colors ${mediaPlaying ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-300'
+                      }`}
+                  >
+                    {mediaPlaying ? '▶ Playing' : '⏸ Paused'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Camera Tracking Status & Quick Jump Card in Sidebar */}
+              <div className="p-3 bg-neutral-900/90 border border-cyan-500/40 rounded-lg space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm">center_focus_strong</span>
+                    Camera Tracking
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+                    {trackingScope === 'global' ? 'GLOBAL' : (batchId ? `BATCH: ${batchId}` : 'ACTIVE')}
+                  </span>
+                </div>
+                <div className="text-[11px] text-neutral-300 flex justify-between">
+                  <span className="text-neutral-400">Preset:</span>
+                  <span className="font-semibold text-cyan-300 capitalize">{activeTrackingPreset}</span>
+                </div>
+                <div className="text-[11px] text-neutral-300 flex justify-between">
+                  <span className="text-neutral-400">Filter Jitter Cutoff:</span>
+                  <span className="font-mono text-cyan-300">{trackingFilterMinCF}</span>
+                </div>
+                <div className="text-[11px] text-neutral-300 flex justify-between">
+                  <span className="text-neutral-400">Miss Tolerance:</span>
+                  <span className="font-mono text-cyan-300">{trackingMissTolerance} frames</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('tracking')}
+                  className="w-full mt-1 py-1.5 px-2 bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-200 hover:text-white border border-cyan-500/40 hover:border-cyan-400 rounded text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                >
+                  <span className="material-symbols-outlined text-xs">tune</span>
+                  Configure Precision Tracking
+                </button>
+              </div>
+
+              {/* View Camera Angles Quick Panel in Sidebar */}
+              <div className="space-y-2 pt-2">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-indigo-400">videocam</span>
+                  Center View Angles
+                </h2>
+                <div className="grid grid-cols-3 gap-1.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setCameraView('front')}
+                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1"
+                  >
+                    Front
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCameraView('back')}
+                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCameraView('left')}
+                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1"
+                  >
+                    Left
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCameraView('right')}
+                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1"
+                  >
+                    Right
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCameraView('top')}
+                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1"
+                  >
+                    Top
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCameraView('bottom')}
+                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1"
+                  >
+                    Bottom
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-3 pt-2">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-neutral-400">cloud</span>
+                  Atmospheric Fog
+                </h2>
+                <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                  <span className="text-xs font-semibold text-neutral-300">Fog Tint</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono text-neutral-400">{fogColor}</span>
+                    <input
+                      type="color"
+                      value={fogColor}
+                      onChange={(e) => setFogColor(e.target.value)}
+                      className="w-10 h-7 bg-transparent cursor-pointer rounded border border-neutral-700"
+                    />
+                  </div>
+                </div>
+                <NumberSliderInput
+                  label="Fog Density"
+                  value={fogDensity}
+                  onChange={setFogDensity}
+                  min={0.0}
+                  max={0.5}
+                  step={0.01}
+                  color="indigo"
+                  precision={3}
+                  resetValue={0.0}
+                />
+              </div>
+
+              <div className="space-y-3 pt-2">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-rose-400">shopping_bag</span>
+                  Interactive Buy Button Overlay
+                </h2>
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                  <span className="text-xs font-semibold text-neutral-300">Show "Buy Now" Button</span>
+                  <input
+                    type="checkbox"
+                    checked={showBuyButton}
+                    onChange={(e) => setShowBuyButton(e.target.checked)}
+                    className="w-5 h-5 accent-white cursor-pointer"
+                  />
+                </div>
+                <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                  <span className="text-xs font-semibold text-neutral-300">Button Background Color</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono text-neutral-400">{buyButtonColor}</span>
+                    <input
+                      type="color"
+                      value={buyButtonColor}
+                      onChange={(e) => setBuyButtonColor(e.target.value)}
+                      disabled={!showBuyButton}
+                      className="w-10 h-7 bg-transparent cursor-pointer rounded border border-neutral-700 disabled:opacity-50"
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* TAB 6: CAMERA TARGET TRACKING & PRECISION CONTROLS                         */}
+          {/* ========================================================================= */}
+          {activeTab === 'tracking' && (
+            <div className="space-y-5">
+              {/* Scope Selection Box */}
+              <div className="p-3 bg-neutral-900/90 border border-cyan-500/40 rounded-lg space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-widest text-cyan-400 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm">tune</span>
+                    Tracking Scope Target
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
+                    {trackingScope === 'global' ? 'GLOBAL (ALL BATCHES)' : `BATCH: ${batchId || 'ACTIVE'}`}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 p-1 bg-black/60 rounded-lg border border-neutral-800">
+                  <button
+                    type="button"
+                    onClick={() => setTrackingScope('batch')}
+                    className={`py-2 px-3 rounded text-xs font-semibold flex flex-col items-center gap-1 transition-all ${
+                      trackingScope === 'batch'
+                        ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-500/20 border border-cyan-400'
+                        : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1">
+                      <span className="material-symbols-outlined text-sm">bookmark</span>
+                      Active Batch Only
+                    </span>
+                    <span className="text-[9px] font-normal opacity-80">
+                      Apply to {batchId ? `"${batchId}"` : 'current batch'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTrackingScope('global')}
+                    className={`py-2 px-3 rounded text-xs font-semibold flex flex-col items-center gap-1 transition-all ${
+                      trackingScope === 'global'
+                        ? 'bg-gradient-to-r from-cyan-600 to-indigo-600 text-white shadow-lg shadow-indigo-500/20 border border-indigo-400'
+                        : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1">
+                      <span className="material-symbols-outlined text-sm">public</span>
+                      Global (All Batches)
+                    </span>
+                    <span className="text-[9px] font-normal opacity-80">
+                      System-wide default for all AR
+                    </span>
+                  </button>
+                </div>
+
+                <p className="text-[10px] text-neutral-400 leading-relaxed">
+                  {trackingScope === 'global'
+                    ? '🌐 Global mode updates the system-wide tracking template and synchronizes all existing batches in Firestore so every phone experience immediately reflects these precision settings.'
+                    : `🏷️ Batch mode customizes camera tracking parameters specifically for "${batchId || 'this batch'}". Other batches will continue using their respective configurations.`}
+                </p>
+              </div>
+
+              {/* Quick Calibration Presets */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-cyan-400">speed</span>
+                    Calibration Presets
+                  </h2>
+                  <span className="text-[10px] font-mono text-neutral-500">1-Click Setup</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => applyTrackingPreset('balanced')}
+                    className={`p-2.5 rounded-lg border text-left transition-all ${
+                      activeTrackingPreset === 'balanced'
+                        ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
+                        : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between font-bold text-xs">
+                      <span>🎯 Balanced</span>
+                      <span className="text-[9px] text-neutral-400 font-mono">Standard</span>
+                    </div>
+                    <p className="text-[10px] text-neutral-400 mt-1 leading-tight">
+                      Optimal balance of jitter reduction and motion latency for WebAR.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => applyTrackingPreset('smooth')}
+                    className={`p-2.5 rounded-lg border text-left transition-all ${
+                      activeTrackingPreset === 'smooth'
+                        ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
+                        : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between font-bold text-xs">
+                      <span>🧘 Ultra Smooth</span>
+                      <span className="text-[9px] text-emerald-400 font-mono">Anti-Jitter</span>
+                    </div>
+                    <p className="text-[10px] text-neutral-400 mt-1 leading-tight">
+                      Max stabilization; eliminates micro-shakes for stationary viewing.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => applyTrackingPreset('fast')}
+                    className={`p-2.5 rounded-lg border text-left transition-all ${
+                      activeTrackingPreset === 'fast'
+                        ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
+                        : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between font-bold text-xs">
+                      <span>⚡ High Speed</span>
+                      <span className="text-[9px] text-amber-400 font-mono">Low-Lag</span>
+                    </div>
+                    <p className="text-[10px] text-neutral-400 mt-1 leading-tight">
+                      Instantaneous response during rapid handheld camera movement.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => applyTrackingPreset('resilient')}
+                    className={`p-2.5 rounded-lg border text-left transition-all ${
+                      activeTrackingPreset === 'resilient'
+                        ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
+                        : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between font-bold text-xs">
+                      <span>🛡️ Resilient</span>
+                      <span className="text-[9px] text-purple-400 font-mono">Rock Solid</span>
+                    </div>
+                    <p className="text-[10px] text-neutral-400 mt-1 leading-tight">
+                      Maintains anchor lock through heavy hand occlusion & motion blur.
+                    </p>
+                  </button>
+                </div>
+              </div>
+
+              {/* Precision OneEuroFilter Controls */}
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-cyan-400">filter_alt</span>
+                    Jitter Filter & Motion Smoothing (1€ Filter)
+                  </h2>
+                </div>
+
+                <NumberSliderInput
+                  label="Filter Cutoff Frequency (filterMinCF)"
+                  value={trackingFilterMinCF}
+                  onChange={(val) => {
+                    setTrackingFilterMinCF(val);
+                    setActiveTrackingPreset('custom');
+                  }}
+                  min={0.00001}
+                  max={0.02}
+                  step={0.0001}
+                  color="cyan"
+                  precision={5}
+                  resetValue={0.0005}
+                  showRange={true}
+                  description="Minimum cutoff frequency for OneEuroFilter. Lower value = suppresses hand tremor & jitter at low velocities."
+                />
+
+                <NumberSliderInput
+                  label="Speed Coefficient Beta (filterBeta)"
+                  value={trackingFilterBeta}
+                  onChange={(val) => {
+                    setTrackingFilterBeta(val);
+                    setActiveTrackingPreset('custom');
+                  }}
+                  min={0.001}
+                  max={1.0}
+                  step={0.005}
+                  color="cyan"
+                  precision={3}
+                  resetValue={0.01}
+                  showRange={true}
+                  description="Velocity coefficient for OneEuroFilter. Higher value = eliminates tracking lag during swift camera sweeps."
+                />
+              </div>
+
+              {/* Lock-On & Tracking Stability */}
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-cyan-400">lock</span>
+                    Lock-On & Occlusion Tolerances
+                  </h2>
+                </div>
+
+                <NumberSliderInput
+                  label="Miss Tolerance (Frames)"
+                  value={trackingMissTolerance}
+                  onChange={(val) => {
+                    setTrackingMissTolerance(val);
+                    setActiveTrackingPreset('custom');
+                  }}
+                  min={1}
+                  max={30}
+                  step={1}
+                  unit=" f"
+                  color="cyan"
+                  precision={0}
+                  resetValue={6}
+                  showRange={true}
+                  description="Consecutive missed frames before target is dropped. Higher values prevent 3D model flickering during momentary occlusion."
+                />
+
+                <NumberSliderInput
+                  label="Warmup Tolerance (Frames)"
+                  value={trackingWarmupTolerance}
+                  onChange={(val) => {
+                    setTrackingWarmupTolerance(val);
+                    setActiveTrackingPreset('custom');
+                  }}
+                  min={0}
+                  max={10}
+                  step={1}
+                  unit=" f"
+                  color="cyan"
+                  precision={0}
+                  resetValue={2}
+                  showRange={true}
+                  description="Consecutive detected frames required to lock onto marker. Lower = instantaneous lock; Higher = eliminates false positives."
+                />
+              </div>
+
+              {/* Target Index & Concurrency */}
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-cyan-400">crop_free</span>
+                    Target Index & Concurrency
+                  </h2>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <NumberSliderInput
+                    label="Max Tracked Targets"
+                    value={trackingMaxTrack}
+                    onChange={(val) => {
+                      setTrackingMaxTrack(val);
+                      setActiveTrackingPreset('custom');
+                    }}
+                    min={1}
+                    max={5}
+                    step={1}
+                    color="cyan"
+                    precision={0}
+                    resetValue={1}
+                    showRange={false}
+                    description="Number of target markers MindAR will track simultaneously."
+                  />
+
+                  <NumberSliderInput
+                    label="Target Index"
+                    value={trackingTargetIndex}
+                    onChange={(val) => {
+                      setTrackingTargetIndex(val);
+                      setActiveTrackingPreset('custom');
+                    }}
+                    min={0}
+                    max={5}
+                    step={1}
+                    color="cyan"
+                    precision={0}
+                    resetValue={0}
+                    showRange={false}
+                    description="Target anchor index inside the .mind marker file (0 for primary garment target)."
+                  />
+                </div>
+              </div>
+
+              {/* UI Diagnostics & HUD Overlays */}
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-cyan-400">bug_report</span>
+                    Diagnostics & Native HUD Overlays
+                  </h2>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between p-2.5 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                    <div className="flex flex-col">
+                      <span className="text-xs font-semibold text-neutral-300">Live FPS / Performance HUD</span>
+                      <span className="text-[10px] text-neutral-500">Displays real-time FPS, frame latency, and ML memory stats</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={trackingShowStats}
+                      onChange={(e) => setTrackingShowStats(e.target.checked)}
+                      className="w-5 h-5 accent-cyan-500 cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-2.5 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                    <div className="flex flex-col">
+                      <span className="text-xs font-semibold text-neutral-300">MindAR Native Scanner HUD</span>
+                      <span className="text-[10px] text-neutral-500">Show MindAR's built-in scanning frame overlay</span>
+                    </div>
+                    <select
+                      value={trackingUiScanning}
+                      onChange={(e) => setTrackingUiScanning(e.target.value)}
+                      className="px-2.5 py-1 bg-black border border-neutral-700 rounded text-xs font-mono text-cyan-300 focus:outline-none"
+                    >
+                      <option value="no">Disabled (App Custom HUD)</option>
+                      <option value="yes">Enabled (Native Overlay)</option>
+                    </select>
+                  </div>
+
+                  <div className="flex items-center justify-between p-2.5 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                    <div className="flex flex-col">
+                      <span className="text-xs font-semibold text-neutral-300">MindAR Native Error Modal</span>
+                      <span className="text-[10px] text-neutral-500">Display browser incompatibility modal if camera fails</span>
+                    </div>
+                    <select
+                      value={trackingUiError}
+                      onChange={(e) => setTrackingUiError(e.target.value)}
+                      className="px-2.5 py-1 bg-black border border-neutral-700 rounded text-xs font-mono text-cyan-300 focus:outline-none"
+                    >
+                      <option value="yes">Enabled (Show Errors)</option>
+                      <option value="no">Disabled (Silent)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Dedicated Save Tracking Button & Status */}
+              <div className="pt-3 border-t border-neutral-800/80 space-y-2">
+                <button
+                  type="button"
+                  disabled={savingTracking}
+                  onClick={() => handleSaveTracking()}
+                  className="w-full py-2.5 px-4 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold rounded-lg shadow-lg shadow-cyan-500/20 text-xs flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                >
+                  {savingTracking ? (
+                    <>
+                      <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      <span>Saving Tracking Configuration...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-sm">save</span>
+                      <span>
+                        Save Tracking Settings ({trackingScope === 'global' ? 'Global for ALL' : `Batch: ${batchId || 'Active'}`})
+                      </span>
+                    </>
+                  )}
+                </button>
+
+                {trackingSuccessMsg && (
+                  <div className="p-2.5 bg-cyan-950/60 border border-cyan-500/50 rounded-lg text-[11px] text-cyan-200 flex items-center gap-2 animate-fadeIn">
+                    <span className="material-symbols-outlined text-cyan-400 text-sm">check_circle</span>
+                    <span>{trackingSuccessMsg}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* 3D Viewer */}
-      <div className="flex-1 relative bg-neutral-900 overflow-hidden">
+      {/* ========================================================================= */}
+      {/* 3D WEBGL VIEWER CANVAS                                                    */}
+      {/* ========================================================================= */}
+      <div id="ar-scene-container" className="flex-1 relative bg-neutral-900 overflow-hidden cursor-crosshair">
         {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) ? (
           <a-scene
             key={localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath}
@@ -567,8 +3247,7 @@ const ARTest = () => {
             fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
             style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
           >
-            <a-camera position="0 0 2.5" look-controls="enabled: true" wasd-controls="enabled: false">
-              {/* Front Headlight attached to camera ensures model is always lit */}
+            <a-camera id="scene-camera" position="0 0 2.5" look-controls="enabled: true" wasd-controls="enabled: false">
               <a-light type="directional" color="#ffffff" intensity="1.2" position="0 0 1"></a-light>
             </a-camera>
 
@@ -577,17 +3256,23 @@ const ARTest = () => {
             <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
             <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
 
+            {/* Center Model Entity Anchor */}
             <a-entity position="0 0 0">
               <a-gltf-model
                 id="ar-model"
                 src={localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath}
-                position="0 0 0"
+                position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
                 scale={`${modelScale} ${modelScale} ${modelScale}`}
                 rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
-                {...(modelRotSpeed > 0 ? { animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${modelRotY + 360} ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;` } : {})}
+                {...(modelRotSpeed > 0 && !selectedMeshUuid
+                  ? {
+                    animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${modelRotY + 360
+                      } ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;`
+                  }
+                  : {})}
                 model-auto-center="enabled: true"
                 dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-                play-gltf-video={`src: ${activeVideoUrl || customVideoUrl || arData?.videoUrl || ''}; playing: ${mediaPlaying}`}
+                play-gltf-video={`src: ${activeVideoUrl || customVideoUrl || arData?.videoUrl || ''}; playing: ${mediaPlaying}; targetMesh: ${videoTargetMesh}; flipX: ${videoFlipX}`}
                 play-gltf-animation={`playing: ${mediaPlaying}`}
               >
               </a-gltf-model>
@@ -595,46 +3280,164 @@ const ARTest = () => {
           </a-scene>
         ) : (
           !loading && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-500 space-y-4 p-8 text-center">
-              <svg className="w-16 h-16 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg>
-              <p className="text-lg max-w-md">Enter a Batch ID and adjust real-time lighting settings to preview your AR models accurately.</p>
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-500 space-y-4 p-8 text-center pointer-events-none">
+              <div className="w-16 h-16 rounded-2xl bg-neutral-800/80 border border-neutral-700 flex items-center justify-center text-indigo-400 shadow-xl">
+                <span className="material-symbols-outlined text-3xl">view_in_ar</span>
+              </div>
+              <div className="max-w-md space-y-1">
+                <p className="text-base font-semibold text-neutral-300">Ready for 3D Scene Inspection</p>
+                <p className="text-xs text-neutral-500">Enter a Batch ID or pick a local .glb 3D model above to calibrate orientation, positioning, and individual mesh parts.</p>
+              </div>
             </div>
           )
         )}
 
-        {/* Media Controls */}
-        <div style={{
-          position: 'absolute',
-          top: '20px',
-          left: '20px',
-          zIndex: 1000
-        }}>
+        {/* Interactive Camera View Angle Presets Toolbar */}
+        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-black/85 backdrop-blur-md border border-neutral-700/80 rounded-2xl p-1.5 flex items-center gap-1 shadow-2xl">
+            <span className="text-[10px] uppercase font-bold text-neutral-400 px-2 flex items-center gap-1">
+              <span className="material-symbols-outlined text-sm text-indigo-400">videocam</span> Views
+            </span>
+            <button
+              type="button"
+              onClick={() => setCameraView('front')}
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800/90 hover:bg-indigo-600 text-neutral-200 hover:text-white transition-all shadow-sm"
+              title="Direct Front-Facing View"
+            >
+              Front
+            </button>
+            <button
+              type="button"
+              onClick={() => setCameraView('back')}
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800/90 hover:bg-indigo-600 text-neutral-200 hover:text-white transition-all shadow-sm"
+              title="Back View"
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              onClick={() => setCameraView('left')}
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800/90 hover:bg-indigo-600 text-neutral-200 hover:text-white transition-all shadow-sm"
+              title="Left View"
+            >
+              Left
+            </button>
+            <button
+              type="button"
+              onClick={() => setCameraView('right')}
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800/90 hover:bg-indigo-600 text-neutral-200 hover:text-white transition-all shadow-sm"
+              title="Right View"
+            >
+              Right
+            </button>
+            <button
+              type="button"
+              onClick={() => setCameraView('top')}
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800/90 hover:bg-indigo-600 text-neutral-200 hover:text-white transition-all shadow-sm"
+              title="Top-Down View"
+            >
+              Top
+            </button>
+            <button
+              type="button"
+              onClick={() => setCameraView('bottom')}
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800/90 hover:bg-indigo-600 text-neutral-200 hover:text-white transition-all shadow-sm"
+              title="Bottom-Up View"
+            >
+              Bottom
+            </button>
+            <div className="w-[1px] h-4 bg-neutral-700 mx-0.5"></div>
+            <button
+              type="button"
+              onClick={() => setCameraView('reset')}
+              className="px-2 py-1 text-xs font-semibold rounded-lg bg-indigo-950/70 hover:bg-indigo-900 border border-indigo-500/40 text-indigo-200 hover:text-white transition-all flex items-center gap-1"
+              title="Reset View to Center"
+            >
+              <span className="material-symbols-outlined text-xs">restart_alt</span>
+            </button>
+          </div>
+        )}
+
+        {/* Media Play/Pause Floating Action Button */}
+        <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 1000 }}>
           <button
             onClick={toggleMedia}
             style={{
-              backgroundColor: 'rgba(0, 0, 0, 0.6)',
+              backgroundColor: 'rgba(0, 0, 0, 0.7)',
               color: 'white',
-              border: '1px solid white',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
               borderRadius: '50%',
-              width: '50px',
-              height: '50px',
+              width: '46px',
+              height: '46px',
               display: 'flex',
               justifyContent: 'center',
               alignItems: 'center',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+              backdropFilter: 'blur(8px)'
             }}
+            title={mediaPlaying ? 'Pause Scene Animation/Video' : 'Play Scene Animation/Video'}
           >
-            <span className="material-symbols-outlined">
+            <span className="material-symbols-outlined text-xl">
               {mediaPlaying ? 'pause' : 'play_arrow'}
             </span>
           </button>
         </div>
+
+        {/* Floating Active Target HUD Indicator */}
+        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
+          <div className="absolute top-5 left-20 z-40 pointer-events-none">
+            <div className="px-3 py-1.5 rounded-full bg-black/80 backdrop-blur-md border border-neutral-700 text-xs font-medium text-neutral-200 shadow-xl flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${selectedMesh ? 'bg-indigo-400 animate-ping' : 'bg-emerald-400 animate-pulse'}`}></span>
+              <span>
+                {selectedMesh ? (
+                  <>Selected Mesh: <strong className="text-indigo-300">{selectedMesh.name}</strong></>
+                ) : (
+                  <>Active Target: <strong className="text-emerald-300">Entire 3D Model</strong></>
+                )}
+              </span>
+              {selectedMesh && (
+                <span className="text-[10px] text-neutral-400 font-mono pl-1 border-l border-neutral-700">
+                  Click canvas background to deselect
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Live Coordinate Overlay HUD */}
+        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
+          <div className="absolute top-5 right-5 z-40 pointer-events-none hidden sm:flex flex-col gap-1 items-end">
+            <div className="px-3 py-1.5 rounded-lg bg-black/75 backdrop-blur-md border border-neutral-800 text-[10px] font-mono text-neutral-300 shadow-lg space-y-0.5">
+              <div className="flex items-center gap-2">
+                <span className="text-neutral-500">POS:</span>
+                <span className="text-rose-400 font-bold">X:{currentPosX.toFixed(2)}</span>
+                <span className="text-emerald-400 font-bold">Y:{currentPosY.toFixed(2)}</span>
+                <span className="text-sky-400 font-bold">Z:{currentPosZ.toFixed(2)}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-neutral-500">ROT:</span>
+                <span className="text-rose-400 font-bold">X:{currentRotX}°</span>
+                <span className="text-emerald-400 font-bold">Y:{currentRotY}°</span>
+                <span className="text-sky-400 font-bold">Z:{currentRotZ}°</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-neutral-500">SCALE:</span>
+                <span className="text-purple-400 font-bold">{currentScale.toFixed(2)}x</span>
+                {modelRotSpeed > 0 && !selectedMesh && (
+                  <span className="text-indigo-400 font-bold">SPIN:{modelRotSpeed / 1000}s</span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Extracted BuyNowButton component */}
         {showBuyButton && (
           <BuyNowButton
             color={buyButtonColor}
             onClick={handleCheckout}
+            disabled={checkoutLoading}
           />
         )}
       </div>

@@ -1,15 +1,23 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import 'aframe';
 import 'mind-ar/dist/mindar-image-aframe.prod.js';
+import * as THREE from 'three';
 import BuyNowButton from '../components/BuyNowButton';
 import '../utils/aframe-components';
-import { db } from '../firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { db, storage } from '../firebase';
+import { doc, getDoc, getDocFromServer } from 'firebase/firestore';
+import { ref, getDownloadURL } from 'firebase/storage';
+
+// Disable Three.js internal caching to guarantee latest GLTF/GLB models are always fetched
+if (typeof THREE !== 'undefined' && THREE.Cache) {
+  THREE.Cache.enabled = false;
+  THREE.Cache.clear();
+}
 
 const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const { batchId: routeBatchId } = useParams();
-  const batchId = propBatchId || routeBatchId;
+  const batchId = (propBatchId || routeBatchId || '').trim();
 
   const [arData, setArData] = useState(null);
   const [error, setError] = useState(null);
@@ -33,14 +41,34 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     ]);
   };
 
-  // 1. Fetch AR Data & Config
+  // Helper to add timestamp-based cache buster to URLs
+  const addCacheBuster = (url, cacheKey) => {
+    if (!url) return '';
+    const sep = url.includes('?') ? '&' : '?';
+    const cb = cacheKey || Date.now();
+    return `${url}${sep}_cb=${cb}`;
+  };
+
+  // 1. Fetch AR Data & Config with strict cache bypassing
   useEffect(() => {
     let isMounted = true;
+
+    // Clear Three.js memory cache on mount
+    if (typeof THREE !== 'undefined' && THREE.Cache) {
+      THREE.Cache.clear();
+    }
 
     const fetchPayload = async () => {
       try {
         logToScreen('ROUTER_FETCH', `Loading configuration for batch: ${batchId}...`);
-        const response = await fetch(`https://loomrouter-5qjmmwdvcq-uc.a.run.app/s/${batchId}?t=${Date.now()}`);
+        const response = await fetch(`https://loomrouter-5qjmmwdvcq-uc.a.run.app/s/${batchId}?t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          }
+        });
         if (!response.ok) throw new Error(`Batch router error: HTTP ${response.status}`);
 
         const data = await response.json();
@@ -50,35 +78,118 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           throw new Error('No 3D experience configuration found for this batch.');
         }
 
-        // Check Firestore for live ar_config override
+        // Fetch live ar_config directly from Firestore server (bypassing local client cache)
         let liveConfig = null;
         try {
-          const batchSnap = await getDoc(doc(db, 'batches', batchId));
-          if (batchSnap.exists() && batchSnap.data().ar_config) {
-            liveConfig = batchSnap.data().ar_config;
-            logToScreen('FIRESTORE_CONFIG', 'Using live Firestore ar_config.');
+          let batchSnap = null;
+          try {
+            batchSnap = await getDocFromServer(doc(db, 'batches', batchId));
+          } catch {
+            batchSnap = await getDoc(doc(db, 'batches', batchId));
+          }
+
+          if (batchSnap && batchSnap.exists()) {
+            const bData = batchSnap.data();
+            if (bData.ar_config) {
+              liveConfig = bData.ar_config;
+              logToScreen('FIRESTORE_CONFIG', 'Using live Firestore ar_config from batches collection.');
+            }
           }
         } catch (fsErr) {
           logToScreen('FIRESTORE_WARN', fsErr.message);
         }
 
-        const mergedConfig = liveConfig || data.ar_config || data.arExperience.config || {};
+        if (!liveConfig) {
+          try {
+            let assetSnap = null;
+            try {
+              assetSnap = await getDocFromServer(doc(db, 'assets', batchId));
+            } catch {
+              assetSnap = await getDoc(doc(db, 'assets', batchId));
+            }
+            if (assetSnap && assetSnap.exists()) {
+              const aData = assetSnap.data();
+              if (aData.ar_config) {
+                liveConfig = aData.ar_config;
+                logToScreen('FIRESTORE_CONFIG', 'Using live Firestore ar_config from assets collection.');
+              }
+            }
+          } catch {}
+        }
+
+        const isFlipX = !!(
+          liveConfig?.videoFlipX ??
+          liveConfig?.video_flip_x ??
+          data?.arExperience?.config?.videoFlipX ??
+          data?.ar_config?.videoFlipX ??
+          data?.videoFlipX ??
+          false
+        );
+
+        // Fetch Global Tracking defaults from settings/tracking in Firestore
+        let globalTracking = null;
+        try {
+          const globalTrackingSnap = await getDoc(doc(db, 'settings', 'tracking'));
+          if (globalTrackingSnap.exists()) {
+            globalTracking = globalTrackingSnap.data();
+          }
+        } catch {}
+
+        const activeTracking = liveConfig?.trackingConfig || liveConfig?.tracking ||
+                               data?.arExperience?.config?.trackingConfig || data?.ar_config?.trackingConfig ||
+                               data?.trackingConfig || {};
+
+        const mergedTracking = {
+          filterMinCF: 0.0005,
+          filterBeta: 0.01,
+          missTolerance: 6,
+          warmupTolerance: 2,
+          maxTrack: 1,
+          targetIndex: 0,
+          showStats: false,
+          uiLoading: 'no',
+          uiScanning: 'no',
+          uiError: 'yes',
+          ...(globalTracking || {}),
+          ...activeTracking
+        };
+
+        const mergedConfig = {
+          ...(data.arExperience?.config || {}),
+          ...(data.ar_config || {}),
+          ...(liveConfig || {}),
+          videoFlipX: isFlipX,
+          trackingConfig: mergedTracking
+        };
         const mindUrl = data.trackingConfig?.mindUrl || '';
         const gltfUrl = data.arExperience?.modelUrl || '';
 
         if (!isMounted) return;
 
-        let videoUrl = data.arExperience?.videoUrl || data.arExperience?.video || data.videoUrl || data.video_url || mergedConfig.videoUrl || '';
+        let videoUrl = mergedConfig.videoUrl || mergedConfig.video_url || data.arExperience?.videoUrl || data.arExperience?.video || data.videoUrl || data.video_url || '';
+        let videoFilePath = mergedConfig.video_file_path || data.video_file_path || '';
+
         if (!videoUrl) {
           try {
             const assetSnap = await getDoc(doc(db, 'assets', batchId));
             if (assetSnap.exists()) {
               const aData = assetSnap.data();
-              if (aData.video_url || aData.videoUrl) {
-                videoUrl = aData.video_url || aData.videoUrl;
+              videoUrl = aData.ar_config?.videoUrl || aData.ar_config?.video_url || aData.video_url || aData.videoUrl || '';
+              if (!videoFilePath) {
+                videoFilePath = aData.ar_config?.video_file_path || aData.video_file_path || '';
               }
             }
           } catch {}
+        }
+
+        // If we have a storage path but no direct http URL, resolve download URL from Firebase Storage
+        if ((!videoUrl || !videoUrl.startsWith('http')) && videoFilePath) {
+          try {
+            const storageRef = ref(storage, videoFilePath);
+            videoUrl = await getDownloadURL(storageRef);
+          } catch (err) {
+            logToScreen('STORAGE_VIDEO_WARN', `Could not resolve video from storage path ${videoFilePath}: ${err.message}`);
+          }
         }
 
         setArData({
@@ -149,6 +260,68 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     }
   }, [cameraEnabled]);
 
+  // Live Mirror Video Layer / Mesh Texture Inversion (Flip X) for WebAR
+  const applyFlipXToMesh = (model3D, isFlipped, targetParam = 'auto') => {
+    if (!model3D) return;
+    const THREE_LIB = (typeof AFRAME !== 'undefined' && AFRAME.THREE) ? AFRAME.THREE : THREE;
+
+    const screenKeywords = [
+      'video', 'screen', 'display', 'curved', 'plane', 'front', 'panel',
+      'cloth', 'graphic', 'print', 'texture', 'layer', 'tee', 'shirt', 'hoodie', 'fabric'
+    ];
+
+    const matchedMeshes = [];
+    const allMeshes = [];
+    const autoScreenMeshes = [];
+
+    model3D.traverse((node) => {
+      if (node.isMesh && node.material) {
+        allMeshes.push(node);
+        const nodeName = (node.name || '').toLowerCase();
+        const nodeUuid = (node.uuid || '').toLowerCase();
+
+        if (targetParam === 'all') {
+          matchedMeshes.push(node);
+        } else if (targetParam !== 'auto' && (nodeName === targetParam || nodeUuid === targetParam)) {
+          matchedMeshes.push(node);
+        } else {
+          if (screenKeywords.some((kw) => nodeName.includes(kw)) || node.userData?.hasVideo || node.userData?.videoUrl) {
+            autoScreenMeshes.push(node);
+          }
+        }
+      }
+    });
+
+    let finalTargetMeshes = matchedMeshes;
+    if (finalTargetMeshes.length === 0) {
+      finalTargetMeshes = autoScreenMeshes.length > 0 ? autoScreenMeshes : allMeshes;
+    }
+
+    finalTargetMeshes.forEach((node) => {
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      materials.forEach((mat) => {
+        ['map', 'emissiveMap'].forEach((mapName) => {
+          if (mat[mapName]) {
+            const tex = mat[mapName];
+            if (isFlipped) {
+              tex.wrapS = THREE_LIB.RepeatWrapping;
+              tex.repeat.set(-1, 1);
+              tex.offset.set(1, 0);
+            } else {
+              tex.wrapS = THREE_LIB.ClampToEdgeWrapping;
+              tex.repeat.set(1, 1);
+              tex.offset.set(0, 0);
+            }
+            tex.matrixAutoUpdate = true;
+            if (tex.updateMatrix) tex.updateMatrix();
+            tex.needsUpdate = true;
+          }
+        });
+        mat.needsUpdate = true;
+      });
+    });
+  };
+
   // 3. Attach MindAR & Model Event Listeners
   useEffect(() => {
     const sceneEl = sceneRef.current;
@@ -180,6 +353,19 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           v.play().catch(() => {});
         }
       });
+
+      const isFlipX = !!(arData?.config?.videoFlipX);
+      const targetMesh = arData?.config?.videoTargetMesh || 'auto';
+
+      ['ar-model', 'ar-model-forced'].forEach((id) => {
+        const modelEl = document.getElementById(id);
+        if (modelEl) {
+          const mesh = modelEl.getObject3D('mesh');
+          if (mesh) {
+            applyFlipXToMesh(mesh, isFlipX, targetMesh);
+          }
+        }
+      });
     };
 
     const onTargetLost = (e) => {
@@ -196,16 +382,62 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         }
       });
 
+      const isFlipX = !!(arData?.config?.videoFlipX);
+      const targetMesh = arData?.config?.videoTargetMesh || 'auto';
+      ['ar-model', 'ar-model-forced'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+          const mesh = el.getObject3D('mesh');
+          if (mesh) applyFlipXToMesh(mesh, isFlipX, targetMesh);
+        }
+      });
+
       const modelEl = document.getElementById('ar-model');
       if (modelEl) {
         const mesh = modelEl.getObject3D('mesh');
         if (mesh) {
+          const overrides = arData?.config?.meshOverrides;
           mesh.traverse((node) => {
-            if (node.isMesh && node.material) {
-              const mat = node.material;
-              const hasMap = mat.map ? 'YES' : 'NO';
-              const matType = mat.type || 'Standard';
-              logToScreen(`MESH_AUDIT [${node.name || 'mesh'}]`, `Material: ${matType} | Texture: ${hasMap} | Roughness: ${mat.roughness ?? 'N/A'} | Metalness: ${mat.metalness ?? 'N/A'}`);
+            if (node.isMesh) {
+              if (overrides) {
+                const ovr = overrides[node.name] || overrides[node.uuid];
+                if (ovr) {
+                  if (ovr.position) node.position.set(ovr.position.x, ovr.position.y, ovr.position.z);
+                  if (ovr.rotation) {
+                    node.rotation.set(
+                      ((ovr.rotation.x || 0) * Math.PI) / 180,
+                      ((ovr.rotation.y || 0) * Math.PI) / 180,
+                      ((ovr.rotation.z || 0) * Math.PI) / 180
+                    );
+                  }
+                  if (ovr.scale) {
+                    const sx = typeof ovr.scale === 'number' ? ovr.scale : (ovr.scale.x || 1);
+                    node.scale.set(sx, sx, sx);
+                  }
+                  if (ovr.visible !== undefined) node.visible = !!ovr.visible;
+                  if (ovr.material && node.material) {
+                    const mats = Array.isArray(node.material) ? node.material : [node.material];
+                    mats.forEach((m) => {
+                      if (ovr.material.color && m.color) m.color.set(ovr.material.color);
+                      if (ovr.material.metalness !== undefined && m.metalness !== undefined) m.metalness = ovr.material.metalness;
+                      if (ovr.material.roughness !== undefined && m.roughness !== undefined) m.roughness = ovr.material.roughness;
+                      if (ovr.material.emissive && m.emissive) m.emissive.set(ovr.material.emissive);
+                      if (ovr.material.opacity !== undefined) {
+                        m.opacity = ovr.material.opacity;
+                        if (m.opacity < 1.0) m.transparent = true;
+                      }
+                      if (ovr.material.wireframe !== undefined) m.wireframe = !!ovr.material.wireframe;
+                      m.needsUpdate = true;
+                    });
+                  }
+                }
+              }
+              if (node.material) {
+                const mat = node.material;
+                const hasMap = mat.map ? 'YES' : 'NO';
+                const matType = mat.type || 'Standard';
+                logToScreen(`MESH_AUDIT [${node.name || 'mesh'}]`, `Material: ${matType} | Texture: ${hasMap} | Roughness: ${mat.roughness ?? 'N/A'} | Metalness: ${mat.metalness ?? 'N/A'}`);
+              }
             }
           });
         }
@@ -225,6 +457,18 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     if (modelEl) {
       modelEl.addEventListener('model-loaded', onModelLoad);
       modelEl.addEventListener('model-error', onModelError);
+      if (modelEl.getObject3D('mesh')) {
+        onModelLoad();
+      }
+    }
+
+    const forcedModelEl = document.getElementById('ar-model-forced');
+    if (forcedModelEl) {
+      forcedModelEl.addEventListener('model-loaded', onModelLoad);
+      forcedModelEl.addEventListener('model-error', onModelError);
+      if (forcedModelEl.getObject3D('mesh')) {
+        onModelLoad();
+      }
     }
 
     const targetEl = document.getElementById('target-entity');
@@ -244,12 +488,30 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         modelEl.removeEventListener('model-loaded', onModelLoad);
         modelEl.removeEventListener('model-error', onModelError);
       }
+      if (forcedModelEl) {
+        forcedModelEl.removeEventListener('model-loaded', onModelLoad);
+        forcedModelEl.removeEventListener('model-error', onModelError);
+      }
       if (targetEl) {
         targetEl.removeEventListener('targetFound', onTargetFound);
         targetEl.removeEventListener('targetLost', onTargetLost);
       }
     };
-  }, [arData, cameraEnabled]);
+  }, [arData]);
+
+  // Reactive Effect to ensure flipX is applied if arData config loads after model is in memory
+  useEffect(() => {
+    if (!arData?.config) return;
+    const isFlipX = !!(arData.config.videoFlipX);
+    const targetMesh = arData.config.videoTargetMesh || 'auto';
+    ['ar-model', 'ar-model-forced'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        const mesh = el.getObject3D('mesh');
+        if (mesh) applyFlipXToMesh(mesh, isFlipX, targetMesh);
+      }
+    });
+  }, [arData]);
 
   // Media Toggle Helper
   const toggleMedia = () => {
@@ -342,6 +604,9 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const modelRotX = cfg.modelRotX ?? 0;
   const modelRotY = cfg.modelRotY ?? 0;
   const modelRotZ = cfg.modelRotZ ?? 0;
+  const modelPosX = cfg.modelPosX !== undefined ? cfg.modelPosX : (cfg.modelPosition ? Number(cfg.modelPosition.split(' ')[0]) || 0 : 0);
+  const modelPosY = cfg.modelPosY !== undefined ? cfg.modelPosY : (cfg.modelPosition ? Number(cfg.modelPosition.split(' ')[1]) || 0 : 0);
+  const modelPosZ = cfg.modelPosZ !== undefined ? cfg.modelPosZ : (cfg.modelPosition ? Number(cfg.modelPosition.split(' ')[2]) || 0 : 0);
 
   // Material Configs (-1 means preserve embedded PBR textures from GLTF)
   const matMetalness = cfg.matMetalness !== undefined ? cfg.matMetalness : -1;
@@ -353,6 +618,19 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
   const showBuyButton = cfg.showBuyButton !== undefined ? cfg.showBuyButton : true;
   const buyButtonColor = cfg.buyButtonColor || '#e11d48';
+
+  // Camera Tracking & Stability Config
+  const trackingCfg = cfg.trackingConfig || {};
+  const filterMinCF = trackingCfg.filterMinCF ?? 0.0005;
+  const filterBeta = trackingCfg.filterBeta ?? 0.01;
+  const missTolerance = trackingCfg.missTolerance ?? 6;
+  const warmupTolerance = trackingCfg.warmupTolerance ?? 2;
+  const maxTrack = trackingCfg.maxTrack ?? 1;
+  const targetIndex = trackingCfg.targetIndex ?? 0;
+  const showStats = trackingCfg.showStats ? 'true' : 'false';
+  const uiLoading = trackingCfg.uiLoading || 'no';
+  const uiScanning = trackingCfg.uiScanning || 'no';
+  const uiError = trackingCfg.uiError || 'yes';
 
   return (
     <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden select-none bg-transparent">
@@ -446,7 +724,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         /* ========================================================================= */
         <a-scene
           ref={sceneRef}
-          mindar-image={`imageTargetSrc: ${arData.mindPath}; autoStart: true; uiLoading: no; uiScanning: no; uiError: yes; filterMinCF: 0.0005; filterBeta: 0.01; missTolerance: 6; warmupTolerance: 2;`}
+          mindar-image={`imageTargetSrc: ${arData.mindPath}; autoStart: true; uiLoading: ${uiLoading}; uiScanning: ${uiScanning}; uiError: ${uiError}; filterMinCF: ${filterMinCF}; filterBeta: ${filterBeta}; missTolerance: ${missTolerance}; warmupTolerance: ${warmupTolerance}; maxTrack: ${maxTrack}; showStats: ${showStats};`}
           color-space="sRGB"
           renderer="colorManagement: true; physicallyCorrectLights: true; alpha: true; antialias: true;"
           vr-mode-ui="enabled: false"
@@ -476,12 +754,12 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
           <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
 
-          {/* MindAR Target Anchor: Target Index 0 */}
-          <a-entity id="target-entity" mindar-image-target="targetIndex: 0">
+          {/* MindAR Target Anchor: Configurable Target Index */}
+          <a-entity id="target-entity" mindar-image-target={`targetIndex: ${targetIndex}`}>
             <a-gltf-model
               id="ar-model"
               src={arData.gltfPath}
-              position="0 0 0"
+              position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
               scale={`${modelScale} ${modelScale} ${modelScale}`}
               rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
               {...(modelRotSpeed > 0
@@ -493,7 +771,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                 : {})}
               model-auto-center="enabled: true"
               dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-              play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}`}
+              play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}; targetMesh: ${arData.config?.videoTargetMesh || 'auto'}; flipX: ${arData.config?.videoFlipX || false}`}
               play-gltf-animation={`playing: ${mediaPlaying}`}
             ></a-gltf-model>
           </a-entity>
@@ -504,7 +782,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
               <a-gltf-model
                 id="ar-model-forced"
                 src={arData.gltfPath}
-                position="0 0 0"
+                position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
                 scale={`${modelScale} ${modelScale} ${modelScale}`}
                 rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
                 {...(modelRotSpeed > 0
@@ -516,7 +794,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                   : {})}
                 model-auto-center="enabled: true"
                 dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-                play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}`}
+                play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}; targetMesh: ${arData.config?.videoTargetMesh || 'auto'}; flipX: ${arData.config?.videoFlipX || false}`}
                 play-gltf-animation={`playing: ${mediaPlaying}`}
               ></a-gltf-model>
             </a-entity>
@@ -557,7 +835,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             <a-gltf-model
               id="ar-model"
               src={arData.gltfPath}
-              position="0 0 0"
+              position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
               scale={`${modelScale} ${modelScale} ${modelScale}`}
               rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
               {...(modelRotSpeed > 0
@@ -569,7 +847,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                 : {})}
               model-auto-center="enabled: true"
               dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-              play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}`}
+              play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}; targetMesh: ${arData.config?.videoTargetMesh || 'auto'}; flipX: ${arData.config?.videoFlipX || false}`}
               play-gltf-animation={`playing: ${mediaPlaying}`}
             ></a-gltf-model>
           </a-entity>

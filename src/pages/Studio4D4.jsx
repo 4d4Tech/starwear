@@ -3,6 +3,13 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
+import { ColladaLoader } from 'three/examples/jsm/loaders/ColladaLoader.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -392,6 +399,13 @@ export class VideoDisplayManager {
         -thetaLength / 2, thetaLength
       );
 
+      // Fix cylinder UVs: invert U so video is not mirrored horizontally when viewing the concave inside
+      const uvAttr = screenGeom.attributes.uv;
+      for (let i = 0; i < uvAttr.count; i++) {
+        uvAttr.setX(i, 1.0 - uvAttr.getX(i));
+      }
+      uvAttr.needsUpdate = true;
+
       const screenMat = this.app.fabricMaterialManager.createFabricMaterial({
         map: videoTexture,
         roughness: 0.12,
@@ -433,6 +447,15 @@ export class VideoDisplayManager {
       const radius = 1.1;
       const height = 3.2;
       const geometry = new THREE.CylinderGeometry(radius, radius, height, 64, 8);
+
+      // Align and un-mirror cylinder wrap UVs
+      const uvAttr = geometry.attributes.uv;
+      for (let i = 0; i < uvAttr.count; i++) {
+        let u = uvAttr.getX(i);
+        u = 1.0 - u;
+        uvAttr.setX(i, (u + 0.25) % 1.0);
+      }
+      uvAttr.needsUpdate = true;
 
       const sideMat = this.app.fabricMaterialManager.createFabricMaterial({
         map: videoTexture,
@@ -969,7 +992,9 @@ export default function Studio4D4() {
   const [youtubeBezel, setYoutubeBezel] = useState('cyber_bezel');
   const appRef = useRef(null);
   const fileInputRef = useRef(null);
+  const model3DInputRef = useRef(null);
   const videoFileInputRef = useRef(null);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   useEffect(() => {
     class StudioApp {
@@ -1887,16 +1912,148 @@ export default function Studio4D4() {
         });
       }
 
+      async import3DModelFile(file) {
+        if (!file) return;
+        const filename = file.name;
+        const ext = filename.split('.').pop().toLowerCase();
+
+        this.setLoadingState(`Importing 3D Model: ${filename}...`, true);
+        this.updateDiagnostics(`Ingesting 3D asset "${filename}" [${ext.toUpperCase()}]...`);
+
+        try {
+          const arrayBuffer = await file.arrayBuffer();
+          let loadedObject = null;
+
+          if (ext === 'glb' || ext === 'gltf') {
+            const gltfLoader = new GLTFLoader();
+            const dracoLoader = new DRACOLoader();
+            dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+            gltfLoader.setDRACOLoader(dracoLoader);
+
+            const gltf = await new Promise((resolve, reject) => {
+              gltfLoader.parse(arrayBuffer, '', resolve, reject);
+            });
+            loadedObject = gltf.scene || gltf.scenes[0];
+          } else if (ext === 'obj') {
+            const text = new TextDecoder().decode(arrayBuffer);
+            const objLoader = new OBJLoader();
+            loadedObject = objLoader.parse(text);
+          } else if (ext === 'fbx') {
+            const fbxLoader = new FBXLoader();
+            loadedObject = fbxLoader.parse(arrayBuffer, '');
+          } else if (ext === 'stl') {
+            const stlLoader = new STLLoader();
+            const geometry = stlLoader.parse(arrayBuffer);
+            geometry.computeVertexNormals();
+            const material = new THREE.MeshStandardMaterial({
+              color: 0xd4d4d8,
+              roughness: 0.5,
+              metalness: 0.1,
+              side: THREE.DoubleSide
+            });
+            loadedObject = new THREE.Mesh(geometry, material);
+          } else if (ext === 'ply') {
+            const plyLoader = new PLYLoader();
+            const geometry = plyLoader.parse(arrayBuffer);
+            geometry.computeVertexNormals();
+            const material = new THREE.MeshStandardMaterial({
+              color: 0xd4d4d8,
+              roughness: 0.5,
+              metalness: 0.1,
+              side: THREE.DoubleSide
+            });
+            loadedObject = new THREE.Mesh(geometry, material);
+          } else if (ext === 'dae') {
+            const text = new TextDecoder().decode(arrayBuffer);
+            const colladaLoader = new ColladaLoader();
+            const collada = colladaLoader.parse(text, '');
+            loadedObject = collada.scene;
+          } else {
+            throw new Error(`Unsupported 3D file format: .${ext}. Supported formats: .glb, .gltf, .obj, .fbx, .stl, .ply, .dae`);
+          }
+
+          if (!loadedObject) {
+            throw new Error(`Failed to parse 3D file "${filename}".`);
+          }
+
+          loadedObject.name = filename.replace(/\.[^/.]+$/, '');
+
+          // Setup shadows and standard double-sided materials
+          const meshes = [];
+          loadedObject.traverse((node) => {
+            if (node.isMesh) {
+              node.castShadow = true;
+              node.receiveShadow = true;
+              meshes.push(node);
+
+              if (node.material) {
+                const mats = Array.isArray(node.material) ? node.material : [node.material];
+                mats.forEach((m) => {
+                  m.side = THREE.DoubleSide;
+                  if (m.type === 'MeshBasicMaterial' || m.type === 'MeshLambertMaterial' || m.type === 'MeshPhongMaterial') {
+                    const stdMat = new THREE.MeshStandardMaterial({
+                      color: m.color || new THREE.Color(0xffffff),
+                      map: m.map || null,
+                      roughness: 0.5,
+                      metalness: 0.1,
+                      side: THREE.DoubleSide
+                    });
+                    if (Array.isArray(node.material)) {
+                      node.material = node.material.map((mat) => (mat === m ? stdMat : mat));
+                    } else {
+                      node.material = stdMat;
+                    }
+                  }
+                });
+              }
+            }
+          });
+
+          // Auto-scale and center in the studio scene
+          const bbox = new THREE.Box3().setFromObject(loadedObject);
+          const size = new THREE.Vector3();
+          const center = new THREE.Vector3();
+          bbox.getSize(size);
+          bbox.getCenter(center);
+
+          const maxDim = Math.max(size.x, size.y, size.z);
+          if (maxDim > 0.0001) {
+            const targetSize = 4.0;
+            const scaleFactor = targetSize / maxDim;
+            loadedObject.scale.multiplyScalar(scaleFactor);
+
+            // Re-calculate after scaling
+            bbox.setFromObject(loadedObject);
+            bbox.getCenter(center);
+            loadedObject.position.x -= center.x;
+            loadedObject.position.y -= bbox.min.y; // Place bottom flush with ground grid (y=0)
+            loadedObject.position.z -= center.z;
+          }
+
+          loadedObject.userData = {
+            isGenerated: true,
+            isImported3D: true,
+            filename: filename,
+            originalFormat: ext,
+            animate: false,
+            rotationSpeed: 0.01,
+            fabricProfile: 'cotton'
+          };
+
+          this.addSceneObject(loadedObject);
+          this.selectObject(loadedObject);
+          this.updateDiagnostics(`Successfully imported "${filename}" (${meshes.length} mesh part${meshes.length === 1 ? '' : 's'}). Ready for PBR editing, video texture layering, and .GLB export.`);
+        } catch (err) {
+          console.error('3D import error:', err);
+          this.updateDiagnostics(`Failed to import "${filename}": ${err.message}`, true);
+          alert(`Failed to import 3D file "${filename}":\n${err.message}`);
+        } finally {
+          this.setLoadingState('', false);
+        }
+      }
+
       prepareMeshForExport(obj) {
-        if (!obj || !obj.isMesh || !obj.geometry) return null;
-
-        const cloneGeom = obj.geometry.clone();
-        let cloneMat = null;
-
-        // Use lit materials for generated meshes if available, otherwise current material
-        let srcMat = (obj.userData?.isGenerated && obj.userData.materials?.lit)
-          ? obj.userData.materials.lit
-          : obj.material;
+        if (!obj || obj.isLight || obj.isHelper) return null;
 
         const sanitizeMaterial = (m) => {
           if (!m) return new THREE.MeshStandardMaterial({ color: 0x888888 });
@@ -1919,64 +2076,93 @@ export default function Studio4D4() {
           return cm;
         };
 
-        if (Array.isArray(srcMat)) {
-          const clonedMats = srcMat.map(sanitizeMaterial);
+        // If obj is a single Mesh
+        if (obj.isMesh && obj.geometry) {
+          const cloneGeom = obj.geometry.clone();
+          let cloneMat = null;
 
-          if (!cloneGeom.groups || cloneGeom.groups.length === 0) {
-            // No geometry groups: use first material
-            cloneMat = clonedMats[0] || new THREE.MeshStandardMaterial();
-          } else {
-            // Ensure every group has a valid material index
-            let maxIndex = 0;
-            cloneGeom.groups.forEach((g) => {
-              if (typeof g.materialIndex === 'number' && g.materialIndex > maxIndex) {
-                maxIndex = g.materialIndex;
+          let srcMat = (obj.userData?.isGenerated && obj.userData.materials?.lit)
+            ? obj.userData.materials.lit
+            : obj.material;
+
+          if (Array.isArray(srcMat)) {
+            const clonedMats = srcMat.map(sanitizeMaterial);
+            if (!cloneGeom.groups || cloneGeom.groups.length === 0) {
+              cloneMat = clonedMats[0] || new THREE.MeshStandardMaterial();
+            } else {
+              let maxIndex = 0;
+              cloneGeom.groups.forEach((g) => {
+                if (typeof g.materialIndex === 'number' && g.materialIndex > maxIndex) {
+                  maxIndex = g.materialIndex;
+                }
+              });
+              while (clonedMats.length <= maxIndex) {
+                const fallback = clonedMats[0] ? clonedMats[0].clone() : new THREE.MeshStandardMaterial();
+                clonedMats.push(fallback);
               }
-            });
-            while (clonedMats.length <= maxIndex) {
-              const fallback = clonedMats[0] ? clonedMats[0].clone() : new THREE.MeshStandardMaterial();
-              clonedMats.push(fallback);
+              cloneMat = clonedMats;
             }
-            cloneMat = clonedMats;
+          } else if (srcMat) {
+            cloneMat = sanitizeMaterial(srcMat);
+            if (cloneGeom.groups && cloneGeom.groups.length > 0) {
+              cloneGeom.groups.forEach((g) => {
+                g.materialIndex = 0;
+              });
+            }
+          } else {
+            cloneMat = new THREE.MeshStandardMaterial({ color: 0xcccccc });
           }
-        } else if (srcMat) {
-          cloneMat = sanitizeMaterial(srcMat);
-          if (cloneGeom.groups && cloneGeom.groups.length > 0) {
-            cloneGeom.groups.forEach((g) => {
-              g.materialIndex = 0;
-            });
+
+          const videoSrc = obj.userData?.videoEl?.src || obj.userData?.videoUrl || (obj.material?.map?.image?.src || '');
+          const hasVideo = !!(obj.userData?.hasVideo || videoSrc || obj.userData?.videoTexture);
+
+          if (hasVideo && videoSrc) {
+            if (Array.isArray(cloneMat)) {
+              cloneMat.forEach((m) => {
+                m.userData = { ...m.userData, hasVideo: true, videoUrl: videoSrc, videoSrc: videoSrc };
+              });
+            } else if (cloneMat) {
+              cloneMat.userData = { ...cloneMat.userData, hasVideo: true, videoUrl: videoSrc, videoSrc: videoSrc };
+            }
           }
-        } else {
-          cloneMat = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+
+          const cloneMesh = new THREE.Mesh(cloneGeom, cloneMat);
+          cloneMesh.name = obj.name || 'Exported_Mesh';
+          cloneMesh.position.copy(obj.position);
+          cloneMesh.quaternion.copy(obj.quaternion);
+          cloneMesh.scale.copy(obj.scale);
+          cloneMesh.userData = {
+            isGenerated: true,
+            hasVideo: hasVideo,
+            videoUrl: videoSrc,
+            videoSrc: videoSrc,
+            archetype: obj.userData?.archetype || 'STANDARD'
+          };
+          return cloneMesh;
         }
 
-        const videoSrc = obj.userData?.videoEl?.src || obj.userData?.videoUrl || (obj.material?.map?.image?.src || '');
-        const hasVideo = !!(obj.userData?.hasVideo || videoSrc || (obj.userData?.videoTexture));
+        // If obj is a Group or Object3D with children (e.g. from imported GLB/OBJ/FBX)
+        if (obj.children && obj.children.length > 0) {
+          const cloneGroup = new THREE.Group();
+          cloneGroup.name = obj.name || 'Exported_Group';
+          cloneGroup.position.copy(obj.position);
+          cloneGroup.quaternion.copy(obj.quaternion);
+          cloneGroup.scale.copy(obj.scale);
+          cloneGroup.userData = { ...obj.userData };
 
-        if (hasVideo && videoSrc) {
-          if (Array.isArray(cloneMat)) {
-            cloneMat.forEach((m) => {
-              m.userData = { ...m.userData, hasVideo: true, videoUrl: videoSrc, videoSrc: videoSrc };
-            });
-          } else if (cloneMat) {
-            cloneMat.userData = { ...cloneMat.userData, hasVideo: true, videoUrl: videoSrc, videoSrc: videoSrc };
+          obj.children.forEach((child) => {
+            const preparedChild = this.prepareMeshForExport(child);
+            if (preparedChild) {
+              cloneGroup.add(preparedChild);
+            }
+          });
+
+          if (cloneGroup.children.length > 0) {
+            return cloneGroup;
           }
         }
 
-        const cloneMesh = new THREE.Mesh(cloneGeom, cloneMat);
-        cloneMesh.name = obj.name || 'Exported_Mesh';
-        cloneMesh.position.copy(obj.position);
-        cloneMesh.quaternion.copy(obj.quaternion);
-        cloneMesh.scale.copy(obj.scale);
-        cloneMesh.userData = {
-          isGenerated: true,
-          hasVideo: hasVideo,
-          videoUrl: videoSrc,
-          videoSrc: videoSrc,
-          archetype: obj.userData?.archetype || 'STANDARD'
-        };
-
-        return cloneMesh;
+        return null;
       }
 
       async exportGLTF() {
@@ -2114,6 +2300,24 @@ export default function Studio4D4() {
     }
   };
 
+  const handleProcessIncoming3DFile = (file) => {
+    if (!file || !appRef.current) return;
+    appRef.current.import3DModelFile(file);
+  };
+
+  const handleIncomingAnyFile = (file) => {
+    if (!file) return;
+    const ext = file.name.split('.').pop().toLowerCase();
+    const modelExts = ['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply', 'dae'];
+    if (modelExts.includes(ext)) {
+      handleProcessIncoming3DFile(file);
+    } else if (file.type.startsWith('image/')) {
+      handleProcessIncomingFile(file);
+    } else if (file.type.startsWith('video/')) {
+      setVideoModalOpen(true);
+    }
+  };
+
   return (
     <div className="bg-slate-900 text-slate-200 h-screen flex flex-col md:flex-row overflow-hidden relative font-sans">
       <style
@@ -2127,7 +2331,7 @@ export default function Studio4D4() {
         }}
       />
 
-      {/* Hidden File Input placed safely outside drop zone to prevent double click triggers */}
+      {/* Hidden 2D Image File Input */}
       <input
         type="file"
         ref={fileInputRef}
@@ -2136,6 +2340,20 @@ export default function Studio4D4() {
         onChange={(e) => {
           if (e.target.files && e.target.files.length > 0) {
             handleProcessIncomingFile(e.target.files[0]);
+            e.target.value = '';
+          }
+        }}
+      />
+
+      {/* Hidden 3D Object / Model File Input */}
+      <input
+        type="file"
+        ref={model3DInputRef}
+        className="hidden"
+        accept=".glb,.gltf,.obj,.fbx,.stl,.ply,.dae"
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            handleProcessIncoming3DFile(e.target.files[0]);
             e.target.value = '';
           }
         }}
@@ -2158,29 +2376,42 @@ export default function Studio4D4() {
             Media Ingestion & Displays
           </h2>
 
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => model3DInputRef.current?.click()}
+              className="p-2.5 border border-indigo-500/40 hover:border-indigo-400 bg-indigo-950/30 hover:bg-indigo-900/50 rounded-xl text-center transition-all cursor-pointer group flex flex-col items-center justify-center gap-1 shadow-sm"
+              title="Import 3D models: GLB, GLTF, OBJ, FBX, STL, PLY, DAE"
+            >
+              <span className="material-symbols-outlined text-2xl text-indigo-400 group-hover:scale-110 transition-transform">
+                view_in_ar
+              </span>
+              <span className="text-[11px] font-bold text-indigo-200">Import 3D</span>
+              <span className="text-[8px] text-indigo-400/80 font-mono">GLB, OBJ, FBX</span>
+            </button>
+
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="p-3 border border-slate-700 hover:border-indigo-500 rounded-xl text-center bg-slate-950/40 hover:bg-slate-800/40 transition-all cursor-pointer group flex flex-col items-center justify-center gap-1"
+              className="p-2.5 border border-slate-700 hover:border-indigo-500 rounded-xl text-center bg-slate-950/40 hover:bg-slate-800/40 transition-all cursor-pointer group flex flex-col items-center justify-center gap-1"
             >
               <span className="material-symbols-outlined text-2xl text-slate-400 group-hover:text-indigo-400 transition-colors">
                 add_photo_alternate
               </span>
-              <span className="text-xs font-semibold text-slate-300">2D Image</span>
-              <span className="text-[9px] text-slate-500">Auto BG Removal</span>
+              <span className="text-[11px] font-semibold text-slate-300">2D Image</span>
+              <span className="text-[8px] text-slate-500">Auto Mesh</span>
             </button>
 
             <button
               type="button"
               onClick={() => setVideoModalOpen(true)}
-              className="p-3 border border-indigo-500/40 hover:border-indigo-400 bg-indigo-950/30 hover:bg-indigo-900/40 rounded-xl text-center transition-all cursor-pointer group flex flex-col items-center justify-center gap-1 shadow-sm"
+              className="p-2.5 border border-purple-500/40 hover:border-purple-400 bg-purple-950/20 hover:bg-purple-900/40 rounded-xl text-center transition-all cursor-pointer group flex flex-col items-center justify-center gap-1 shadow-sm"
             >
-              <span className="material-symbols-outlined text-2xl text-indigo-400 group-hover:scale-110 transition-transform">
+              <span className="material-symbols-outlined text-2xl text-purple-400 group-hover:scale-110 transition-transform">
                 smart_display
               </span>
-              <span className="text-xs font-semibold text-indigo-200">Video / Display</span>
-              <span className="text-[9px] text-indigo-400/80">WebGL & YouTube</span>
+              <span className="text-[11px] font-semibold text-purple-200">Video Layer</span>
+              <span className="text-[8px] text-purple-400/80">WebGL Screen</span>
             </button>
           </div>
 
@@ -2209,7 +2440,37 @@ export default function Studio4D4() {
       </div>
 
       {/* 3D Canvas Viewport (Center) */}
-      <div id="canvas-container" className="flex-1 relative w-full h-full z-[1] min-w-0 min-h-0 bg-slate-950">
+      <div
+        id="canvas-container"
+        className="flex-1 relative w-full h-full z-[1] min-w-0 min-h-0 bg-slate-950"
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsDraggingOver(true);
+        }}
+        onDragLeave={() => setIsDraggingOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setIsDraggingOver(false);
+          if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            handleIncomingAnyFile(e.dataTransfer.files[0]);
+          }
+        }}
+      >
+        {/* Drag & Drop Visual Drop Zone Overlay */}
+        {isDraggingOver && (
+          <div className="absolute inset-0 bg-indigo-950/80 border-4 border-dashed border-indigo-400 z-50 flex flex-col items-center justify-center pointer-events-none backdrop-blur-sm animate-fade-in">
+            <span className="material-symbols-outlined text-6xl text-indigo-400 mb-3 animate-bounce">
+              upload_file
+            </span>
+            <p className="text-lg font-bold text-white tracking-wide">Drop 3D Model or Image Here</p>
+            <p className="text-xs text-indigo-300 font-mono mt-1">
+              Supports .glb, .gltf, .obj, .fbx, .stl, .ply, .dae & images
+            </p>
+          </div>
+        )}
+
         {/* Top Center Viewport Mode Bar */}
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[20] bg-slate-900/90 backdrop-blur-md rounded-xl p-1 flex gap-1 border border-slate-800 shadow-xl">
           <button id="view-lit" className="px-3.5 py-1 text-xs font-bold rounded-lg bg-indigo-600 text-white shadow-sm transition-colors">
@@ -2233,7 +2494,7 @@ export default function Studio4D4() {
             Analyzing Image...
           </h2>
           <p className="text-slate-400 mt-2 text-xs max-w-sm text-center">
-            Extracting foreground and generating 3D manifold.
+            Processing 3D manifold and geometries.
           </p>
         </div>
       </div>

@@ -346,7 +346,9 @@ if (typeof AFRAME !== 'undefined') {
     AFRAME.registerComponent('play-gltf-video', {
       schema: {
         src: { type: 'string', default: '' },
-        playing: { type: 'boolean', default: true }
+        playing: { type: 'boolean', default: true },
+        targetMesh: { type: 'string', default: 'auto' },
+        flipX: { type: 'boolean', default: false }
       },
       init: function () {
         this.videos = [];
@@ -372,7 +374,7 @@ if (typeof AFRAME !== 'undefined') {
         }
       },
       update: function (oldData) {
-        if (!oldData || oldData.src !== this.data.src) {
+        if (!oldData || oldData.src !== this.data.src || oldData.targetMesh !== this.data.targetMesh || oldData.flipX !== this.data.flipX) {
           this.applyVideo();
         }
         if (!oldData || oldData.playing !== this.data.playing) {
@@ -412,6 +414,22 @@ if (typeof AFRAME !== 'undefined') {
           });
         }
       },
+      applyTextureFlip: function (tex, isFlipX) {
+        if (!tex) return;
+        const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
+        if (isFlipX) {
+          tex.wrapS = THREE_LIB.RepeatWrapping;
+          tex.repeat.set(-1, 1);
+          tex.offset.set(1, 0);
+        } else {
+          tex.wrapS = THREE_LIB.ClampToEdgeWrapping;
+          tex.repeat.set(1, 1);
+          tex.offset.set(0, 0);
+        }
+        tex.matrixAutoUpdate = true;
+        if (tex.updateMatrix) tex.updateMatrix();
+        tex.needsUpdate = true;
+      },
       applyVideo: function () {
         const obj = this.el.getObject3D('mesh');
         if (!obj) return;
@@ -419,6 +437,41 @@ if (typeof AFRAME !== 'undefined') {
         const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
         this.videos = [];
         this.videoTextures = [];
+
+        const targetParam = (this.data.targetMesh || 'auto').trim().toLowerCase();
+        const screenKeywords = [
+          'video', 'screen', 'display', 'curved', 'plane', 'front', 'panel',
+          'cloth', 'graphic', 'print', 'texture', 'layer', 'tee', 'shirt', 'hoodie', 'fabric'
+        ];
+
+        const matchedMeshes = [];
+        const allMeshes = [];
+        const autoScreenMeshes = [];
+
+        obj.traverse((node) => {
+          if (node.isMesh) {
+            allMeshes.push(node);
+            const nodeName = (node.name || '').toLowerCase();
+            const nodeUuid = (node.uuid || '').toLowerCase();
+
+            if (targetParam === 'all') {
+              matchedMeshes.push(node);
+            } else if (targetParam !== 'auto' && (nodeName === targetParam || nodeUuid === targetParam)) {
+              matchedMeshes.push(node);
+            } else {
+              if (screenKeywords.some((kw) => nodeName.includes(kw)) || node.userData?.hasVideo || node.userData?.videoUrl) {
+                autoScreenMeshes.push(node);
+              }
+            }
+          }
+        });
+
+        let finalTargetMeshes = matchedMeshes;
+        if (finalTargetMeshes.length === 0) {
+          finalTargetMeshes = autoScreenMeshes.length > 0 ? autoScreenMeshes : allMeshes;
+        }
+
+        const isFlip = !!this.data.flipX;
 
         // 1. If explicit video src is provided on component, create VideoTexture and map to mesh
         if (this.data.src && this.data.src.trim() !== '') {
@@ -432,41 +485,20 @@ if (typeof AFRAME !== 'undefined') {
             videoTexture.magFilter = THREE_LIB.LinearFilter;
             videoTexture.generateMipmaps = false;
             videoTexture.flipY = false;
+            this.applyTextureFlip(videoTexture, isFlip);
 
             this.videos.push(video);
             this.videoTextures.push(videoTexture);
 
-            // Find all screen candidate meshes
-            const screenMeshes = [];
-            const allMeshes = [];
-            obj.traverse((node) => {
-              if (node.isMesh && node.material) {
-                allMeshes.push(node);
-                const name = (node.name || '').toLowerCase();
-                if (
-                  name.includes('video') || name.includes('screen') || name.includes('display') ||
-                  name.includes('curved') || name.includes('plane') || name.includes('front') ||
-                  node.userData?.hasVideo || node.userData?.videoUrl
-                ) {
-                  screenMeshes.push(node);
-                }
-              }
-            });
-
-            const targetMeshes = screenMeshes.length > 0 ? screenMeshes : allMeshes;
-            targetMeshes.forEach((node) => {
+            finalTargetMeshes.forEach((node) => {
               const materials = Array.isArray(node.material) ? node.material : [node.material];
               materials.forEach((mat) => {
-                if (mat.map && mat.map.repeat) {
-                  videoTexture.repeat.copy(mat.map.repeat);
-                  videoTexture.offset.copy(mat.map.offset);
-                }
                 mat.map = videoTexture;
                 mat.emissiveMap = videoTexture;
                 if (mat.emissive && typeof mat.emissive.set === 'function') {
                   mat.emissive.set(0xffffff);
                 }
-                mat.emissiveIntensity = 0.4;
+                mat.emissiveIntensity = 0.5;
                 mat.needsUpdate = true;
               });
             });
@@ -493,6 +525,7 @@ if (typeof AFRAME !== 'undefined') {
                 vTex.magFilter = THREE_LIB.LinearFilter;
                 vTex.generateMipmaps = false;
                 vTex.flipY = false;
+                this.applyTextureFlip(vTex, isFlip);
 
                 materials.forEach((mat) => {
                   mat.map = vTex;
@@ -557,6 +590,7 @@ if (typeof AFRAME !== 'undefined') {
                   }
 
                   if (video && vTex) {
+                    this.applyTextureFlip(vTex, isFlip);
                     if (!this.videos.includes(video)) {
                       this.videos.push(video);
                     }
