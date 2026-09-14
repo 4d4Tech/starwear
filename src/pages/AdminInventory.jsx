@@ -16,6 +16,7 @@ const AdminInventory = () => {
   const [assetId, setAssetId] = useState('');
   const [assetName, setAssetName] = useState('');
   const [assetDescription, setAssetDescription] = useState('');
+  const [assetPrice, setAssetPrice] = useState(99.00);
   const [merchantId, setMerchantId] = useState('');
   const [glbFile, setGlbFile] = useState(null);
   const [targetImageFile, setTargetImageFile] = useState(null);
@@ -156,6 +157,7 @@ const AdminInventory = () => {
     setAssetId('');
     setAssetName('');
     setAssetDescription('');
+    setAssetPrice(99.00);
     setMerchantId('');
     setGlbFile(null);
     setTargetImageFile(null);
@@ -169,6 +171,7 @@ const AdminInventory = () => {
     setAssetId(item.id);
     setAssetName(item.name || '');
     setAssetDescription(item.description || '');
+    setAssetPrice(item.price !== undefined ? item.price : 99.00);
     setMerchantId(item.merchant_id || '');
     setGlbFile(null);
     setTargetImageFile(null);
@@ -183,6 +186,7 @@ const AdminInventory = () => {
     setAssetId('');
     setAssetName('');
     setAssetDescription('');
+    setAssetPrice(99.00);
     setMerchantId('');
     setGlbFile(null);
     setTargetImageFile(null);
@@ -240,6 +244,7 @@ const AdminInventory = () => {
       await setDoc(doc(db, 'assets', assetId), {
         name: assetName,
         description: assetDescription,
+        price: Number(assetPrice) || 99.00,
         merchant_id: merchantId || 'default',
         gltf_file_path: glbPath,
         mind_file_path: mindPath,
@@ -375,6 +380,7 @@ const AdminInventory = () => {
       await updateDoc(doc(db, 'assets', editingAsset.id), {
         name: assetName,
         description: assetDescription,
+        price: Number(assetPrice) || 99.00,
         merchant_id: merchantId || 'default',
         gltf_file_path: glbPath,
         mind_file_path: mindPath,
@@ -501,6 +507,7 @@ const AdminInventory = () => {
               <tr className="border-b border-outline-variant/30 text-secondary font-label-caps text-xs">
                 <th className="p-6 font-normal">ASSET NAME</th>
                 <th className="p-6 font-normal">DOCUMENT ID</th>
+                <th className="p-6 font-normal">PRICE</th>
                 <th className="p-6 font-normal">MERCHANT ID</th>
                 <th className="p-6 font-normal">MODEL PATH</th>
                 <th className="p-6 font-normal text-right">ACTIONS</th>
@@ -509,7 +516,7 @@ const AdminInventory = () => {
             <tbody className="font-body-sm text-on-background">
               {loading ? (
                 <tr>
-                  <td colSpan="5" className="p-12 text-center text-secondary">
+                  <td colSpan="6" className="p-12 text-center text-secondary">
                     Loading assets...
                   </td>
                 </tr>
@@ -517,9 +524,21 @@ const AdminInventory = () => {
                 <tr key={item.id} className="border-b border-outline-variant/10 hover:bg-surface-variant/20 transition-colors">
                   <td className="p-6 font-bold">{item.name || 'Unnamed Asset'}</td>
                   <td className="p-6 text-secondary font-mono text-xs">{item.id}</td>
+                  <td className="p-6 font-semibold text-primary font-mono">
+                    ${item.price !== undefined ? Number(item.price).toFixed(2) : '99.00'}
+                  </td>
                   <td className="p-6 text-secondary">{item.merchant_id || 'N/A'}</td>
                   <td className="p-6 text-secondary text-xs truncate max-w-[200px] font-mono">{item.gltf_file_path || 'N/A'}</td>
                   <td className="p-6 text-right space-x-2">
+                    <a
+                      href={`/product/${item.id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-block text-secondary hover:text-primary transition-colors p-1"
+                      title="View in Storefront & 3D Canvas"
+                    >
+                      <span className="material-symbols-outlined text-[20px]">storefront</span>
+                    </a>
                     <button
                       onClick={() => openEditModal(item)}
                       className="text-secondary hover:text-primary transition-colors p-1 edit-asset"
@@ -539,7 +558,7 @@ const AdminInventory = () => {
               ))}
               {!loading && filteredInventory.length === 0 && (
                 <tr>
-                  <td colSpan="5" className="p-12 text-center text-secondary">
+                  <td colSpan="6" className="p-12 text-center text-secondary">
                     No assets found matching "{search}"
                   </td>
                 </tr>
@@ -599,6 +618,27 @@ const AdminInventory = () => {
                   className="w-full bg-surface-variant border border-outline-variant rounded px-4 py-2 text-on-background focus:outline-none focus:border-primary transition-colors"
                   required
                 />
+              </div>
+
+              <div>
+                <label htmlFor="asset-price-input" className="block text-sm font-medium text-secondary mb-1">
+                  Retail Price ($ USD) *
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 transform -translate-y-1/2 text-secondary font-mono">$</span>
+                  <input
+                    id="asset-price-input"
+                    name="assetPrice"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={assetPrice}
+                    onChange={(e) => setAssetPrice(e.target.value)}
+                    placeholder="99.00"
+                    className="w-full bg-surface-variant border border-outline-variant rounded pl-8 pr-4 py-2 text-on-background focus:outline-none focus:border-primary transition-colors font-mono"
+                    required
+                  />
+                </div>
               </div>
 
               <div>

@@ -14,6 +14,8 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '../firebase';
+import MeshTemplateBrowser from '../components/MeshTemplateBrowser';
+import { getMeshTemplates } from '../utils/meshTemplates';
 
 // =========================================================================
 // 1. FABRIC & PBR PHYSICAL MATERIAL PROFILES
@@ -273,7 +275,9 @@ export class VideoDisplayManager {
 
     try {
       video.load();
-    } catch {}
+    } catch {
+      // Browser autoplay policy might defer loading until user gesture
+    }
 
     const startPlaying = () => {
       if (video.paused) {
@@ -995,6 +999,17 @@ export default function Studio4D4() {
   const model3DInputRef = useRef(null);
   const videoFileInputRef = useRef(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [templateDrawerOpen, setTemplateDrawerOpen] = useState(false);
+  const [templateBrowserMode, setTemplateBrowserMode] = useState('drawer'); // 'drawer' | 'modal'
+  const [activeLeftTab, setActiveLeftTab] = useState('outliner'); // 'outliner' | 'templates'
+  const [loadingTemplateId, setLoadingTemplateId] = useState(null);
+  const [recentlyAddedId, setRecentlyAddedId] = useState(null);
+  const [templateCount, setTemplateCount] = useState(0);
+
+  useEffect(() => {
+    const templates = getMeshTemplates();
+    setTemplateCount(templates.length);
+  }, []);
 
   useEffect(() => {
     class StudioApp {
@@ -1625,7 +1640,7 @@ export default function Studio4D4() {
 
         this.selectedObject = obj;
         this.transformControl.attach(obj);
-        if (obj.isMesh) {
+        if (obj.isMesh || obj.isGroup) {
           this.selectionHelper = new THREE.BoxHelper(obj, 0x818cf8);
           this.scene.add(this.selectionHelper);
           this.helpers.push(this.selectionHelper);
@@ -1722,14 +1737,14 @@ export default function Studio4D4() {
           document.getElementById('intensity-val').textContent = this.selectedObject.intensity.toFixed(2);
         }
 
-        if (this.selectedObject.isMesh) {
+        if (this.selectedObject.isMesh || this.selectedObject.isGroup || this.selectedObject.userData?.isImported3D) {
           if (meshProps) {
             meshProps.classList.remove('hidden');
             document.getElementById('anim-toggle').checked = this.selectedObject.userData.animate || false;
             document.getElementById('anim-speed').value = this.selectedObject.userData.rotationSpeed || 0.01;
           }
 
-          if (this.selectedObject.userData.isGenerated && extrusionProps) {
+          if (extrusionProps) {
             extrusionProps.classList.remove('hidden');
             const depth = this.selectedObject.userData.extrudeSettings?.depth || this.selectedObject.scale.z || 1.0;
             document.getElementById('extrusion-amount').value = depth;
@@ -1811,11 +1826,11 @@ export default function Studio4D4() {
         });
 
         document.getElementById('anim-toggle')?.addEventListener('change', (e) => {
-          if (this.selectedObject?.isMesh) this.selectedObject.userData.animate = e.target.checked;
+          if (this.selectedObject) this.selectedObject.userData.animate = e.target.checked;
         });
 
         document.getElementById('anim-speed')?.addEventListener('input', (e) => {
-          if (this.selectedObject?.isMesh) this.selectedObject.userData.rotationSpeed = parseFloat(e.target.value);
+          if (this.selectedObject) this.selectedObject.userData.rotationSpeed = parseFloat(e.target.value);
         });
 
         document.getElementById('extrusion-amount')?.addEventListener('input', (e) => {
@@ -1826,13 +1841,21 @@ export default function Studio4D4() {
 
         document.getElementById('fabric-profile-select')?.addEventListener('change', (e) => {
           const obj = this.selectedObject;
-          if (obj?.isMesh && obj.userData?.isGenerated && obj.userData.materials?.lit) {
-            const val = e.target.value;
-            obj.userData.fabricProfile = val;
+          if (!obj) return;
+          const val = e.target.value;
+          obj.userData.fabricProfile = val;
+          if (obj.userData?.materials?.lit) {
             obj.userData.materials.lit.forEach((mat) => {
               this.fabricMaterialManager.applyProfile(mat, val);
             });
           }
+          obj.traverse((node) => {
+            if (node.isMesh && node.material) {
+              const mats = Array.isArray(node.material) ? node.material : [node.material];
+              mats.forEach((m) => this.fabricMaterialManager.applyProfile(m, val));
+            }
+          });
+          this.updateDiagnostics(`Applied "${val}" PBR profile to "${obj.name}".`);
         });
 
         document.getElementById('color-front')?.addEventListener('input', (e) => {
@@ -2030,6 +2053,15 @@ export default function Studio4D4() {
             loadedObject.position.z -= center.z;
           }
 
+          // If there are already objects in the scene, apply a stagger offset so models don't occlude each other
+          const existingModels = this.objects.filter((o) => (o.isMesh || o.isGroup) && !o.isLight && !o.isHelper);
+          if (existingModels.length > 0) {
+            const count = existingModels.length;
+            const sign = count % 2 === 1 ? 1 : -1;
+            const mult = Math.ceil(count / 2);
+            loadedObject.position.x += sign * mult * 2.8;
+          }
+
           loadedObject.userData = {
             isGenerated: true,
             isImported3D: true,
@@ -2047,6 +2079,45 @@ export default function Studio4D4() {
           console.error('3D import error:', err);
           this.updateDiagnostics(`Failed to import "${filename}": ${err.message}`, true);
           alert(`Failed to import 3D file "${filename}":\n${err.message}`);
+        } finally {
+          this.setLoadingState('', false);
+        }
+      }
+
+      async import3DModelFromUrl(url, filename = '', meta = {}) {
+        if (!url) return;
+        const fname = filename || url.split('/').pop().split('?')[0];
+        const ext = fname.split('.').pop().toLowerCase() || 'glb';
+
+        this.setLoadingState(`Loading 3D Template: ${meta.cleanName || fname}...`, true);
+        this.updateDiagnostics(`Fetching 3D mesh template "${meta.cleanName || fname}" [${ext.toUpperCase()}]...`);
+
+        try {
+          const res = await fetch(url);
+          if (!res.ok) {
+            throw new Error(`Failed to load asset from URL (HTTP ${res.status})`);
+          }
+          const arrayBuffer = await res.arrayBuffer();
+          const file = new File([arrayBuffer], fname, {
+            type: ext === 'glb' ? 'model/gltf-binary' : 'application/octet-stream'
+          });
+
+          await this.import3DModelFile(file);
+
+          if (this.selectedObject) {
+            this.selectedObject.userData.isTemplate = true;
+            this.selectedObject.userData.templateMeta = meta;
+            if (meta.cleanName) {
+              this.selectedObject.name = meta.cleanName;
+              this.updateOutliner();
+              this.updatePropertiesPanel();
+            }
+          }
+          this.updateDiagnostics(`Successfully added template "${meta.cleanName || fname}" to scene.`);
+        } catch (err) {
+          console.error('Template loading error:', err);
+          this.updateDiagnostics(`Failed to load template "${fname}": ${err.message}`, true);
+          alert(`Failed to load 3D template "${fname}":\n${err.message}`);
         } finally {
           this.setLoadingState('', false);
         }
@@ -2292,7 +2363,6 @@ export default function Studio4D4() {
     });
 
     try {
-      const storage = getStorage();
       const storageRef = ref(storage, `ai-uploads/${Date.now()}_${file.name}`);
       uploadBytes(storageRef, file).catch(() => {});
     } catch {
@@ -2303,6 +2373,18 @@ export default function Studio4D4() {
   const handleProcessIncoming3DFile = (file) => {
     if (!file || !appRef.current) return;
     appRef.current.import3DModelFile(file);
+  };
+
+  const handleSelectTemplate = async (template) => {
+    if (!template || !appRef.current) return;
+    setLoadingTemplateId(template.id);
+    try {
+      await appRef.current.import3DModelFromUrl(template.url, template.filename, template);
+      setRecentlyAddedId(template.id);
+      setTimeout(() => setRecentlyAddedId(null), 3500);
+    } finally {
+      setLoadingTemplateId(null);
+    }
   };
 
   const handleIncomingAnyFile = (file) => {
@@ -2376,17 +2458,38 @@ export default function Studio4D4() {
             Media Ingestion & Displays
           </h2>
 
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setTemplateDrawerOpen(true);
+                setTemplateBrowserMode('drawer');
+              }}
+              className="p-2.5 border border-fuchsia-500/40 hover:border-fuchsia-400 bg-gradient-to-br from-indigo-950/60 to-fuchsia-950/40 hover:from-indigo-900/60 hover:to-fuchsia-900/60 rounded-xl text-center transition-all cursor-pointer group flex flex-col items-center justify-center gap-1 shadow-sm"
+              title="Browse 3D Mesh Templates by Category"
+            >
+              <span className="material-symbols-outlined text-2xl text-fuchsia-400 group-hover:scale-110 transition-transform">
+                shapes
+              </span>
+              <div className="flex items-center gap-1">
+                <span className="text-[11px] font-bold text-white">3D Templates</span>
+                <span className="text-[9px] bg-fuchsia-950 border border-fuchsia-500/40 text-fuchsia-300 px-1 py-0.2 rounded font-mono">
+                  {templateCount}
+                </span>
+              </div>
+              <span className="text-[8px] text-fuchsia-300/80">Jackets, Shirts...</span>
+            </button>
+
             <button
               type="button"
               onClick={() => model3DInputRef.current?.click()}
               className="p-2.5 border border-indigo-500/40 hover:border-indigo-400 bg-indigo-950/30 hover:bg-indigo-900/50 rounded-xl text-center transition-all cursor-pointer group flex flex-col items-center justify-center gap-1 shadow-sm"
-              title="Import 3D models: GLB, GLTF, OBJ, FBX, STL, PLY, DAE"
+              title="Import local 3D models: GLB, GLTF, OBJ, FBX, STL, PLY, DAE"
             >
               <span className="material-symbols-outlined text-2xl text-indigo-400 group-hover:scale-110 transition-transform">
                 view_in_ar
               </span>
-              <span className="text-[11px] font-bold text-indigo-200">Import 3D</span>
+              <span className="text-[11px] font-bold text-indigo-200">Upload 3D</span>
               <span className="text-[8px] text-indigo-400/80 font-mono">GLB, OBJ, FBX</span>
             </button>
 
@@ -2425,17 +2528,58 @@ export default function Studio4D4() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto studio-scroll p-4">
+        <div className="flex-1 overflow-y-auto studio-scroll p-4 flex flex-col min-h-0">
           <div className="flex justify-between items-center mb-3">
-            <h2 className="text-xs uppercase font-bold text-slate-400 tracking-wider">Scene Objects</h2>
-            <button
-              id="btn-add-light"
-              className="text-xs bg-slate-800 hover:bg-slate-700 text-indigo-300 font-semibold px-2.5 py-1 rounded border border-slate-700 transition-colors flex items-center gap-1"
-            >
-              <span className="material-symbols-outlined text-xs">add</span> Light
-            </button>
+            <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded-lg border border-slate-800">
+              <button
+                type="button"
+                onClick={() => setActiveLeftTab('outliner')}
+                className={`px-2 py-0.5 text-xs font-bold rounded transition-all cursor-pointer ${
+                  activeLeftTab === 'outliner'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Scene
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveLeftTab('templates')}
+                className={`px-2 py-0.5 text-xs font-bold rounded transition-all cursor-pointer flex items-center gap-1 ${
+                  activeLeftTab === 'templates'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <span>Templates</span>
+                <span className="text-[9px] bg-indigo-950 border border-indigo-500/40 text-indigo-300 px-1 py-0.2 rounded font-mono">
+                  {templateCount}
+                </span>
+              </button>
+            </div>
+
+            {activeLeftTab === 'outliner' && (
+              <button
+                id="btn-add-light"
+                className="text-xs bg-slate-800 hover:bg-slate-700 text-indigo-300 font-semibold px-2.5 py-1 rounded border border-slate-700 transition-colors flex items-center gap-1 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-xs">add</span> Light
+              </button>
+            )}
           </div>
-          <ul id="outliner-list" className="space-y-1.5"></ul>
+
+          {activeLeftTab === 'outliner' ? (
+            <ul id="outliner-list" className="space-y-1.5"></ul>
+          ) : (
+            <div className="flex-1 overflow-hidden min-h-0">
+              <MeshTemplateBrowser
+                mode="sidebar"
+                onSelectTemplate={handleSelectTemplate}
+                loadingTemplateId={loadingTemplateId}
+                recentlyAddedId={recentlyAddedId}
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -2497,6 +2641,42 @@ export default function Studio4D4() {
             Processing 3D manifold and geometries.
           </p>
         </div>
+
+        {/* Floating Bottom Button to Toggle Template Shelf */}
+        {!templateDrawerOpen && templateBrowserMode !== 'modal' && (
+          <button
+            type="button"
+            onClick={() => {
+              setTemplateDrawerOpen(true);
+              setTemplateBrowserMode('drawer');
+            }}
+            className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 px-4 py-2 bg-slate-900/90 hover:bg-slate-800 text-white border border-indigo-500/40 hover:border-indigo-400 rounded-full shadow-2xl backdrop-blur-md text-xs font-bold flex items-center gap-2 transition-all hover:scale-105 cursor-pointer group"
+          >
+            <span className="material-symbols-outlined text-sm text-indigo-400 group-hover:rotate-12 transition-transform">
+              deployed_code
+            </span>
+            <span>Browse Mesh Templates</span>
+            <span className="bg-indigo-950 border border-indigo-500/30 text-indigo-300 text-[10px] font-mono px-1.5 py-0.2 rounded-full">
+              {templateCount}
+            </span>
+            <span className="material-symbols-outlined text-xs text-slate-400">
+              keyboard_arrow_up
+            </span>
+          </button>
+        )}
+
+        {/* Bottom Drawer Mesh Template Browser */}
+        {templateDrawerOpen && templateBrowserMode === 'drawer' && (
+          <MeshTemplateBrowser
+            mode="drawer"
+            isOpen={templateDrawerOpen}
+            onClose={() => setTemplateDrawerOpen(false)}
+            onSelectTemplate={handleSelectTemplate}
+            loadingTemplateId={loadingTemplateId}
+            recentlyAddedId={recentlyAddedId}
+            onToggleExpanded={() => setTemplateBrowserMode('modal')}
+          />
+        )}
       </div>
 
       {/* Right Panel: Properties */}
@@ -3348,6 +3528,19 @@ export default function Studio4D4() {
             )}
           </div>
         </div>
+      )}
+
+      {/* Full Grid Modal Mesh Template Browser */}
+      {templateDrawerOpen && templateBrowserMode === 'modal' && (
+        <MeshTemplateBrowser
+          mode="modal"
+          isOpen={templateDrawerOpen}
+          onClose={() => setTemplateDrawerOpen(false)}
+          onSelectTemplate={handleSelectTemplate}
+          loadingTemplateId={loadingTemplateId}
+          recentlyAddedId={recentlyAddedId}
+          onToggleExpanded={() => setTemplateBrowserMode('drawer')}
+        />
       )}
     </div>
   );

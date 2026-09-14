@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "lenis/dist/lenis.css";
 
 @theme {
   /* Colors from Stitch with User's requested Slate Blue palette */
@@ -152,4 +153,19 @@ video,
 .video-player {
   width: 100% !important;
   height: auto !important;
+}
+
+@keyframes marquee {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  display: inline-flex;
+  animation: marquee 28s linear infinite;
+  will-change: transform;
 }

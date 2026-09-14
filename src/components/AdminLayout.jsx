@@ -1,8 +1,16 @@
 import React from 'react';
-import { Link, Outlet, useLocation } from 'react-router-dom';
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 const AdminLayout = () => {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { currentUser, userType, logout } = useAuth();
+
+  const handleLogout = async () => {
+    await logout();
+    navigate('/admin/login');
+  };
 
   const getLinkClass = (path) => {
     const isActive = location.pathname.includes(path);
@@ -16,12 +24,18 @@ const AdminLayout = () => {
   return (
     <div className="bg-background text-on-background font-body-md antialiased min-h-screen flex">
       {/* SideNavBar */}
-      <nav className="bg-surface-container dark:bg-inverse-surface text-primary dark:text-primary-fixed font-label-caps text-label-caps docked full-height left-0 w-64 border-r border-outline-variant dark:border-outline flat no shadows hidden lg:flex flex-col h-screen fixed left-0 top-0 pt-24 pb-8 z-40">
-        <div className="px-6 mb-12">
-          <h1 className="font-headline-lg text-headline-lg-mobile text-primary tracking-widest">LUXE</h1>
-          <p className="text-on-surface-variant mt-2">Management Suite</p>
+      <nav className="bg-surface-container dark:bg-inverse-surface text-primary dark:text-primary-fixed font-label-caps text-label-caps docked full-height left-0 w-64 border-r border-outline-variant dark:border-outline flat no shadows hidden lg:flex flex-col h-screen fixed left-0 top-0 pt-20 pb-6 z-40">
+        <div className="px-6 mb-8">
+          <div className="flex items-center justify-between">
+            <h1 className="font-headline-lg text-headline-lg-mobile text-primary tracking-widest">LUXE</h1>
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/20 text-primary uppercase">
+              {userType || 'SUPERADMIN'}
+            </span>
+          </div>
+          <p className="text-on-surface-variant mt-1 text-xs">Management Suite</p>
         </div>
-        <div className="flex-1 px-2 space-y-2">
+
+        <div className="flex-1 px-2 space-y-1.5 overflow-y-auto">
           <Link to="/admin/dashboard" className={getLinkClass('/admin/dashboard')}>
             <span className="material-symbols-outlined">dashboard</span>
             <span>DASHBOARD</span>
@@ -42,17 +56,38 @@ const AdminLayout = () => {
             <span className="material-symbols-outlined">settings</span>
             <span>SETTINGS</span>
           </Link>
+
+          <div className="pt-4 mt-4 border-t border-outline-variant/30">
+            <Link to="/shop" className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-xs text-secondary hover:text-on-background transition-colors mx-2">
+              <span className="material-symbols-outlined text-base">storefront</span>
+              <span>VIEW SHOP</span>
+            </Link>
+          </div>
         </div>
-        <div className="px-6 mt-auto">
+
+        <div className="px-6 mt-auto pt-4 border-t border-outline-variant/30 space-y-3">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-surface-variant flex items-center justify-center">
-              <span className="material-symbols-outlined text-on-surface-variant">person</span>
+            <div className="w-9 h-9 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-xs">
+              {currentUser?.email ? currentUser.email.charAt(0).toUpperCase() : 'S'}
             </div>
-            <div>
-              <p className="font-bold text-on-surface">Admin User</p>
-              <p className="text-on-surface-variant text-xs">admin@luxe.com</p>
+            <div className="min-w-0 flex-1">
+              <p className="font-bold text-on-surface text-xs truncate">
+                {currentUser?.displayName || 'Superadmin'}
+              </p>
+              <p className="text-on-surface-variant text-[11px] truncate font-mono">
+                {currentUser?.email || 'brandonrobinson81@gmail.com'}
+              </p>
             </div>
           </div>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="w-full py-2 px-3 rounded bg-surface-variant hover:bg-error/20 hover:text-error text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-sm">logout</span>
+            <span>SIGN OUT</span>
+          </button>
         </div>
       </nav>
 

@@ -59,7 +59,7 @@ const OrderSuccess = () => {
           
           <div className="flex flex-col sm:flex-row gap-4 justify-center w-full max-w-[400px]">
             <Link 
-              to="/collections" 
+              to="/shop" 
               className="flex-1 py-4 bg-primary text-on-primary font-label-caps text-label-caps tracking-[0.1em] text-center hover:opacity-90 transition-opacity rounded"
             >
               CONTINUE SHOPPING
