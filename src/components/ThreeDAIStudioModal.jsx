@@ -114,11 +114,15 @@ export default function ThreeDAIStudioModal({
           }
         });
 
+        const baseName = file?.name ? file.name.replace(/\.[^/.]+$/, '') : 'tripo_model';
+        const modelFileName = `${baseName}.glb`;
+
         setGenerationStep('Ingesting compiled .GLB into 3D viewport...');
-        await appInstance.import3DModelFromUrl(glbUrl, file.name, {
+        await appInstance.import3DModelFromUrl(glbUrl, modelFileName, {
           source: 'tripo3d-p-series',
           model: selectedModel,
-          topology: topologyMode
+          topology: topologyMode,
+          cleanName: `${baseName} (Tripo 3D)`
         });
 
         appInstance.updateDiagnostics(`Generated 3D Model with Tripo3D [${currentModelDef.name}] (${topologyMode.toUpperCase()} topology).`);

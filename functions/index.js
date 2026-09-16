@@ -231,4 +231,58 @@ exports.tripoProxy = onRequest({ cors: true }, async (req, res) => {
   }
 });
 
+exports.assetProxy = onRequest({ cors: true, maxInstances: 10 }, async (req, res) => {
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+  res.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Range");
+
+  if (req.method === "OPTIONS") {
+    res.status(204).send("");
+    return;
+  }
+
+  try {
+    let targetUrl = req.query.url;
+    if (!targetUrl) {
+      const urlObj = new URL(req.url, 'http://localhost');
+      targetUrl = urlObj.searchParams.get('url');
+    }
+
+    if (!targetUrl) {
+      res.status(400).send("Missing url query parameter");
+      return;
+    }
+
+    const parsed = new URL(targetUrl);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      res.status(400).send("Invalid protocol");
+      return;
+    }
+
+    const response = await fetch(targetUrl);
+    if (!response.ok) {
+      res.status(response.status).send(`Upstream download failed: ${response.statusText}`);
+      return;
+    }
+
+    const contentType = response.headers.get("content-type") || "model/gltf-binary";
+    const contentLength = response.headers.get("content-length");
+
+    res.set("Content-Type", contentType);
+    if (contentLength) {
+      res.set("Content-Length", contentLength);
+    }
+    res.set("Cache-Control", "public, max-age=86400");
+
+    const arrayBuffer = await response.arrayBuffer();
+    res.send(Buffer.from(arrayBuffer));
+  } catch (err) {
+    logger.error("Asset Proxy Error:", err);
+    res.status(500).send(err.message);
+  }
+});
+
+exports.tripoAssetProxy = exports.assetProxy;
+
+
 

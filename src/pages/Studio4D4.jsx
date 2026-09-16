@@ -2115,14 +2115,37 @@ export default function Studio4D4() {
 
       async import3DModelFromUrl(url, filename = '', meta = {}) {
         if (!url) return;
-        const fname = filename || url.split('/').pop().split('?')[0];
-        const ext = fname.split('.').pop().toLowerCase() || 'glb';
+        let targetUrl = url;
+
+        // Auto-wrap Tripo3D, CloudFront, or other non-CORS CDNs with our CORS-safe proxy
+        if (
+          typeof targetUrl === 'string' &&
+          (targetUrl.includes('tripo3d.com') || targetUrl.includes('tripo-data') || targetUrl.includes('3daistudio.com')) &&
+          !targetUrl.includes('/api-asset-proxy') &&
+          !targetUrl.includes('/api-tripo-download')
+        ) {
+          targetUrl = `/api-asset-proxy?url=${encodeURIComponent(targetUrl)}`;
+        }
+
+        let fname = filename;
+        if (!fname) {
+          const rawLast = targetUrl.split('?')[0].split('/').pop();
+          fname = rawLast || 'model.glb';
+        }
+
+        // Ensure valid 3D extension for three.js loader dispatch
+        let ext = fname.split('.').pop().toLowerCase();
+        const valid3DExts = ['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply', 'dae'];
+        if (!valid3DExts.includes(ext)) {
+          fname = `${fname.replace(/\.[^/.]+$/, '')}.glb`;
+          ext = 'glb';
+        }
 
         this.setLoadingState(`Loading 3D Template: ${meta.cleanName || fname}...`, true);
         this.updateDiagnostics(`Fetching 3D mesh template "${meta.cleanName || fname}" [${ext.toUpperCase()}]...`);
 
         try {
-          const res = await fetch(url);
+          const res = await fetch(targetUrl);
           if (!res.ok) {
             throw new Error(`Failed to load asset from URL (HTTP ${res.status})`);
           }

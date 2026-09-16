@@ -282,7 +282,19 @@ export async function generate3DWithTripo({
 
           onProgress({ status: 'DOWNLOADING', message: 'Downloading compiled .GLB asset into scene...' });
 
-          // Ingest model into local browser Blob URL to avoid 5-minute CDN link expiration
+          const proxyDownloadUrl = `/api-asset-proxy?url=${encodeURIComponent(downloadUrl)}`;
+
+          // Ingest model into local browser Blob URL to avoid 5-minute CDN link expiration and bypass browser CORS
+          try {
+            const proxyRes = await fetch(proxyDownloadUrl);
+            if (proxyRes.ok) {
+              const blobData = await proxyRes.blob();
+              return URL.createObjectURL(blobData);
+            }
+          } catch (proxyErr) {
+            console.warn('Asset proxy fetch failed, attempting direct fetch:', proxyErr);
+          }
+
           try {
             const glbRes = await fetch(downloadUrl);
             if (glbRes.ok) {
@@ -290,10 +302,10 @@ export async function generate3DWithTripo({
               return URL.createObjectURL(blobData);
             }
           } catch {
-            // Fallback to direct URL if blob fetch fails
+            // Both blob fetches failed, fallback to proxyDownloadUrl
           }
 
-          return downloadUrl;
+          return proxyDownloadUrl;
         } else if (currentStatus === 'failed') {
           const failMsg = data.message || data.error || 'Tripo3D model generation failed.';
           throw new Error(`Tripo3D Generation Failed: ${failMsg}`);
