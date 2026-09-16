@@ -1,9 +1,11 @@
 /* eslint-disable react/prop-types */
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   getMeshTemplates,
+  fetchTemplatesFromBucket,
   getTemplateCategories,
-  getTemplateSubcategories
+  getTemplateSubcategories,
+  TEMPLATES_BUCKET_NAME
 } from '../utils/meshTemplates';
 
 export default function MeshTemplateBrowser({
@@ -18,10 +20,54 @@ export default function MeshTemplateBrowser({
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [selectedSubcategory, setSelectedSubcategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
+  const [allTemplates, setAllTemplates] = useState(() => getMeshTemplates());
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const scrollContainerRef = useRef(null);
 
-  // Load all templates dynamically
-  const allTemplates = useMemo(() => getMeshTemplates(), []);
+  // Sync with 3dtemplates storage bucket on mount and subscribe to bucket updates
+  useEffect(() => {
+    let isMounted = true;
+    async function loadFresh() {
+      setIsRefreshing(true);
+      try {
+        const fresh = await fetchTemplatesFromBucket();
+        if (isMounted && fresh && fresh.length > 0) {
+          setAllTemplates(fresh);
+        }
+      } catch (err) {
+        console.warn('Could not sync templates with 3dtemplates bucket:', err);
+      } finally {
+        if (isMounted) setIsRefreshing(false);
+      }
+    }
+    loadFresh();
+
+    const handleUpdate = (e) => {
+      if (isMounted && e.detail) {
+        setAllTemplates(e.detail);
+      }
+    };
+    window.addEventListener('3dtemplates-updated', handleUpdate);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener('3dtemplates-updated', handleUpdate);
+    };
+  }, []);
+
+  const handleRefreshBucket = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      const fresh = await fetchTemplatesFromBucket();
+      if (fresh && fresh.length > 0) {
+        setAllTemplates(fresh);
+      }
+    } catch (err) {
+      console.warn('Refresh failed:', err);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, []);
 
   // Compute available categories and subcategories
   const categories = useMemo(() => ['All', ...getTemplateCategories(allTemplates)], [allTemplates]);
@@ -84,6 +130,25 @@ export default function MeshTemplateBrowser({
   if (mode === 'sidebar') {
     return (
       <div className="flex flex-col h-full space-y-3">
+        {/* Storage Bucket Header */}
+        <div className="flex items-center justify-between px-1 py-0.5">
+          <div className="flex items-center gap-1.5 text-[10px] font-mono text-indigo-400 bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-500/30">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span>bucket: {TEMPLATES_BUCKET_NAME}</span>
+          </div>
+          <button
+            onClick={handleRefreshBucket}
+            disabled={isRefreshing}
+            className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors flex items-center gap-1 text-[10px] font-mono cursor-pointer"
+            title="Refresh templates from 3dtemplates storage bucket"
+          >
+            <span className={`material-symbols-outlined text-xs ${isRefreshing ? 'animate-spin text-indigo-400' : ''}`}>
+              refresh
+            </span>
+            <span>{isRefreshing ? 'Syncing...' : 'Sync'}</span>
+          </button>
+        </div>
+
         {/* Search */}
         <div className="relative">
           <input
@@ -231,8 +296,11 @@ export default function MeshTemplateBrowser({
               <div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
                   3D Mesh Template Library
-                  <span className="text-[11px] font-mono text-indigo-400 bg-indigo-950/80 px-2 py-0.5 rounded-full border border-indigo-500/30">
-                    {filteredTemplates.length} models
+                  <span className="text-[11px] font-mono text-indigo-400 bg-indigo-950/80 px-2 py-0.5 rounded-full border border-indigo-500/30 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>bucket: {TEMPLATES_BUCKET_NAME}</span>
+                    <span>•</span>
+                    <span>{filteredTemplates.length} models</span>
                   </span>
                 </h3>
                 <p className="text-xs text-slate-400">
@@ -242,6 +310,17 @@ export default function MeshTemplateBrowser({
             </div>
 
             <div className="flex items-center gap-2">
+              <button
+                onClick={handleRefreshBucket}
+                disabled={isRefreshing}
+                className="px-2 py-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer flex items-center gap-1 text-xs border border-slate-800"
+                title="Refresh templates from 3dtemplates storage bucket"
+              >
+                <span className={`material-symbols-outlined text-sm ${isRefreshing ? 'animate-spin text-indigo-400' : ''}`}>
+                  refresh
+                </span>
+                <span className="hidden sm:inline">{isRefreshing ? 'Syncing...' : 'Sync Bucket'}</span>
+              </button>
               {onToggleExpanded && (
                 <button
                   onClick={onToggleExpanded}
@@ -437,11 +516,23 @@ export default function MeshTemplateBrowser({
             <span className="material-symbols-outlined text-xs text-indigo-400">deployed_code</span>
           </div>
           <span className="text-xs font-bold text-white tracking-wide flex items-center gap-1.5">
-            3D Mesh Templates
-            <span className="text-[10px] font-mono text-indigo-400 bg-indigo-950 px-1.5 py-0.2 rounded border border-indigo-500/30">
-              {filteredTemplates.length}
+            3D Templates
+            <span className="text-[10px] font-mono text-indigo-400 bg-indigo-950 px-1.5 py-0.5 rounded border border-indigo-500/30 flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span>{TEMPLATES_BUCKET_NAME}</span>
+              <span>({filteredTemplates.length})</span>
             </span>
           </span>
+          <button
+            onClick={handleRefreshBucket}
+            disabled={isRefreshing}
+            className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors flex items-center gap-0.5 text-[10px] cursor-pointer"
+            title="Refresh templates from 3dtemplates storage bucket"
+          >
+            <span className={`material-symbols-outlined text-xs ${isRefreshing ? 'animate-spin text-indigo-400' : ''}`}>
+              refresh
+            </span>
+          </button>
         </div>
 
         {/* Category Tabs in Header */}

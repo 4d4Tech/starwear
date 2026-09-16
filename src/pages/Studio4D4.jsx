@@ -16,7 +16,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '../firebase';
 import MeshTemplateBrowser from '../components/MeshTemplateBrowser';
 import ThreeDAIStudioModal from '../components/ThreeDAIStudioModal';
-import { getMeshTemplates } from '../utils/meshTemplates';
+import { getMeshTemplates, fetchTemplatesFromBucket } from '../utils/meshTemplates';
 
 // =========================================================================
 // 1. FABRIC & PBR PHYSICAL MATERIAL PROFILES
@@ -1038,6 +1038,22 @@ export default function Studio4D4() {
   useEffect(() => {
     const templates = getMeshTemplates();
     setTemplateCount(templates.length);
+
+    fetchTemplatesFromBucket()
+      .then((fresh) => {
+        if (fresh && fresh.length > 0) {
+          setTemplateCount(fresh.length);
+        }
+      })
+      .catch(() => {});
+
+    const handleUpdate = (e) => {
+      if (e.detail && e.detail.length > 0) {
+        setTemplateCount(e.detail.length);
+      }
+    };
+    window.addEventListener('3dtemplates-updated', handleUpdate);
+    return () => window.removeEventListener('3dtemplates-updated', handleUpdate);
   }, []);
 
   useEffect(() => {
