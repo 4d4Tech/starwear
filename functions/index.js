@@ -8,7 +8,7 @@
  */
 
 const {setGlobalOptions} = require("firebase-functions");
-const {onCall} = require("firebase-functions/v2/https");
+const {onCall, onRequest} = require("firebase-functions/v2/https");
 const logger = require("firebase-functions/logger");
 const stripe = require('stripe')('sk_test_YOUR_STRIPE_SECRET_KEY'); // Replace with actual secret key
 
@@ -131,3 +131,104 @@ exports.pollGenerationStatus = onCall(async (request) => {
     throw new Error(error.message);
   }
 });
+
+exports.threeDAIProxy = onRequest({ cors: true }, async (req, res) => {
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept");
+
+  if (req.method === "OPTIONS") {
+    res.status(204).send("");
+    return;
+  }
+
+  try {
+    const rawPath = req.url.replace(/^\/api-3daistudio/, "") || req.url;
+    const cleanPath = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
+    const targetUrl = `https://api.3daistudio.com${cleanPath}`;
+
+    const headers = {
+      "Content-Type": req.headers["content-type"] || "application/json",
+      "Authorization": req.headers["authorization"] || "",
+      "Accept": req.headers["accept"] || "application/json"
+    };
+
+    const fetchOptions = {
+      method: req.method,
+      headers
+    };
+
+    if (["POST", "PUT", "PATCH"].includes(req.method)) {
+      fetchOptions.body = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+    }
+
+    const response = await fetch(targetUrl, fetchOptions);
+    res.status(response.status);
+
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const json = await response.json();
+      res.json(json);
+    } else {
+      const text = await response.text();
+      res.send(text);
+    }
+  } catch (err) {
+    logger.error("3DAI Proxy Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+exports.tripoProxy = onRequest({ cors: true }, async (req, res) => {
+  res.set("Access-Control-Allow-Origin", "*");
+  res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept");
+
+  if (req.method === "OPTIONS") {
+    res.status(204).send("");
+    return;
+  }
+
+  try {
+    const rawPath = req.url.replace(/^\/api-tripo/, "") || req.url;
+    const cleanPath = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
+    const targetUrl = `https://openapi.tripo3d.ai${cleanPath}`;
+
+    const headers = {};
+    if (req.headers["authorization"]) headers["Authorization"] = req.headers["authorization"];
+    if (req.headers["content-type"]) headers["Content-Type"] = req.headers["content-type"];
+    if (req.headers["accept"]) headers["Accept"] = req.headers["accept"];
+
+    const fetchOptions = {
+      method: req.method,
+      headers
+    };
+
+    if (["POST", "PUT", "PATCH"].includes(req.method)) {
+      if (req.rawBody) {
+        fetchOptions.body = req.rawBody;
+      } else if (typeof req.body === "string") {
+        fetchOptions.body = req.body;
+      } else if (req.body && Object.keys(req.body).length > 0) {
+        fetchOptions.body = JSON.stringify(req.body);
+      }
+    }
+
+    const response = await fetch(targetUrl, fetchOptions);
+    res.status(response.status);
+
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const json = await response.json();
+      res.json(json);
+    } else {
+      const text = await response.text();
+      res.send(text);
+    }
+  } catch (err) {
+    logger.error("Tripo Proxy Error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+

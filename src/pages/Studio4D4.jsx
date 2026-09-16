@@ -15,6 +15,7 @@ import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRe
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '../firebase';
 import MeshTemplateBrowser from '../components/MeshTemplateBrowser';
+import ThreeDAIStudioModal from '../components/ThreeDAIStudioModal';
 import { getMeshTemplates } from '../utils/meshTemplates';
 
 // =========================================================================
@@ -685,43 +686,14 @@ function extractForegroundAndClassify(img) {
   const segData = segImgData.data;
   const totalPixels = segW * segH;
 
-  // Check if image already has native transparent alpha
+  // 1. Check if image already has native transparent alpha
   let transparentCount = 0;
   for (let i = 3; i < segData.length; i += 4) {
     if (segData[i] < 200) transparentCount++;
   }
   const hasExistingAlpha = transparentCount > totalPixels * 0.02;
 
-  // Sample background palette from 4 borders & corners
-  const bgSamples = [];
-  for (let x = 0; x < segW; x += Math.max(1, Math.floor(segW / 30))) {
-    const topIdx = (0 * segW + x) * 4;
-    const btmIdx = ((segH - 1) * segW + x) * 4;
-    bgSamples.push([segData[topIdx], segData[topIdx + 1], segData[topIdx + 2]]);
-    bgSamples.push([segData[btmIdx], segData[btmIdx + 1], segData[btmIdx + 2]]);
-  }
-  for (let y = 0; y < segH; y += Math.max(1, Math.floor(segH / 30))) {
-    const leftIdx = (y * segW + 0) * 4;
-    const rightIdx = (y * segW + (segW - 1)) * 4;
-    bgSamples.push([segData[leftIdx], segData[leftIdx + 1], segData[leftIdx + 2]]);
-    bgSamples.push([segData[rightIdx], segData[rightIdx + 1], segData[rightIdx + 2]]);
-  }
-
-  let bgR = 0, bgG = 0, bgB = 0;
-  bgSamples.forEach((s) => { bgR += s[0]; bgG += s[1]; bgB += s[2]; });
-  bgR /= bgSamples.length;
-  bgG /= bgSamples.length;
-  bgB /= bgSamples.length;
-
-  let bgVariance = 0;
-  bgSamples.forEach((s) => {
-    bgVariance += Math.sqrt((s[0] - bgR) ** 2 + (s[1] - bgG) ** 2 + (s[2] - bgB) ** 2);
-  });
-  bgVariance /= bgSamples.length;
-
-  const colorTolerance = Math.max(26, Math.min(60, bgVariance * 2.0 + 24));
-
-  // Flood Fill from 4 Borders
+  // 2. Multi-Corner Bilinear Background Model & Gradient Edge Barrier
   const mask = new Uint8Array(totalPixels);
 
   if (hasExistingAlpha) {
@@ -729,16 +701,69 @@ function extractForegroundAndClassify(img) {
       mask[i] = segData[i * 4 + 3] > 80 ? 1 : 0;
     }
   } else {
+    // Sample 4 corner regions (5x5 samples each) to form bilinear gradient background plane
+    const sampleCorner = (startX, startY) => {
+      let r = 0, g = 0, b = 0, count = 0;
+      for (let dy = 0; dy < 5; dy++) {
+        for (let dx = 0; dx < 5; dx++) {
+          const cx = Math.max(0, Math.min(segW - 1, startX + dx));
+          const cy = Math.max(0, Math.min(segH - 1, startY + dy));
+          const idx = (cy * segW + cx) * 4;
+          r += segData[idx];
+          g += segData[idx + 1];
+          b += segData[idx + 2];
+          count++;
+        }
+      }
+      return [r / count, g / count, b / count];
+    };
+
+    const cTL = sampleCorner(0, 0);
+    const cTR = sampleCorner(segW - 5, 0);
+    const cBL = sampleCorner(0, segH - 5);
+    const cBR = sampleCorner(segW - 5, segH - 5);
+
+    // Compute luminance gradients for edge barrier
+    const gradMag = new Float32Array(totalPixels);
+    for (let y = 1; y < segH - 1; y++) {
+      const yOffset = y * segW;
+      for (let x = 1; x < segW - 1; x++) {
+        const idx = yOffset + x;
+        const lumL = 0.299 * segData[(idx - 1) * 4] + 0.587 * segData[(idx - 1) * 4 + 1] + 0.114 * segData[(idx - 1) * 4 + 2];
+        const lumR = 0.299 * segData[(idx + 1) * 4] + 0.587 * segData[(idx + 1) * 4 + 1] + 0.114 * segData[(idx + 1) * 4 + 2];
+        const lumU = 0.299 * segData[(idx - segW) * 4] + 0.587 * segData[(idx - segW) * 4 + 1] + 0.114 * segData[(idx - segW) * 4 + 2];
+        const lumD = 0.299 * segData[(idx + segW) * 4] + 0.587 * segData[(idx + segW) * 4 + 1] + 0.114 * segData[(idx + segW) * 4 + 2];
+        gradMag[idx] = Math.abs(lumR - lumL) + Math.abs(lumD - lumU);
+      }
+    }
+
+    // Bilinear interpolated background color at (x, y)
+    const getBgColor = (x, y) => {
+      const u = x / Math.max(1, segW - 1);
+      const v = y / Math.max(1, segH - 1);
+      const r = (1 - u) * (1 - v) * cTL[0] + u * (1 - v) * cTR[0] + (1 - u) * v * cBL[0] + u * v * cBR[0];
+      const g = (1 - u) * (1 - v) * cTL[1] + u * (1 - v) * cTR[1] + (1 - u) * v * cBL[1] + u * v * cBR[1];
+      const b = (1 - u) * (1 - v) * cTL[2] + u * (1 - v) * cTR[2] + (1 - u) * v * cBL[2] + u * v * cBR[2];
+      return [r, g, b];
+    };
+
+    const baseTolerance = 34;
     const visited = new Uint8Array(totalPixels);
     const queue = [];
 
-    const isBg = (idx) => {
+    const isBg = (x, y, idx) => {
+      const [bgR, bgG, bgB] = getBgColor(x, y);
       const r = segData[idx * 4];
       const g = segData[idx * 4 + 1];
       const b = segData[idx * 4 + 2];
-      return Math.sqrt((r - bgR) ** 2 + (g - bgG) ** 2 + (b - bgB) ** 2) <= colorTolerance;
+      const dist = Math.sqrt((r - bgR) ** 2 + (g - bgG) ** 2 + (b - bgB) ** 2);
+
+      // Edge barrier: if gradient is strong, require much tighter color similarity to prevent leaking
+      const maxTol = gradMag[idx] > 32 ? baseTolerance * 0.55 : baseTolerance;
+      return dist <= maxTol;
     };
 
+    // Initialize flood fill from all 4 perimeter borders
     for (let x = 0; x < segW; x++) {
       queue.push(x);
       queue.push((segH - 1) * segW + x);
@@ -753,10 +778,11 @@ function extractForegroundAndClassify(img) {
       if (visited[idx]) continue;
       visited[idx] = 1;
 
-      if (isBg(idx)) {
+      const x = idx % segW;
+      const y = Math.floor(idx / segW);
+
+      if (isBg(x, y, idx)) {
         mask[idx] = 0;
-        const x = idx % segW;
-        const y = Math.floor(idx / segW);
         if (x > 0 && !visited[idx - 1]) queue.push(idx - 1);
         if (x < segW - 1 && !visited[idx + 1]) queue.push(idx + 1);
         if (y > 0 && !visited[idx - segW]) queue.push(idx - segW);
@@ -766,12 +792,13 @@ function extractForegroundAndClassify(img) {
       }
     }
 
+    // All unvisited internal pixels belong to foreground
     for (let i = 0; i < totalPixels; i++) {
       if (!visited[i]) mask[i] = 1;
     }
   }
 
-  // Calculate Foreground Bounding Box
+  // 3. Calculate Foreground Bounding Box
   let minX = segW, minY = segH, maxX = 0, maxY = 0;
   let fgCount = 0;
   for (let y = 0; y < segH; y++) {
@@ -798,7 +825,7 @@ function extractForegroundAndClassify(img) {
   const fgW = Math.max(1, maxX - minX + 1);
   const fgH = Math.max(1, maxY - minY + 1);
 
-  // Full-Res Clean Transparent Cutout Canvas
+  // 4. Full-Res Cutout Canvas with Edge Defringing
   const outCanvas = document.createElement('canvas');
   outCanvas.width = origW;
   outCanvas.height = origH;
@@ -820,11 +847,13 @@ function extractForegroundAndClassify(img) {
       if (!isFg) {
         fullData[p + 3] = 0;
       } else {
-        if (x === 0 || x === origW - 1 || y === 0 || y === origH - 1 ||
-            (segX > 0 && mask[segY * segW + (segX - 1)] === 0) ||
-            (segX < segW - 1 && mask[segY * segW + (segX + 1)] === 0) ||
-            (segY > 0 && mask[(segY - 1) * segW + segX] === 0) ||
-            (segY < segH - 1 && mask[(segY + 1) * segW + segX] === 0)) {
+        const isBorder = x === 0 || x === origW - 1 || y === 0 || y === origH - 1 ||
+          (segX > 0 && mask[segY * segW + (segX - 1)] === 0) ||
+          (segX < segW - 1 && mask[segY * segW + (segX + 1)] === 0) ||
+          (segY > 0 && mask[(segY - 1) * segW + segX] === 0) ||
+          (segY < segH - 1 && mask[(segY + 1) * segW + segX] === 0);
+
+        if (isBorder) {
           sumEdgeR += fullData[p];
           sumEdgeG += fullData[p + 1];
           sumEdgeB += fullData[p + 2];
@@ -986,7 +1015,7 @@ function extractRadialContour(maskGrid, w, h) {
 // 4. STUDIO 4D*4 MAIN REACT COMPONENT
 // =========================================================================
 export default function Studio4D4() {
-  const [pipelineModalData, setPipelineModalData] = useState(null);
+  const [threeDAIModalData, setThreeDAIModalData] = useState(null);
   const [videoModalOpen, setVideoModalOpen] = useState(false);
   const [videoTab, setVideoTab] = useState('webgl');
   const [videoUrlInput, setVideoUrlInput] = useState('');
@@ -2357,7 +2386,7 @@ export default function Studio4D4() {
       appRef.current.setLoadingState('Done', false);
     }
 
-    setPipelineModalData({
+    setThreeDAIModalData({
       file,
       segResult
     });
@@ -2496,13 +2525,14 @@ export default function Studio4D4() {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="p-2.5 border border-slate-700 hover:border-indigo-500 rounded-xl text-center bg-slate-950/40 hover:bg-slate-800/40 transition-all cursor-pointer group flex flex-col items-center justify-center gap-1"
+              className="p-2.5 border border-rose-500/40 hover:border-rose-400 bg-gradient-to-b from-rose-950/40 to-purple-950/30 hover:from-rose-900/50 hover:to-purple-900/40 rounded-xl text-center transition-all cursor-pointer group flex flex-col items-center justify-center gap-1 shadow-sm"
+              title="Tripo3D: Convert 2D image to 3D model with P-Series AI & clean quad topology"
             >
-              <span className="material-symbols-outlined text-2xl text-slate-400 group-hover:text-indigo-400 transition-colors">
-                add_photo_alternate
+              <span className="material-symbols-outlined text-2xl text-rose-400 group-hover:scale-110 transition-transform">
+                auto_awesome
               </span>
-              <span className="text-[11px] font-semibold text-slate-300">2D Image</span>
-              <span className="text-[8px] text-slate-500">Auto Mesh</span>
+              <span className="text-[11px] font-bold text-rose-200">2D to 3D</span>
+              <span className="text-[8px] text-rose-400/90 font-mono">Tripo3D P-Series</span>
             </button>
 
             <button
@@ -2975,203 +3005,15 @@ export default function Studio4D4() {
       </div>
 
       {/* =================================================================== */}
-      {/* 5. INTERACTIVE 3D RECONSTRUCTION PIPELINE MODAL                    */}
+      {/* 5. TRIPO3D P-SERIES IMAGE TO 3D GENERATOR MODAL                     */}
       {/* =================================================================== */}
-      {pipelineModalData && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/85 backdrop-blur-md p-4 animate-fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl max-w-xl w-full p-6 space-y-5 max-h-[90vh] overflow-y-auto studio-scroll">
-            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-indigo-400 text-2xl">auto_awesome</span>
-                <h3 className="text-lg font-bold text-white tracking-wide">2D-to-3D Smart Reconstruction</h3>
-              </div>
-              <button
-                onClick={() => setPipelineModalData(null)}
-                className="text-slate-400 hover:text-white text-lg font-bold px-2 py-1 rounded"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Side-by-Side Image Cutout Comparison */}
-            <div className="grid grid-cols-2 gap-3 bg-slate-950 p-3 rounded-xl border border-slate-800">
-              <div className="flex flex-col items-center text-center">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-                  Original Image
-                </span>
-                <div className="w-full h-36 bg-slate-900 rounded-lg overflow-hidden flex items-center justify-center border border-slate-800">
-                  <img
-                    src={URL.createObjectURL(pipelineModalData.file)}
-                    alt="Original"
-                    className="max-h-full max-w-full object-contain"
-                  />
-                </div>
-              </div>
-              <div className="flex flex-col items-center text-center">
-                <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                  <span className="material-symbols-outlined text-xs">check_circle</span>
-                  Extracted Foreground
-                </span>
-                <div
-                  className="w-full h-36 rounded-lg overflow-hidden flex items-center justify-center border border-emerald-500/30"
-                  style={{
-                    backgroundImage:
-                      'linear-gradient(45deg, #1e293b 25%, transparent 25%), linear-gradient(-45deg, #1e293b 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #1e293b 75%), linear-gradient(-45deg, transparent 75%, #1e293b 75%)',
-                    backgroundSize: '16px 16px',
-                    backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
-                    backgroundColor: '#0f172a'
-                  }}
-                >
-                  <img
-                    src={pipelineModalData.segResult.extractedDataUrl}
-                    alt="Extracted Cutout"
-                    className="max-h-full max-w-full object-contain"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* AI Classification Badge */}
-            <div className="p-3 bg-gradient-to-r from-indigo-950/80 to-purple-950/80 border border-indigo-500/40 rounded-xl flex items-center gap-3">
-              <span className="material-symbols-outlined text-3xl text-indigo-400">
-                {pipelineModalData.segResult.icon}
-              </span>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-indigo-300 uppercase tracking-wider">
-                    ✨ AI Detected Object Type:
-                  </span>
-                  <span className="text-xs font-extrabold text-white bg-indigo-600/60 px-2 py-0.5 rounded-full border border-indigo-400/40">
-                    {pipelineModalData.segResult.label}
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  {pipelineModalData.segResult.description}
-                </p>
-              </div>
-            </div>
-
-            {/* Pipeline Options Grid */}
-            <div className="space-y-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block">
-                Select 3D Geometry Pipeline:
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {/* 1. Recommended Auto */}
-                <button
-                  onClick={async () => {
-                    const { segResult, file } = pipelineModalData;
-                    setPipelineModalData(null);
-                    if (appRef.current) {
-                      await appRef.current.buildIntelligent3D(segResult, segResult.archetype, file.name);
-                    }
-                  }}
-                  className="p-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-left border border-indigo-400/50 shadow-lg shadow-indigo-600/20 transition-all flex items-center gap-2.5 col-span-1 sm:col-span-2 group"
-                >
-                  <span className="material-symbols-outlined text-2xl text-amber-300 group-hover:scale-110 transition-transform">
-                    rocket_launch
-                  </span>
-                  <div>
-                    <div className="font-bold text-xs">🚀 Auto-Reconstruct (Recommended)</div>
-                    <div className="text-[11px] text-indigo-200">
-                      Builds {pipelineModalData.segResult.label} with specialized UV mapping.
-                    </div>
-                  </div>
-                </button>
-
-                {/* 2. Garment / Apparel */}
-                <button
-                  onClick={async () => {
-                    const { segResult, file } = pipelineModalData;
-                    setPipelineModalData(null);
-                    if (appRef.current) {
-                      await appRef.current.buildIntelligent3D(segResult, 'GARMENT_APPAREL', file.name);
-                    }
-                  }}
-                  className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-left border border-slate-700 transition-all flex items-center gap-2"
-                >
-                  <span className="material-symbols-outlined text-indigo-400 text-xl">checkroom</span>
-                  <div>
-                    <div className="font-bold text-xs">👕 Garment / T-Shirt</div>
-                    <div className="text-[10px] text-slate-400">Pillowy fabric thickness & cotton PBR</div>
-                  </div>
-                </button>
-
-                {/* 3. Cylindrical Can */}
-                <button
-                  onClick={async () => {
-                    const { segResult, file } = pipelineModalData;
-                    setPipelineModalData(null);
-                    if (appRef.current) {
-                      await appRef.current.buildIntelligent3D(segResult, 'CYLINDRICAL', file.name);
-                    }
-                  }}
-                  className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-left border border-slate-700 transition-all flex items-center gap-2"
-                >
-                  <span className="material-symbols-outlined text-indigo-400 text-xl">local_drink</span>
-                  <div>
-                    <div className="font-bold text-xs">🥤 3D Can / Cylinder</div>
-                    <div className="text-[10px] text-slate-400">Seamless wrap UVs & metallic rim</div>
-                  </div>
-                </button>
-
-                {/* 4. Screen / Boxy */}
-                <button
-                  onClick={async () => {
-                    const { segResult, file } = pipelineModalData;
-                    setPipelineModalData(null);
-                    if (appRef.current) {
-                      await appRef.current.buildIntelligent3D(segResult, 'SCREEN_BOXY', file.name);
-                    }
-                  }}
-                  className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-left border border-slate-700 transition-all flex items-center gap-2"
-                >
-                  <span className="material-symbols-outlined text-indigo-400 text-xl">tv</span>
-                  <div>
-                    <div className="font-bold text-xs">📺 3D Screen / Box</div>
-                    <div className="text-[10px] text-slate-400">Beveled housing with display panel</div>
-                  </div>
-                </button>
-
-                {/* 5. Organic Figure */}
-                <button
-                  onClick={async () => {
-                    const { segResult, file } = pipelineModalData;
-                    setPipelineModalData(null);
-                    if (appRef.current) {
-                      await appRef.current.buildIntelligent3D(segResult, 'ORGANIC_FIGURE', file.name);
-                    }
-                  }}
-                  className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-left border border-slate-700 transition-all flex items-center gap-2"
-                >
-                  <span className="material-symbols-outlined text-indigo-400 text-xl">pets</span>
-                  <div>
-                    <div className="font-bold text-xs">🐾 Organic Animal / Figure</div>
-                    <div className="text-[10px] text-slate-400">Full 3D geodesic balloon inflation</div>
-                  </div>
-                </button>
-
-                {/* 6. Logo / Graphic */}
-                <button
-                  onClick={async () => {
-                    const { segResult, file } = pipelineModalData;
-                    setPipelineModalData(null);
-                    if (appRef.current) {
-                      await appRef.current.buildIntelligent3D(segResult, 'LOGO_GRAPHIC', file.name);
-                    }
-                  }}
-                  className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-left border border-slate-700 transition-all flex items-center gap-2 col-span-1 sm:col-span-2"
-                >
-                  <span className="material-symbols-outlined text-indigo-400 text-xl">label</span>
-                  <div>
-                    <div className="font-bold text-xs">🏷️ 3D Logo / Vector Graphic Extrusion</div>
-                    <div className="text-[10px] text-slate-400">Precision beveled edge with flat front/back faces</div>
-                  </div>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+      {threeDAIModalData && (
+        <ThreeDAIStudioModal
+          isOpen={!!threeDAIModalData}
+          onClose={() => setThreeDAIModalData(null)}
+          data={threeDAIModalData}
+          appInstance={appRef.current}
+        />
       )}
 
       {/* Hidden Video File Input */}

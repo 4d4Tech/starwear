@@ -8,4 +8,20 @@ export default defineConfig({
     tailwindcss(),
     react()
   ],
+  server: {
+    proxy: {
+      '/api-3daistudio': {
+        target: 'https://api.3daistudio.com',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api-3daistudio/, '')
+      },
+      '/api-tripo': {
+        target: 'https://openapi.tripo3d.ai',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api-tripo/, '')
+      }
+    }
+  }
 })

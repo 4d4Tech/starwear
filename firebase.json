@@ -28,6 +28,14 @@
     ],
     "rewrites": [
       {
+        "source": "/api-tripo/**",
+        "function": "tripoProxy"
+      },
+      {
+        "source": "/api-3daistudio/**",
+        "function": "threeDAIProxy"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
