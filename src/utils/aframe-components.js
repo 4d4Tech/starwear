@@ -376,6 +376,7 @@ if (typeof AFRAME !== 'undefined') {
       schema: {
         src: { type: 'string', default: '' },
         playing: { type: 'boolean', default: true },
+        muted: { type: 'boolean', default: false },
         targetMesh: { type: 'string', default: 'auto' },
         flipX: { type: 'boolean', default: false }
       },
@@ -386,6 +387,7 @@ if (typeof AFRAME !== 'undefined') {
         this.cssTargetNode = null;
         this.youtubeIframe = null;
         this.baseScale = 0.003125;
+        this.isMuted = this.data.muted !== undefined ? this.data.muted : false;
 
         const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
         this._vWorld = new THREE_LIB.Vector3();
@@ -395,14 +397,22 @@ if (typeof AFRAME !== 'undefined') {
 
         this.applyVideo = this.applyVideo.bind(this);
         this.unlockVideos = this.unlockVideos.bind(this);
+        this.setMuted = this.setMuted.bind(this);
         this.applyCSS3DYouTube = this.applyCSS3DYouTube.bind(this);
+
+        this.onSetMute = (e) => {
+          const nextMuted = (e && e.detail && e.detail.muted !== undefined) ? e.detail.muted : !this.isMuted;
+          this.setMuted(nextMuted);
+        };
+        this.el.addEventListener('set-video-mute', this.onSetMute);
+        window.addEventListener('starwear-set-video-mute', this.onSetMute);
 
         this.el.addEventListener('model-loaded', this.applyVideo);
         if (this.el.getObject3D('mesh')) {
           this.applyVideo();
         }
 
-        // Global interaction listeners to unlock mobile autoplay restrictions if needed
+        // Global interaction listeners to unlock mobile autoplay restrictions and sound if unmuted
         ['pointerdown', 'touchstart', 'click', 'keydown'].forEach((evt) => {
           window.addEventListener(evt, this.unlockVideos, { passive: true });
         });
@@ -412,11 +422,84 @@ if (typeof AFRAME !== 'undefined') {
         if (sceneEl) {
           sceneEl.addEventListener('targetFound', this.applyVideo);
           sceneEl.addEventListener('arReady', this.applyVideo);
+          sceneEl.addEventListener('set-video-mute', this.onSetMute);
+        }
+      },
+      setMuted: function (muted) {
+        this.isMuted = !!muted;
+        if (this.youtubeIframe && this.youtubeIframe.contentWindow) {
+          try {
+            const func = this.isMuted ? 'mute' : 'unMute';
+            this.youtubeIframe.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: func, args: [] }),
+              '*'
+            );
+            if (!this.isMuted) {
+              this.youtubeIframe.contentWindow.postMessage(
+                JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                '*'
+              );
+            }
+          } catch (e) {}
+        }
+        if (this.videos && this.videos.length > 0) {
+          this.videos.forEach((v) => {
+            if (v) {
+              v.muted = this.isMuted;
+              if (!this.isMuted) {
+                v.volume = 1.0;
+                if (this.data.playing && v.paused) {
+                  v.play().catch(() => {});
+                }
+              }
+            }
+          });
+        }
+        if (typeof this._updateMuteBadge === 'function') {
+          this._updateMuteBadge();
+        }
+        window.dispatchEvent(
+          new CustomEvent('starwear-video-mute-status', { detail: { muted: this.isMuted } })
+        );
+      },
+      unlockVideos: function () {
+        if (!this.data.playing) return;
+        if (this.videos && this.videos.length > 0) {
+          this.videos.forEach((v) => {
+            if (v && v.paused) {
+              v.play().catch(() => {});
+            }
+            if (!this.isMuted) {
+              v.muted = false;
+              v.volume = 1.0;
+            }
+          });
+        }
+        if (this.youtubeIframe && this.youtubeIframe.contentWindow) {
+          try {
+            this.youtubeIframe.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
+              '*'
+            );
+            if (!this.isMuted) {
+              this.youtubeIframe.contentWindow.postMessage(
+                JSON.stringify({ event: 'command', func: 'unMute', args: [] }),
+                '*'
+              );
+              this.youtubeIframe.contentWindow.postMessage(
+                JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                '*'
+              );
+            }
+          } catch {}
         }
       },
       update: function (oldData) {
         if (!oldData || oldData.src !== this.data.src || oldData.targetMesh !== this.data.targetMesh || oldData.flipX !== this.data.flipX) {
           this.applyVideo();
+        }
+        if (oldData && oldData.muted !== this.data.muted) {
+          this.setMuted(this.data.muted);
         }
         if (!oldData || oldData.playing !== this.data.playing) {
           if (this.youtubeIframe && this.youtubeIframe.contentWindow) {
@@ -426,13 +509,17 @@ if (typeof AFRAME !== 'undefined') {
             } catch {}
           }
           if (this.data.playing) {
-            this.videos.forEach((v) => {
-              if (v && v.paused) v.play().catch(() => {});
-            });
+            if (this.videos) {
+              this.videos.forEach((v) => {
+                if (v && v.paused) v.play().catch(() => {});
+              });
+            }
           } else {
-            this.videos.forEach((v) => {
-              if (v && !v.paused) v.pause();
-            });
+            if (this.videos) {
+              this.videos.forEach((v) => {
+                if (v && !v.paused) v.pause();
+              });
+            }
           }
         }
       },
@@ -523,6 +610,7 @@ if (typeof AFRAME !== 'undefined') {
         containerDiv.style.background = '#090d16';
         containerDiv.style.borderRadius = '12px';
         containerDiv.style.overflow = 'hidden';
+        containerDiv.style.position = 'relative';
         containerDiv.style.pointerEvents = 'auto'; // allow user interaction with YouTube player
         containerDiv.style.boxShadow = '0 20px 50px rgba(0,0,0,0.85)';
         containerDiv.style.border = '2px solid rgba(99, 102, 241, 0.5)';
@@ -535,8 +623,55 @@ if (typeof AFRAME !== 'undefined') {
         iframe.src = `https://www.youtube-nocookie.com/embed/${youtubeId}?enablejsapi=1&autoplay=1&mute=1&controls=1&loop=1&playlist=${youtubeId}${originParam}`;
         iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
         iframe.allowFullscreen = true;
+
+        iframe.addEventListener('load', () => {
+          if (!this.isMuted) {
+            setTimeout(() => {
+              try {
+                iframe.contentWindow?.postMessage(
+                  JSON.stringify({ event: 'command', func: 'unMute', args: [] }),
+                  '*'
+                );
+                iframe.contentWindow?.postMessage(
+                  JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                  '*'
+                );
+              } catch (e) {}
+            }, 600);
+          }
+        });
+
         containerDiv.appendChild(iframe);
         this.youtubeIframe = iframe;
+
+        // Floating Sound Badge on the 3D screen overlay
+        const muteBadge = document.createElement('button');
+        muteBadge.type = 'button';
+        muteBadge.className = 'aframe-youtube-sound-toggle';
+        muteBadge.style.cssText = 'position:absolute;top:12px;right:12px;z-index:99;background:rgba(15,23,42,0.9);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:white;border:1px solid rgba(255,255,255,0.3);border-radius:9999px;padding:6px 12px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 4px 15px rgba(0,0,0,0.7);pointer-events:auto;user-select:none;transition:transform 0.15s ease;';
+
+        const updateMuteBadgeUI = () => {
+          if (this.isMuted) {
+            muteBadge.innerHTML = '<span style="font-size:14px;">🔇</span><span>Sound Off (Tap to Unmute)</span>';
+            muteBadge.style.background = 'rgba(225, 29, 72, 0.9)';
+            muteBadge.style.borderColor = 'rgba(253, 164, 175, 0.5)';
+          } else {
+            muteBadge.innerHTML = '<span style="font-size:14px;">🔊</span><span>Sound On (Tap to Mute)</span>';
+            muteBadge.style.background = 'rgba(16, 185, 129, 0.9)';
+            muteBadge.style.borderColor = 'rgba(110, 231, 183, 0.5)';
+          }
+        };
+        this._updateMuteBadge = updateMuteBadgeUI;
+        updateMuteBadgeUI();
+
+        const handleBadgeToggle = (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          this.setMuted(!this.isMuted);
+        };
+        muteBadge.addEventListener('click', handleBadgeToggle);
+        muteBadge.addEventListener('touchend', handleBadgeToggle);
+        containerDiv.appendChild(muteBadge);
 
         // 5. Create CSS3DObject
         const cssObject = new CSS3DObject(containerDiv);
@@ -841,31 +976,19 @@ if (typeof AFRAME !== 'undefined') {
           }
         }
       },
-      update: function (oldData) {
-        if (oldData && (oldData.src !== this.data.src || oldData.targetMesh !== this.data.targetMesh)) {
-          this.applyVideo();
-        }
-        if (this.youtubeIframe && this.youtubeIframe.contentWindow) {
-          try {
-            const cmd = this.data.playing ? 'playVideo' : 'pauseVideo';
-            this.youtubeIframe.contentWindow.postMessage(
-              JSON.stringify({ event: 'command', func: cmd, args: [] }),
-              '*'
-            );
-          } catch (e) {}
-        }
-        if (this.data.playing) {
-          this.videos.forEach((v) => v.play().catch(() => {}));
-        } else {
-          this.videos.forEach((v) => v.pause());
-        }
-      },
       remove: function () {
         this.el.removeEventListener('model-loaded', this.applyVideo);
+        if (this.onSetMute) {
+          this.el.removeEventListener('set-video-mute', this.onSetMute);
+          window.removeEventListener('starwear-set-video-mute', this.onSetMute);
+        }
         const sceneEl = this.el.sceneEl;
         if (sceneEl) {
           sceneEl.removeEventListener('targetFound', this.applyVideo);
           sceneEl.removeEventListener('arReady', this.applyVideo);
+          if (this.onSetMute) {
+            sceneEl.removeEventListener('set-video-mute', this.onSetMute);
+          }
           if (this.cssObject && sceneEl._css3dScene) {
             sceneEl._css3dScene.remove(this.cssObject);
             this.cssObject = null;

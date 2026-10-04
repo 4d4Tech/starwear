@@ -568,6 +568,17 @@ const ARTest = () => {
   const [showBuyButton, setShowBuyButton] = useState(true);
   const [buyButtonColor, setBuyButtonColor] = useState('#000000');
   const [mediaPlaying, setMediaPlaying] = useState(true);
+  const [mediaMuted, setMediaMuted] = useState(false);
+
+  useEffect(() => {
+    const handleMuteStatus = (e) => {
+      if (e && e.detail && typeof e.detail.muted === 'boolean') {
+        setMediaMuted(e.detail.muted);
+      }
+    };
+    window.addEventListener('starwear-video-mute-status', handleMuteStatus);
+    return () => window.removeEventListener('starwear-video-mute-status', handleMuteStatus);
+  }, []);
 
   // Video Layer & Local Asset Testing States
   const [videoMode, setVideoMode] = useState('webgl'); // 'webgl' | 'youtube'
@@ -1800,6 +1811,30 @@ const ARTest = () => {
     setMediaPlaying((prev) => !prev);
   };
 
+  const toggleMediaMute = () => {
+    const nextMuted = !mediaMuted;
+    setMediaMuted(nextMuted);
+    const scene = document.querySelector('a-scene');
+    if (scene) {
+      scene.dispatchEvent(new CustomEvent('set-video-mute', { detail: { muted: nextMuted } }));
+    }
+    window.dispatchEvent(new CustomEvent('starwear-set-video-mute', { detail: { muted: nextMuted } }));
+    document.querySelectorAll('iframe').forEach((ifr) => {
+      try {
+        ifr.contentWindow?.postMessage(
+          JSON.stringify({ event: 'command', func: nextMuted ? 'mute' : 'unMute', args: [] }),
+          '*'
+        );
+        if (!nextMuted) {
+          ifr.contentWindow?.postMessage(
+            JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+            '*'
+          );
+        }
+      } catch (e) {}
+    });
+  };
+
   const handleCheckout = async () => {
     setCheckoutLoading(true);
     try {
@@ -2889,6 +2924,21 @@ const ARTest = () => {
                     {mediaPlaying ? '▶ Playing' : '⏸ Paused'}
                   </button>
                 </div>
+
+                <div className="flex items-center justify-between pt-1 border-t border-neutral-800 text-xs">
+                  <span className="text-neutral-300">Video Audio / Sound</span>
+                  <button
+                    type="button"
+                    onClick={toggleMediaMute}
+                    className={`px-3 py-1 rounded font-medium text-xs transition-colors flex items-center gap-1.5 ${!mediaMuted ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-300'
+                      }`}
+                  >
+                    <span className="material-symbols-outlined text-sm">
+                      {!mediaMuted ? 'volume_up' : 'volume_off'}
+                    </span>
+                    {!mediaMuted ? 'Sound On' : 'Muted'}
+                  </button>
+                </div>
               </div>
 
               {/* Camera Tracking Status & Quick Jump Card in Sidebar */}
@@ -3451,7 +3501,7 @@ const ARTest = () => {
                   : {})}
                 model-auto-center="enabled: true"
                 dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-                play-gltf-video={`src: ${activeVideoUrl || customVideoUrl || arData?.videoUrl || ''}; playing: ${mediaPlaying}; targetMesh: ${videoTargetMesh}; flipX: ${videoFlipX}`}
+                play-gltf-video={`src: ${activeVideoUrl || customVideoUrl || arData?.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${videoTargetMesh}; flipX: ${videoFlipX}`}
                 play-gltf-animation={`playing: ${mediaPlaying}`}
               >
               </a-gltf-model>
@@ -3537,8 +3587,8 @@ const ARTest = () => {
           </div>
         )}
 
-        {/* Media Play/Pause Floating Action Button */}
-        <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 1000 }}>
+        {/* Media Controls Floating Action Buttons (Play/Pause + Sound Mute/Unmute) */}
+        <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 1000, display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button
             onClick={toggleMedia}
             style={{
@@ -3561,11 +3611,34 @@ const ARTest = () => {
               {mediaPlaying ? 'pause' : 'play_arrow'}
             </span>
           </button>
+
+          <button
+            onClick={toggleMediaMute}
+            style={{
+              backgroundColor: mediaMuted ? 'rgba(225, 29, 72, 0.85)' : 'rgba(16, 185, 129, 0.85)',
+              color: 'white',
+              border: '1px solid rgba(255, 255, 255, 0.3)',
+              borderRadius: '50%',
+              width: '46px',
+              height: '46px',
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+              backdropFilter: 'blur(8px)'
+            }}
+            title={mediaMuted ? 'Unmute YouTube / Video Sound' : 'Mute YouTube / Video Sound'}
+          >
+            <span className="material-symbols-outlined text-xl">
+              {mediaMuted ? 'volume_off' : 'volume_up'}
+            </span>
+          </button>
         </div>
 
         {/* Floating Active Target HUD Indicator */}
         {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
-          <div className="absolute top-5 left-20 z-40 pointer-events-none">
+          <div className="absolute top-5 left-[132px] z-40 pointer-events-none">
             <div className="px-3 py-1.5 rounded-full bg-black/80 backdrop-blur-md border border-neutral-700 text-xs font-medium text-neutral-200 shadow-xl flex items-center gap-2">
               <span className={`w-2 h-2 rounded-full ${selectedMesh ? 'bg-indigo-400 animate-ping' : 'bg-emerald-400 animate-pulse'}`}></span>
               <span>

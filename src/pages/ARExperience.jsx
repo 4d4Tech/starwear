@@ -23,6 +23,17 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const [error, setError] = useState(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [mediaPlaying, setMediaPlaying] = useState(true);
+  const [mediaMuted, setMediaMuted] = useState(false);
+
+  useEffect(() => {
+    const handleMuteStatus = (e) => {
+      if (e && e.detail && typeof e.detail.muted === 'boolean') {
+        setMediaMuted(e.detail.muted);
+      }
+    };
+    window.addEventListener('starwear-video-mute-status', handleMuteStatus);
+    return () => window.removeEventListener('starwear-video-mute-status', handleMuteStatus);
+  }, []);
   const [cameraEnabled, setCameraEnabled] = useState(!isTestMode);
   const [trackingStatus, setTrackingStatus] = useState('INITIALIZING'); // INITIALIZING | SCANNING | DETECTED | ERROR
   const [forceShowModel, setForceShowModel] = useState(false);
@@ -534,6 +545,31 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     logToScreen('MEDIA_TOGGLE', `Playback state changed: ${nextState ? 'PLAY' : 'PAUSE'}`);
   };
 
+  const toggleMediaMute = () => {
+    const nextMuted = !mediaMuted;
+    setMediaMuted(nextMuted);
+    const scene = document.querySelector('a-scene');
+    if (scene) {
+      scene.dispatchEvent(new CustomEvent('set-video-mute', { detail: { muted: nextMuted } }));
+    }
+    window.dispatchEvent(new CustomEvent('starwear-set-video-mute', { detail: { muted: nextMuted } }));
+    document.querySelectorAll('iframe').forEach((ifr) => {
+      try {
+        ifr.contentWindow?.postMessage(
+          JSON.stringify({ event: 'command', func: nextMuted ? 'mute' : 'unMute', args: [] }),
+          '*'
+        );
+        if (!nextMuted) {
+          ifr.contentWindow?.postMessage(
+            JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+            '*'
+          );
+        }
+      } catch (e) {}
+    });
+    logToScreen('MEDIA_MUTE_TOGGLE', `Audio state changed: ${nextMuted ? 'MUTED' : 'UNMUTED'}`);
+  };
+
   // Stripe Checkout Handler
   const handleCheckout = async () => {
     setCheckoutLoading(true);
@@ -716,6 +752,21 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             </span>
           </button>
 
+          {/* Media Audio Mute/Unmute Button */}
+          <button
+            onClick={toggleMediaMute}
+            className={`w-10 h-10 flex items-center justify-center text-white rounded-full border shadow-lg backdrop-blur-md active:scale-95 transition-all ${
+              mediaMuted
+                ? 'bg-rose-600/80 hover:bg-rose-600 border-rose-400/30'
+                : 'bg-emerald-600/80 hover:bg-emerald-600 border-emerald-400/30'
+            }`}
+            title={mediaMuted ? 'Unmute Video Audio (Sound Off)' : 'Mute Video Audio (Sound On)'}
+          >
+            <span className="material-symbols-outlined text-lg">
+              {mediaMuted ? 'volume_off' : 'volume_up'}
+            </span>
+          </button>
+
           {/* Diagnostics Button */}
           <button
             onClick={() => setShowDiagnostics(!showDiagnostics)}
@@ -785,7 +836,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                 : {})}
               model-auto-center="enabled: true"
               dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-              play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}; targetMesh: ${arData.config?.videoTargetMesh || 'auto'}; flipX: ${arData.config?.videoFlipX || false}`}
+              play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${arData.config?.videoTargetMesh || 'auto'}; flipX: ${arData.config?.videoFlipX || false}`}
               play-gltf-animation={`playing: ${mediaPlaying}`}
             ></a-gltf-model>
           </a-entity>
@@ -808,7 +859,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                   : {})}
                 model-auto-center="enabled: true"
                 dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-                play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}; targetMesh: ${arData.config?.videoTargetMesh || 'auto'}; flipX: ${arData.config?.videoFlipX || false}`}
+                play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${arData.config?.videoTargetMesh || 'auto'}; flipX: ${arData.config?.videoFlipX || false}`}
                 play-gltf-animation={`playing: ${mediaPlaying}`}
               ></a-gltf-model>
             </a-entity>
@@ -861,7 +912,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                 : {})}
               model-auto-center="enabled: true"
               dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-              play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}; targetMesh: ${arData.config?.videoTargetMesh || 'auto'}; flipX: ${arData.config?.videoFlipX || false}`}
+              play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${arData.config?.videoTargetMesh || 'auto'}; flipX: ${arData.config?.videoFlipX || false}`}
               play-gltf-animation={`playing: ${mediaPlaying}`}
             ></a-gltf-model>
           </a-entity>
