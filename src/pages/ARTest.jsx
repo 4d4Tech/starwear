@@ -12,8 +12,8 @@ if (typeof THREE !== 'undefined' && THREE.Cache) {
 }
 import { httpsCallable } from 'firebase/functions';
 import { logEvent } from 'firebase/analytics';
-import { loadStripe } from '@stripe/stripe-js';
 import '../utils/aframe-components';
+import { isYouTubeUrl, extractYouTubeId } from '../utils/aframe-components';
 
 // =========================================================================
 // 1. REUSABLE TYPED SLIDER CONTROL WITH DUAL-WAY DATA BINDING
@@ -570,6 +570,8 @@ const ARTest = () => {
   const [mediaPlaying, setMediaPlaying] = useState(true);
 
   // Video Layer & Local Asset Testing States
+  const [videoMode, setVideoMode] = useState('webgl'); // 'webgl' | 'youtube'
+  const [youtubeUrlInput, setYoutubeUrlInput] = useState('');
   const [activeVideoUrl, setActiveVideoUrl] = useState('');
   const [customVideoUrl, setCustomVideoUrl] = useState('');
   const [videoTargetMesh, setVideoTargetMesh] = useState('auto'); // 'auto' | 'all' | mesh name/uuid
@@ -903,6 +905,17 @@ const ARTest = () => {
     const model3D = modelEl.getObject3D('mesh');
     if (!model3D || !videoUrl) return;
 
+    // Check if videoUrl is a YouTube URL: bypass HTML5 <video> to prevent fatal browser CORS errors
+    if (isYouTubeUrl(videoUrl)) {
+      const existingVid = document.getElementById('artest-active-video-element');
+      if (existingVid) {
+        existingVid.pause();
+        existingVid.removeAttribute('src');
+        try { existingVid.load(); } catch {}
+      }
+      return;
+    }
+
     // Create or find hidden DOM video element
     let video = document.getElementById('artest-active-video-element');
     if (!video) {
@@ -954,10 +967,7 @@ const ARTest = () => {
     videoTexture.flipY = false;
 
     const targetParam = (videoTargetMesh || 'auto').trim().toLowerCase();
-    const screenKeywords = [
-      'video', 'screen', 'display', 'curved', 'plane', 'front', 'panel',
-      'cloth', 'graphic', 'print', 'texture', 'layer', 'tee', 'shirt', 'hoodie', 'fabric'
-    ];
+    const screenKeywords = ['video', 'screen', 'display', 'cinema', 'videomat', 'screenmat'];
 
     const matchedMeshes = [];
     const allMeshes = [];
@@ -974,7 +984,14 @@ const ARTest = () => {
         } else if (targetParam !== 'auto' && (nodeName === targetParam || nodeUuid === targetParam)) {
           matchedMeshes.push(node);
         } else {
-          if (screenKeywords.some((kw) => nodeName.includes(kw)) || node.userData?.hasVideo || node.userData?.videoUrl) {
+          const hasVideo = !!(
+            node.userData?.hasVideo ||
+            node.userData?.videoUrl ||
+            (Array.isArray(node.material)
+              ? node.material.some((m) => m?.userData?.hasVideo || m?.userData?.isVideoLayer)
+              : (node.material?.userData?.hasVideo || node.material?.userData?.isVideoLayer))
+          );
+          if (hasVideo || screenKeywords.some((kw) => nodeName.includes(kw))) {
             autoScreenMeshes.push(node);
           }
         }
@@ -983,12 +1000,22 @@ const ARTest = () => {
 
     let finalTargetMeshes = matchedMeshes;
     if (finalTargetMeshes.length === 0) {
-      finalTargetMeshes = autoScreenMeshes.length > 0 ? autoScreenMeshes : allMeshes;
+      finalTargetMeshes = autoScreenMeshes;
     }
 
     finalTargetMeshes.forEach((node) => {
       const materials = Array.isArray(node.material) ? node.material : [node.material];
-      materials.forEach((mat) => {
+      const targetSlot = typeof node.userData?.videoTargetMaterialIndex === 'number'
+        ? node.userData.videoTargetMaterialIndex
+        : null;
+
+      materials.forEach((mat, idx) => {
+        const isTarget = targetSlot !== null
+          ? idx === targetSlot
+          : (mat?.userData?.hasVideo || mat?.userData?.isVideoLayer || materials.length === 1 || (node.userData?.archetype === 'VIDEO_SCREEN' && idx === 4));
+
+        if (!isTarget) return;
+
         if (videoFlipX) {
           videoTexture.wrapS = THREE.RepeatWrapping;
           videoTexture.repeat.set(-1, 1);
@@ -1024,10 +1051,7 @@ const ARTest = () => {
     if (!model3D) return;
 
     const targetParam = (videoTargetMesh || 'auto').trim().toLowerCase();
-    const screenKeywords = [
-      'video', 'screen', 'display', 'curved', 'plane', 'front', 'panel',
-      'cloth', 'graphic', 'print', 'texture', 'layer', 'tee', 'shirt', 'hoodie', 'fabric'
-    ];
+    const screenKeywords = ['video', 'screen', 'display', 'cinema', 'videomat', 'screenmat'];
 
     const matchedMeshes = [];
     const allMeshes = [];
@@ -1046,7 +1070,14 @@ const ARTest = () => {
         } else if (targetParam !== 'auto' && (nodeName === targetParam || nodeUuid === targetParam)) {
           matchedMeshes.push(node);
         } else {
-          if (screenKeywords.some((kw) => nodeName.includes(kw)) || node.userData?.hasVideo || node.userData?.videoUrl) {
+          const hasVideo = !!(
+            node.userData?.hasVideo ||
+            node.userData?.videoUrl ||
+            (Array.isArray(node.material)
+              ? node.material.some((m) => m?.userData?.hasVideo || m?.userData?.isVideoLayer)
+              : (node.material?.userData?.hasVideo || node.material?.userData?.isVideoLayer))
+          );
+          if (hasVideo || screenKeywords.some((kw) => nodeName.includes(kw))) {
             autoScreenMeshes.push(node);
           }
         }
@@ -1055,13 +1086,23 @@ const ARTest = () => {
 
     let finalTargetMeshes = matchedMeshes;
     if (finalTargetMeshes.length === 0) {
-      finalTargetMeshes = autoScreenMeshes.length > 0 ? autoScreenMeshes : allMeshes;
+      finalTargetMeshes = autoScreenMeshes;
     }
 
     finalTargetMeshes.forEach((node) => {
       if (node.material) {
         const mats = Array.isArray(node.material) ? node.material : [node.material];
-        mats.forEach((m) => {
+        const targetSlot = typeof node.userData?.videoTargetMaterialIndex === 'number'
+          ? node.userData.videoTargetMaterialIndex
+          : null;
+
+        mats.forEach((m, idx) => {
+          const isTarget = targetSlot !== null
+            ? idx === targetSlot
+            : (m?.userData?.hasVideo || m?.userData?.isVideoLayer || mats.length === 1 || (node.userData?.archetype === 'VIDEO_SCREEN' && idx === 4));
+
+          if (!isTarget) return;
+
           ['map', 'emissiveMap'].forEach((mapName) => {
             if (m[mapName]) {
               const tex = m[mapName];
@@ -1337,11 +1378,18 @@ const ARTest = () => {
   };
 
   const applyCustomVideoUrl = (url) => {
-    setCustomVideoUrl(url);
-    setActiveVideoUrl(url);
+    const trimmed = (url || '').trim();
+    setCustomVideoUrl(trimmed);
+    setActiveVideoUrl(trimmed);
     setSelectedVideoFile(null);
     setLocalVideoName('');
     setMediaPlaying(true);
+    if (isYouTubeUrl(trimmed)) {
+      setVideoMode('youtube');
+      setYoutubeUrlInput(trimmed);
+    } else {
+      setVideoMode('webgl');
+    }
   };
 
   const handleLoad = async (e) => {
@@ -1479,6 +1527,12 @@ const ARTest = () => {
       }
 
       setActiveVideoUrl(videoUrl);
+      if (isYouTubeUrl(videoUrl)) {
+        setVideoMode('youtube');
+        setYoutubeUrlInput(videoUrl);
+      } else if (videoUrl) {
+        setVideoMode('webgl');
+      }
       setArData({
         ...data,
         videoUrl,
@@ -2598,61 +2652,186 @@ const ARTest = () => {
                         PENDING STORAGE SAVE
                       </span>
                     )}
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${activeVideoUrl ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-neutral-800 text-neutral-400'}`}>
-                      {activeVideoUrl ? (activeVideoUrl.startsWith('blob:') ? 'LOCAL PREVIEW' : 'SAVED TO CLOUD') : 'NONE'}
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${activeVideoUrl ? (isYouTubeUrl(activeVideoUrl) ? 'bg-red-500/20 text-red-300 border border-red-500/40' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40') : 'bg-neutral-800 text-neutral-400'}`}>
+                      {activeVideoUrl ? (isYouTubeUrl(activeVideoUrl) ? 'CSS3D YOUTUBE' : (activeVideoUrl.startsWith('blob:') ? 'LOCAL PREVIEW' : 'SAVED TO CLOUD')) : 'NONE'}
                     </span>
                   </div>
                 </div>
 
-                <label className="flex items-center justify-center gap-1.5 px-3 py-2 bg-indigo-950/40 hover:bg-indigo-900/60 border border-indigo-500/30 hover:border-indigo-400 rounded text-xs font-medium cursor-pointer transition-colors text-indigo-200">
-                  <span className="material-symbols-outlined text-[16px]">video_file</span>
-                  {localVideoName ? `Video: ${localVideoName}` : 'Choose Local Video (.mp4, .webm)'}
-                  <input type="file" accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov" onChange={pickLocalVideo} className="hidden" />
-                </label>
-
-                <div className="flex flex-col gap-1">
-                  <label className="text-[11px] text-neutral-400">Or Paste Video URL:</label>
-                  <div className="flex gap-1">
-                    <input
-                      type="text"
-                      placeholder="https://.../video.mp4"
-                      value={customVideoUrl || (activeVideoUrl.startsWith('http') ? activeVideoUrl : '')}
-                      onChange={(e) => applyCustomVideoUrl(e.target.value)}
-                      className="flex-1 px-2.5 py-1.5 bg-black border border-neutral-700 rounded text-xs text-neutral-200 focus:outline-none focus:border-indigo-400 font-mono"
-                    />
-                    {activeVideoUrl && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActiveVideoUrl('');
-                          setCustomVideoUrl('');
-                          setLocalVideoName('');
-                        }}
-                        className="px-2 bg-neutral-800 hover:bg-red-900/50 text-neutral-300 hover:text-red-300 rounded text-xs transition-colors"
-                        title="Clear Video"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
+                {/* Mode Selector: WebGL Video vs CSS3D YouTube */}
+                <div className="grid grid-cols-2 gap-1.5 p-1 bg-black/60 border border-neutral-800 rounded">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVideoMode('webgl');
+                      if (isYouTubeUrl(activeVideoUrl)) {
+                        setActiveVideoUrl('');
+                        setCustomVideoUrl('');
+                      }
+                    }}
+                    className={`py-1.5 px-2 rounded text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors ${
+                      videoMode === 'webgl'
+                        ? 'bg-indigo-600 text-white shadow'
+                        : 'text-neutral-400 hover:text-neutral-200'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-sm">video_file</span>
+                    WebGL Video (.mp4)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVideoMode('youtube')}
+                    className={`py-1.5 px-2 rounded text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors ${
+                      videoMode === 'youtube'
+                        ? 'bg-red-600 text-white shadow'
+                        : 'text-neutral-400 hover:text-neutral-200'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-sm">smart_display</span>
+                    CSS3D YouTube
+                  </button>
                 </div>
 
-                {activeVideoUrl && (
-                  <div className="relative rounded overflow-hidden bg-black border border-indigo-500/50 mt-1 shadow-inner">
-                    <video
-                      key={activeVideoUrl}
-                      src={activeVideoUrl}
-                      autoPlay={mediaPlaying}
-                      loop
-                      muted
-                      playsInline
-                      className="object-contain bg-black video-player max-h-36 w-full"
-                    />
-                    <div className="absolute top-1 left-1 bg-black/80 backdrop-blur px-1.5 py-0.5 rounded text-[9px] text-emerald-400 font-mono font-bold flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                      PREVIEW MONITOR
+                {videoMode === 'webgl' ? (
+                  <>
+                    <label className="flex items-center justify-center gap-1.5 px-3 py-2 bg-indigo-950/40 hover:bg-indigo-900/60 border border-indigo-500/30 hover:border-indigo-400 rounded text-xs font-medium cursor-pointer transition-colors text-indigo-200">
+                      <span className="material-symbols-outlined text-[16px]">video_file</span>
+                      {localVideoName ? `Video: ${localVideoName}` : 'Choose Local Video (.mp4, .webm)'}
+                      <input type="file" accept="video/mp4,video/webm,video/quicktime,.mp4,.webm,.mov" onChange={pickLocalVideo} className="hidden" />
+                    </label>
+
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] text-neutral-400">Or Paste Video URL:</label>
+                      <div className="flex gap-1">
+                        <input
+                          type="text"
+                          placeholder="https://.../video.mp4"
+                          value={customVideoUrl || (activeVideoUrl.startsWith('http') && !isYouTubeUrl(activeVideoUrl) ? activeVideoUrl : '')}
+                          onChange={(e) => applyCustomVideoUrl(e.target.value)}
+                          className="flex-1 px-2.5 py-1.5 bg-black border border-neutral-700 rounded text-xs text-neutral-200 focus:outline-none focus:border-indigo-400 font-mono"
+                        />
+                        {activeVideoUrl && !isYouTubeUrl(activeVideoUrl) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveVideoUrl('');
+                              setCustomVideoUrl('');
+                              setLocalVideoName('');
+                            }}
+                            className="px-2 bg-neutral-800 hover:bg-red-900/50 text-neutral-300 hover:text-red-300 rounded text-xs transition-colors"
+                            title="Clear Video"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="space-y-2.5">
+                    <div className="p-2 rounded bg-red-950/20 border border-red-500/30 text-[11px] text-neutral-300 leading-relaxed">
+                      📺 <strong className="text-red-300">CORS-Free CSS3D Overlay:</strong> Bypasses HTML5 browser CORS restrictions completely. Directly synchronizes with your 3D target screen mesh with live interactive controls.
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] text-neutral-300 font-medium">YouTube URL or Video ID:</label>
+                        {isYouTubeUrl(activeVideoUrl) && (
+                          <span className="text-[10px] font-mono text-red-400 font-bold">
+                            ID: {extractYouTubeId(activeVideoUrl)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex gap-1">
+                        <input
+                          type="text"
+                          placeholder="e.g. https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                          value={youtubeUrlInput || (isYouTubeUrl(activeVideoUrl) ? activeVideoUrl : '')}
+                          onChange={(e) => {
+                            setYoutubeUrlInput(e.target.value);
+                            applyCustomVideoUrl(e.target.value);
+                          }}
+                          className="flex-1 px-2.5 py-1.5 bg-black border border-neutral-700 rounded text-xs text-neutral-200 focus:outline-none focus:border-red-400 font-mono"
+                        />
+                        {isYouTubeUrl(activeVideoUrl) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveVideoUrl('');
+                              setCustomVideoUrl('');
+                              setYoutubeUrlInput('');
+                            }}
+                            className="px-2 bg-neutral-800 hover:bg-red-900/50 text-neutral-300 hover:text-red-300 rounded text-xs transition-colors"
+                            title="Clear YouTube Video"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Presets */}
+                    <div className="space-y-1">
+                      <span className="text-[10px] uppercase font-bold text-neutral-400 tracking-wider">Quick Presets:</span>
+                      <div className="grid grid-cols-2 gap-1">
+                        {[
+                          { label: '🌌 Lofi Beats', id: 'jfKfPfyJRdk' },
+                          { label: '⚡ Synthwave', id: '4xDzrJKXOOY' },
+                          { label: '🕹️ Cyberpunk', id: '5qap5aO4i9A' },
+                          { label: '🎸 80s Classic', id: 'dQw4w9WgXcQ' }
+                        ].map((preset) => (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => {
+                              const url = `https://www.youtube.com/watch?v=${preset.id}`;
+                              setYoutubeUrlInput(url);
+                              applyCustomVideoUrl(url);
+                            }}
+                            className="px-2 py-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-600 rounded text-[10px] text-neutral-300 text-left truncate transition-colors"
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
+                )}
+
+                {/* Preview Monitor */}
+                {activeVideoUrl && (
+                  isYouTubeUrl(activeVideoUrl) ? (
+                    <div className="relative rounded overflow-hidden bg-black border border-red-500/50 mt-1 shadow-inner">
+                      <iframe
+                        key={activeVideoUrl}
+                        src={`https://www.youtube-nocookie.com/embed/${extractYouTubeId(activeVideoUrl)}?enablejsapi=1&autoplay=0&controls=1`}
+                        className="w-full h-40 border-0 bg-black"
+                        title="YouTube CSS3D Preview"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                      />
+                      <div className="absolute top-1 left-1 bg-black/80 backdrop-blur px-1.5 py-0.5 rounded text-[9px] text-red-400 font-mono font-bold flex items-center gap-1 pointer-events-none">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse"></span>
+                        CSS3D YOUTUBE OVERLAY
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="relative rounded overflow-hidden bg-black border border-indigo-500/50 mt-1 shadow-inner">
+                      <video
+                        key={activeVideoUrl}
+                        src={activeVideoUrl}
+                        autoPlay={mediaPlaying}
+                        loop
+                        muted
+                        playsInline
+                        className="object-contain bg-black video-player max-h-36 w-full"
+                      />
+                      <div className="absolute top-1 left-1 bg-black/80 backdrop-blur px-1.5 py-0.5 rounded text-[9px] text-emerald-400 font-mono font-bold flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                        PREVIEW MONITOR
+                      </div>
+                    </div>
+                  )
                 )}
 
                 {/* Target Mesh Layer Selector */}

@@ -1,13 +1,47 @@
 // src/utils/meshTemplates.js
 
-import { templatesStorage } from '../firebase';
-import { ref, listAll, getDownloadURL } from 'firebase/storage';
+import { db, storage, templatesStorage } from '../firebase';
+import { collection, getDocs, doc, setDoc, deleteDoc, query } from 'firebase/firestore';
+import { ref, listAll, getDownloadURL, uploadBytes, deleteObject } from 'firebase/storage';
 
 export const TEMPLATES_BUCKET_NAME = '3dtemplates';
 export const TEMPLATES_BUCKET_URL = `https://storage.googleapis.com/${TEMPLATES_BUCKET_NAME}`;
 export const TEMPLATES_API_URL = `https://storage.googleapis.com/storage/v1/b/${TEMPLATES_BUCKET_NAME}/o`;
 
-const SUPPORTED_3D_EXTS = new Set(['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply', 'dae']);
+export const SUPPORTED_3D_EXTS = new Set(['glb', 'gltf', 'obj', 'fbx', 'stl', 'ply', 'dae']);
+
+export const DEFAULT_TEMPLATE_CATEGORIES = [
+  {
+    name: 'Apparel',
+    icon: 'checkroom',
+    subcategories: ['Jackets & Coats', 'Hoodies & Sweats', 'T-Shirts & Tops', 'Pants & Bottoms', 'Dresses & Skirts']
+  },
+  {
+    name: 'Characters',
+    icon: 'person',
+    subcategories: ['Humanoids & Mannequins', 'Avatars & Stylized', 'Robots & Cyber', 'Creatures & Fantasy']
+  },
+  {
+    name: 'Footwear',
+    icon: 'roller_skating',
+    subcategories: ['Sneakers & Kicks', 'Boots', 'Dress & Casual Shoes']
+  },
+  {
+    name: 'Headwear',
+    icon: 'sports_martial_arts',
+    subcategories: ['Caps & Hats', 'Beanies', 'Helmets & Visors']
+  },
+  {
+    name: 'Accessories',
+    icon: 'watch',
+    subcategories: ['Bags & Backpacks', 'Jewelry & Chains', 'Eyewear & Glasses', 'Belts & Straps']
+  },
+  {
+    name: 'Props & Objects',
+    icon: 'deployed_code',
+    subcategories: ['Tech & Gadgets', 'Furniture & Decor', 'Weapons & Tools', 'Vehicles']
+  }
+];
 
 export function formatTitle(str) {
   if (!str) return '';
@@ -146,10 +180,61 @@ async function listAllRecursive(storageRef) {
 }
 
 /**
+ * Fetches all custom model templates uploaded by admins and stored in Firestore.
+ */
+export async function fetchFirestoreTemplates() {
+  try {
+    if (!db) return [];
+    const q = query(collection(db, 'model_templates'));
+    const snap = await getDocs(q);
+    const firestoreTemplates = [];
+
+    snap.forEach((docSnap) => {
+      const d = docSnap.data();
+      const ext = (d.ext || d.filename?.split('.').pop() || 'GLB').toUpperCase();
+      const category = formatTitle(d.category) || 'General';
+      const subcategory = formatTitle(d.subcategory) || 'General';
+      const cleanName = d.cleanName || d.name || cleanModelName(d.filename || 'Template');
+      const icon = getCategoryIcon(category, subcategory);
+
+      firestoreTemplates.push({
+        id: docSnap.id,
+        relPath: d.storagePath || `${category}/${subcategory}/${d.filename}`,
+        category,
+        subcategory,
+        filename: d.filename || `${cleanName}.${ext.toLowerCase()}`,
+        cleanName,
+        ext,
+        url: d.url,
+        thumbnailUrl: d.thumbnailUrl || null,
+        thumbnailStoragePath: d.thumbnailStoragePath || null,
+        storagePath: d.storagePath || null,
+        icon,
+        bucket: 'firestore',
+        size: d.size ? parseInt(d.size, 10) : undefined,
+        description: d.description || '',
+        tags: Array.isArray(d.tags) ? d.tags : [],
+        isHumanoid: !!d.isHumanoid,
+        source: 'uploaded',
+        createdAt: d.createdAt,
+        updated: d.updatedAt || d.createdAt
+      });
+    });
+
+    return firestoreTemplates;
+  } catch (err) {
+    console.warn('Failed to fetch templates from Firestore model_templates:', err);
+    return [];
+  }
+}
+
+/**
  * Asynchronously fetches and parses the live list of 3D templates
- * from the "3dtemplates" storage bucket.
+ * from both the "3dtemplates" storage bucket and Firestore custom uploads.
  */
 export async function fetchTemplatesFromBucket() {
+  let bucketTemplates = [];
+
   // Strategy 1: Fast direct Google Cloud Storage JSON API (public read on bucket)
   try {
     const res = await fetch(TEMPLATES_API_URL);
@@ -162,13 +247,7 @@ export async function fetchTemplatesFromBucket() {
       });
 
       if (items.length > 0) {
-        const parsed = items.map((item) => parseTemplateFromPath(item.name, item));
-        const sorted = sortTemplates(parsed);
-        cachedTemplates = sorted;
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('3dtemplates-updated', { detail: sorted }));
-        }
-        return sorted;
+        bucketTemplates = items.map((item) => parseTemplateFromPath(item.name, item));
       }
     }
   } catch (apiErr) {
@@ -176,41 +255,181 @@ export async function fetchTemplatesFromBucket() {
   }
 
   // Strategy 2: Firebase Storage client SDK listAll on templatesStorage (gs://3dtemplates)
-  try {
-    if (templatesStorage) {
-      const rootRef = ref(templatesStorage, '');
-      const storageItems = await listAllRecursive(rootRef);
-      const validItems = storageItems.filter((itemRef) => {
-        const ext = itemRef.name.split('.').pop().toLowerCase();
-        return SUPPORTED_3D_EXTS.has(ext);
-      });
+  if (bucketTemplates.length === 0) {
+    try {
+      if (templatesStorage) {
+        const rootRef = ref(templatesStorage, '');
+        const storageItems = await listAllRecursive(rootRef);
+        const validItems = storageItems.filter((itemRef) => {
+          const ext = itemRef.name.split('.').pop().toLowerCase();
+          return SUPPORTED_3D_EXTS.has(ext);
+        });
 
-      if (validItems.length > 0) {
-        const templates = await Promise.all(
-          validItems.map(async (itemRef) => {
-            let downloadUrl = '';
-            try {
-              downloadUrl = await getDownloadURL(itemRef);
-            } catch {
-              // Fallback to direct public GCS URL
-            }
-            return parseTemplateFromPath(itemRef.fullPath, { downloadUrl });
-          })
-        );
-        const sorted = sortTemplates(templates);
-        cachedTemplates = sorted;
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('3dtemplates-updated', { detail: sorted }));
+        if (validItems.length > 0) {
+          bucketTemplates = await Promise.all(
+            validItems.map(async (itemRef) => {
+              let downloadUrl = '';
+              try {
+                downloadUrl = await getDownloadURL(itemRef);
+              } catch {
+                // Fallback to direct public GCS URL
+              }
+              return parseTemplateFromPath(itemRef.fullPath, { downloadUrl });
+            })
+          );
         }
-        return sorted;
       }
+    } catch (sdkErr) {
+      console.warn('Firebase Storage SDK list failed:', sdkErr);
     }
-  } catch (sdkErr) {
-    console.warn('Firebase Storage SDK list failed:', sdkErr);
   }
 
-  // Fallback to static catalog pointing to the 3dtemplates bucket
-  return cachedTemplates;
+  // Fallback to static baseline if bucket yielded nothing
+  if (bucketTemplates.length === 0) {
+    bucketTemplates = getStaticTemplatesFallback();
+  }
+
+  // Strategy 3: Query custom templates uploaded via Admin into Firestore
+  const firestoreTemplates = await fetchFirestoreTemplates();
+
+  // Combine and deduplicate by id
+  const map = new Map();
+  bucketTemplates.forEach((t) => map.set(t.id, t));
+  firestoreTemplates.forEach((t) => map.set(t.id, t));
+
+  const sorted = sortTemplates(Array.from(map.values()));
+  cachedTemplates = sorted;
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('3dtemplates-updated', { detail: sorted }));
+  }
+
+  return sorted;
+}
+
+/**
+ * Upload a new 3D model template with category, subcategory, and optional thumbnail.
+ * Saves to Firebase Storage and registers in Firestore model_templates.
+ */
+export async function uploadModelTemplate({
+  file,
+  thumbnailFile,
+  name,
+  category = 'Apparel',
+  subcategory = 'General',
+  description = '',
+  tags = [],
+  isHumanoid = false,
+  onProgress = () => {}
+}) {
+  if (!file) throw new Error('No 3D model file provided for upload.');
+
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!SUPPORTED_3D_EXTS.has(ext)) {
+    throw new Error(`Unsupported 3D file format .${ext}. Supported: GLB, GLTF, FBX, OBJ, STL, PLY, DAE`);
+  }
+
+  const cleanName = (name && name.trim()) ? name.trim() : cleanModelName(file.name);
+  const formattedCategory = formatTitle(category) || 'General';
+  const formattedSubcategory = formatTitle(subcategory) || 'General';
+
+  const timestamp = Date.now();
+  const safeFilename = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const templateId = `tpl_${timestamp}_${safeFilename.replace(/\.[^/.]+$/, '').toLowerCase()}`;
+
+  // 1. Upload 3D Model File
+  onProgress({ step: 'MODEL_UPLOAD', progress: 20, message: `Uploading 3D model "${file.name}"...` });
+  const modelStoragePath = `model_templates/${formattedCategory}/${formattedSubcategory}/${timestamp}_${safeFilename}`;
+  const modelStorageRef = ref(storage, modelStoragePath);
+  await uploadBytes(modelStorageRef, file);
+  const modelUrl = await getDownloadURL(modelStorageRef);
+  onProgress({ step: 'MODEL_DONE', progress: 65, message: '3D model file uploaded successfully.' });
+
+  // 2. Upload Thumbnail (if provided)
+  let thumbnailUrl = null;
+  let thumbnailStoragePath = null;
+  if (thumbnailFile) {
+    onProgress({ step: 'THUMBNAIL_UPLOAD', progress: 75, message: 'Uploading preview thumbnail...' });
+    const safeThumbName = thumbnailFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    thumbnailStoragePath = `model_templates/thumbnails/${timestamp}_${safeThumbName}`;
+    const thumbStorageRef = ref(storage, thumbnailStoragePath);
+    await uploadBytes(thumbStorageRef, thumbnailFile);
+    thumbnailUrl = await getDownloadURL(thumbStorageRef);
+  }
+
+  // 3. Save Document in Firestore `model_templates`
+  onProgress({ step: 'SAVING_METADATA', progress: 90, message: 'Registering in Studio 4D*4 catalog...' });
+  const tagList = Array.isArray(tags)
+    ? tags
+    : typeof tags === 'string'
+    ? tags.split(',').map((t) => t.trim()).filter(Boolean)
+    : [];
+
+  const templateDocData = {
+    id: templateId,
+    name: cleanName,
+    cleanName: cleanName,
+    category: formattedCategory,
+    subcategory: formattedSubcategory,
+    filename: file.name,
+    ext: ext.toUpperCase(),
+    size: file.size,
+    url: modelUrl,
+    storagePath: modelStoragePath,
+    thumbnailUrl,
+    thumbnailStoragePath,
+    description: description.trim(),
+    tags: tagList,
+    isHumanoid: Boolean(isHumanoid),
+    source: 'uploaded',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  await setDoc(doc(db, 'model_templates', templateId), templateDocData);
+
+  // 4. Trigger catalog refresh so all views immediately update
+  onProgress({ step: 'SYNCING', progress: 100, message: 'Template successfully added to Studio 4D*4!' });
+  await fetchTemplatesFromBucket();
+
+  return templateDocData;
+}
+
+/**
+ * Delete a custom uploaded model template from Firestore and Firebase Storage.
+ */
+export async function deleteModelTemplate(template) {
+  if (!template || !template.id) throw new Error('Invalid template to delete.');
+
+  // 1. Delete Firestore record
+  try {
+    await deleteDoc(doc(db, 'model_templates', template.id));
+  } catch (err) {
+    console.warn('Could not delete firestore template document:', err);
+  }
+
+  // 2. Delete 3D model file from Storage if custom uploaded
+  if (template.storagePath) {
+    try {
+      const fileRef = ref(storage, template.storagePath);
+      await deleteObject(fileRef);
+    } catch (err) {
+      console.warn('Could not delete 3D model file from storage:', err);
+    }
+  }
+
+  // 3. Delete thumbnail image from Storage if custom uploaded
+  if (template.thumbnailStoragePath) {
+    try {
+      const thumbRef = ref(storage, template.thumbnailStoragePath);
+      await deleteObject(thumbRef);
+    } catch (err) {
+      console.warn('Could not delete thumbnail image from storage:', err);
+    }
+  }
+
+  // 4. Refresh live catalog
+  return await fetchTemplatesFromBucket();
 }
 
 export function getTemplateCategories(templates) {

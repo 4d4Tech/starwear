@@ -52,13 +52,22 @@ const AdminLayout = () => {
             <span className="material-symbols-outlined">insights</span>
             <span>ANALYTICS</span>
           </Link>
+          <Link to="/admin/model-templates" className={getLinkClass('/admin/model-templates')}>
+            <span className="material-symbols-outlined">category</span>
+            <span>MODEL TEMPLATES</span>
+          </Link>
           <Link to="/admin/settings" className={getLinkClass('/admin/settings')}>
             <span className="material-symbols-outlined">settings</span>
             <span>SETTINGS</span>
           </Link>
 
-          <div className="pt-4 mt-4 border-t border-outline-variant/30">
-            <Link to="/shop" className="flex items-center gap-3 px-4 py-2.5 rounded-lg text-xs text-secondary hover:text-on-background transition-colors mx-2">
+          <div className="pt-4 mt-4 border-t border-outline-variant/30 space-y-1">
+            <Link to="/studio44" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 px-4 py-2 rounded-lg text-xs text-primary font-semibold hover:text-on-background hover:bg-surface-container-highest transition-colors mx-2">
+              <span className="material-symbols-outlined text-base">view_in_ar</span>
+              <span>STUDIO 4D*4</span>
+              <span className="material-symbols-outlined text-xs ml-auto text-secondary">open_in_new</span>
+            </Link>
+            <Link to="/shop" className="flex items-center gap-3 px-4 py-2 rounded-lg text-xs text-secondary hover:text-on-background transition-colors mx-2">
               <span className="material-symbols-outlined text-base">storefront</span>
               <span>VIEW SHOP</span>
             </Link>

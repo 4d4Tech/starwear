@@ -1,6 +1,28 @@
 import 'aframe';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
+
+// =========================================================================
+// YOUTUBE PARSING & DETECTION HELPERS (CORS SAFE)
+// Prevents HTML5 <video> elements from ever touching YouTube URLs,
+// completely eliminating browser CORS policy violations.
+// =========================================================================
+export const isYouTubeUrl = (urlOrId) => {
+  if (!urlOrId || typeof urlOrId !== 'string') return false;
+  const trimmed = urlOrId.trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return true;
+  return /^(https?:\/\/)?(www\.|m\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)\/.+/i.test(trimmed);
+};
+
+export const extractYouTubeId = (urlOrId) => {
+  if (!urlOrId || typeof urlOrId !== 'string') return '';
+  const trimmed = urlOrId.trim();
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed;
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const match = trimmed.match(regExp);
+  return (match && match[2].length === 11) ? match[2] : (trimmed.length === 11 ? trimmed : '');
+};
 
 const AFRAME = typeof window !== 'undefined' ? window.AFRAME : undefined;
 
@@ -278,6 +300,13 @@ if (typeof AFRAME !== 'undefined') {
       }
 
       const url = videoOrUrl.trim();
+
+      // YouTube Guard: Never load YouTube URLs into HTML5 <video> elements!
+      // This eliminates the browser CORS violation completely.
+      if (isYouTubeUrl(url)) {
+        return null;
+      }
+
       if (videoElementCache.has(url)) {
         const cached = videoElementCache.get(url);
         if (cached && cached.isConnected) {
@@ -353,8 +382,20 @@ if (typeof AFRAME !== 'undefined') {
       init: function () {
         this.videos = [];
         this.videoTextures = [];
+        this.cssObject = null;
+        this.cssTargetNode = null;
+        this.youtubeIframe = null;
+        this.baseScale = 0.003125;
+
+        const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
+        this._vWorld = new THREE_LIB.Vector3();
+        this._qWorld = new THREE_LIB.Quaternion();
+        this._sWorld = new THREE_LIB.Vector3();
+        this._vForward = new THREE_LIB.Vector3();
+
         this.applyVideo = this.applyVideo.bind(this);
         this.unlockVideos = this.unlockVideos.bind(this);
+        this.applyCSS3DYouTube = this.applyCSS3DYouTube.bind(this);
 
         this.el.addEventListener('model-loaded', this.applyVideo);
         if (this.el.getObject3D('mesh')) {
@@ -378,6 +419,12 @@ if (typeof AFRAME !== 'undefined') {
           this.applyVideo();
         }
         if (!oldData || oldData.playing !== this.data.playing) {
+          if (this.youtubeIframe && this.youtubeIframe.contentWindow) {
+            const cmd = this.data.playing ? 'playVideo' : 'pauseVideo';
+            try {
+              this.youtubeIframe.contentWindow.postMessage(JSON.stringify({ event: 'command', func: cmd, args: [] }), '*');
+            } catch {}
+          }
           if (this.data.playing) {
             this.videos.forEach((v) => {
               if (v && v.paused) v.play().catch(() => {});
@@ -387,31 +434,6 @@ if (typeof AFRAME !== 'undefined') {
               if (v && !v.paused) v.pause();
             });
           }
-        }
-      },
-      tick: function () {
-        if (this.data.playing && this.videoTextures && this.videoTextures.length > 0) {
-          for (let i = 0; i < this.videoTextures.length; i++) {
-            const tex = this.videoTextures[i];
-            const vid = this.videos[i];
-            if (vid) {
-              if (vid.paused && vid.readyState >= 2 && this.data.playing) {
-                vid.play().catch(() => {});
-              }
-              if (!vid.paused && vid.readyState >= 2) {
-                tex.needsUpdate = true;
-              }
-            }
-          }
-        }
-      },
-      unlockVideos: function () {
-        if (this.data.playing && this.videos.length > 0) {
-          this.videos.forEach((v) => {
-            if (v && v.paused) {
-              v.play().catch(() => {});
-            }
-          });
         }
       },
       applyTextureFlip: function (tex, isFlipX) {
@@ -430,6 +452,113 @@ if (typeof AFRAME !== 'undefined') {
         if (tex.updateMatrix) tex.updateMatrix();
         tex.needsUpdate = true;
       },
+      applyCSS3DYouTube: function (youtubeId, targetNode, aspectRatio = '16:9') {
+        if (!youtubeId) return;
+        const sceneEl = this.el.sceneEl;
+        if (!sceneEl) return;
+
+        const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
+        this.youtubeId = youtubeId;
+        this.cssTargetNode = targetNode || this.el.getObject3D('mesh');
+
+        // 1. Ensure scene-wide CSS3DRenderer overlay exists
+        let cssRenderer = sceneEl._css3dRenderer;
+        let cssScene = sceneEl._css3dScene;
+
+        if (!cssRenderer) {
+          cssRenderer = new CSS3DRenderer();
+          const container = sceneEl.canvas?.parentElement || sceneEl;
+          const w = container.clientWidth || window.innerWidth;
+          const h = container.clientHeight || window.innerHeight;
+          cssRenderer.setSize(w, h);
+
+          const dom = cssRenderer.domElement;
+          dom.id = 'aframe-css3d-canvas-overlay';
+          dom.style.position = 'absolute';
+          dom.style.top = '0';
+          dom.style.left = '0';
+          dom.style.width = '100%';
+          dom.style.height = '100%';
+          dom.style.pointerEvents = 'none';
+          dom.style.zIndex = '10';
+
+          container.appendChild(dom);
+
+          cssScene = new THREE_LIB.Scene();
+          sceneEl._css3dRenderer = cssRenderer;
+          sceneEl._css3dScene = cssScene;
+
+          const handleResize = () => {
+            if (sceneEl.canvas && cssRenderer) {
+              const rw = sceneEl.canvas.parentElement ? sceneEl.canvas.parentElement.clientWidth : window.innerWidth;
+              const rh = sceneEl.canvas.parentElement ? sceneEl.canvas.parentElement.clientHeight : window.innerHeight;
+              cssRenderer.setSize(rw, rh);
+            }
+          };
+          window.addEventListener('resize', handleResize);
+          sceneEl._css3dResizeHandler = handleResize;
+        }
+
+        // 2. Remove existing CSS3DObject if present on this component
+        if (this.cssObject && cssScene) {
+          cssScene.remove(this.cssObject);
+          this.cssObject = null;
+        }
+
+        // 3. Aspect ratio sizing
+        let iframeW = 640;
+        let iframeH = 360;
+        if (aspectRatio === '9:16') {
+          iframeW = 360;
+          iframeH = 640;
+        } else if (aspectRatio === '21:9') {
+          iframeW = 840;
+          iframeH = 360;
+        }
+
+        // 4. Create HTML iframe wrapper
+        const containerDiv = document.createElement('div');
+        containerDiv.style.width = `${iframeW}px`;
+        containerDiv.style.height = `${iframeH}px`;
+        containerDiv.style.background = '#090d16';
+        containerDiv.style.borderRadius = '12px';
+        containerDiv.style.overflow = 'hidden';
+        containerDiv.style.pointerEvents = 'auto'; // allow user interaction with YouTube player
+        containerDiv.style.boxShadow = '0 20px 50px rgba(0,0,0,0.85)';
+        containerDiv.style.border = '2px solid rgba(99, 102, 241, 0.5)';
+
+        const iframe = document.createElement('iframe');
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+        iframe.style.border = '0px';
+        const originParam = typeof window !== 'undefined' ? `&origin=${encodeURIComponent(window.location.origin)}` : '';
+        iframe.src = `https://www.youtube-nocookie.com/embed/${youtubeId}?enablejsapi=1&autoplay=1&mute=1&controls=1&loop=1&playlist=${youtubeId}${originParam}`;
+        iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+        iframe.allowFullscreen = true;
+        containerDiv.appendChild(iframe);
+        this.youtubeIframe = iframe;
+
+        // 5. Create CSS3DObject
+        const cssObject = new CSS3DObject(containerDiv);
+        const baseScale = 0.003125;
+        cssObject.scale.set(baseScale, baseScale, baseScale);
+        cssScene.add(cssObject);
+        this.cssObject = cssObject;
+        this.baseScale = baseScale;
+
+        // 6. Style backing WebGL screen mesh so it acts as bezel
+        if (this.cssTargetNode && this.cssTargetNode.material) {
+          const materials = Array.isArray(this.cssTargetNode.material) ? this.cssTargetNode.material : [this.cssTargetNode.material];
+          materials.forEach((mat) => {
+            if (mat.color) mat.color.setHex(0x0e1322);
+            mat.roughness = 0.3;
+            mat.metalness = 0.8;
+            if (mat.emissive) mat.emissive.setHex(0x1e1b4b);
+            mat.emissiveIntensity = 0.2;
+            mat.needsUpdate = true;
+          });
+        }
+      },
       applyVideo: function () {
         const obj = this.el.getObject3D('mesh');
         if (!obj) return;
@@ -439,10 +568,7 @@ if (typeof AFRAME !== 'undefined') {
         this.videoTextures = [];
 
         const targetParam = (this.data.targetMesh || 'auto').trim().toLowerCase();
-        const screenKeywords = [
-          'video', 'screen', 'display', 'curved', 'plane', 'front', 'panel',
-          'cloth', 'graphic', 'print', 'texture', 'layer', 'tee', 'shirt', 'hoodie', 'fabric'
-        ];
+        const screenKeywords = ['video', 'screen', 'display', 'cinema', 'videomat', 'screenmat'];
 
         const matchedMeshes = [];
         const allMeshes = [];
@@ -459,7 +585,14 @@ if (typeof AFRAME !== 'undefined') {
             } else if (targetParam !== 'auto' && (nodeName === targetParam || nodeUuid === targetParam)) {
               matchedMeshes.push(node);
             } else {
-              if (screenKeywords.some((kw) => nodeName.includes(kw)) || node.userData?.hasVideo || node.userData?.videoUrl) {
+              const hasVideo = !!(
+                node.userData?.hasVideo ||
+                node.userData?.videoUrl ||
+                (Array.isArray(node.material)
+                  ? node.material.some((m) => m?.userData?.hasVideo || m?.userData?.isVideoLayer)
+                  : (node.material?.userData?.hasVideo || node.material?.userData?.isVideoLayer))
+              );
+              if (hasVideo || screenKeywords.some((kw) => nodeName.includes(kw))) {
                 autoScreenMeshes.push(node);
               }
             }
@@ -468,7 +601,40 @@ if (typeof AFRAME !== 'undefined') {
 
         let finalTargetMeshes = matchedMeshes;
         if (finalTargetMeshes.length === 0) {
-          finalTargetMeshes = autoScreenMeshes.length > 0 ? autoScreenMeshes : allMeshes;
+          finalTargetMeshes = autoScreenMeshes;
+        }
+
+        // Check for YouTube video source (via component src, or embedded model userData)
+        let ytId = '';
+        let ytTargetNode = finalTargetMeshes[0] || obj;
+        let ytAspect = '16:9';
+
+        if (this.data.src && isYouTubeUrl(this.data.src)) {
+          ytId = extractYouTubeId(this.data.src);
+        }
+
+        if (!ytId) {
+          obj.traverse((node) => {
+            if (node.isMesh && !ytId) {
+              const uData = node.userData || {};
+              if (uData.isCSS3D && (uData.videoId || uData.youtubeId)) {
+                ytId = uData.videoId || uData.youtubeId;
+                ytTargetNode = node;
+                if (uData.aspectRatio) ytAspect = uData.aspectRatio;
+              } else if (uData.videoUrl && isYouTubeUrl(uData.videoUrl)) {
+                ytId = extractYouTubeId(uData.videoUrl);
+                ytTargetNode = node;
+              }
+            }
+          });
+        }
+
+        if (ytId) {
+          this.applyCSS3DYouTube(ytId, ytTargetNode, ytAspect);
+          return;
+        } else if (this.cssObject && this.el.sceneEl?._css3dScene) {
+          this.el.sceneEl._css3dScene.remove(this.cssObject);
+          this.cssObject = null;
         }
 
         const isFlip = !!this.data.flipX;
@@ -492,14 +658,24 @@ if (typeof AFRAME !== 'undefined') {
 
             finalTargetMeshes.forEach((node) => {
               const materials = Array.isArray(node.material) ? node.material : [node.material];
-              materials.forEach((mat) => {
-                mat.map = videoTexture;
-                mat.emissiveMap = videoTexture;
-                if (mat.emissive && typeof mat.emissive.set === 'function') {
-                  mat.emissive.set(0xffffff);
+              const targetSlot = typeof node.userData?.videoTargetMaterialIndex === 'number'
+                ? node.userData.videoTargetMaterialIndex
+                : null;
+
+              materials.forEach((mat, idx) => {
+                const isTarget = targetSlot !== null
+                  ? idx === targetSlot
+                  : (mat?.userData?.hasVideo || mat?.userData?.isVideoLayer || materials.length === 1 || (node.userData?.archetype === 'VIDEO_SCREEN' && idx === 4));
+
+                if (isTarget) {
+                  mat.map = videoTexture;
+                  mat.emissiveMap = videoTexture;
+                  if (mat.emissive && typeof mat.emissive.set === 'function') {
+                    mat.emissive.set(0xffffff);
+                  }
+                  mat.emissiveIntensity = 0.5;
+                  mat.needsUpdate = true;
                 }
-                mat.emissiveIntensity = 0.5;
-                mat.needsUpdate = true;
               });
             });
           }
@@ -512,7 +688,7 @@ if (typeof AFRAME !== 'undefined') {
             
             // Check if node or material has a videoUrl in userData (e.g. from Studio 4D*4 export)
             const nodeVideoUrl = node.userData?.videoUrl || node.userData?.videoSrc || node.userData?.video ||
-                                 materials[0]?.userData?.videoUrl || materials[0]?.userData?.videoSrc || '';
+              materials.find((m) => m?.userData?.videoUrl)?.userData?.videoUrl || '';
 
             if (nodeVideoUrl && (!this.data.src || this.data.src.trim() === '')) {
               const video = createOrActivateVideoElement(nodeVideoUrl);
@@ -527,14 +703,24 @@ if (typeof AFRAME !== 'undefined') {
                 vTex.flipY = false;
                 this.applyTextureFlip(vTex, isFlip);
 
-                materials.forEach((mat) => {
-                  mat.map = vTex;
-                  mat.emissiveMap = vTex;
-                  if (mat.emissive && typeof mat.emissive.set === 'function') {
-                    mat.emissive.set(0xffffff);
+                const targetSlot = typeof node.userData?.videoTargetMaterialIndex === 'number'
+                  ? node.userData.videoTargetMaterialIndex
+                  : null;
+
+                materials.forEach((mat, idx) => {
+                  const isTarget = targetSlot !== null
+                    ? idx === targetSlot
+                    : (mat?.userData?.hasVideo || mat?.userData?.isVideoLayer || materials.length === 1 || (node.userData?.archetype === 'VIDEO_SCREEN' && idx === 4));
+
+                  if (isTarget) {
+                    mat.map = vTex;
+                    mat.emissiveMap = vTex;
+                    if (mat.emissive && typeof mat.emissive.set === 'function') {
+                      mat.emissive.set(0xffffff);
+                    }
+                    mat.emissiveIntensity = 0.4;
+                    mat.needsUpdate = true;
                   }
-                  mat.emissiveIntensity = 0.4;
-                  mat.needsUpdate = true;
                 });
 
                 if (!this.videos.includes(video)) this.videos.push(video);
@@ -608,6 +794,38 @@ if (typeof AFRAME !== 'undefined') {
         });
       },
       tick: function () {
+        // 1. Synchronize CSS3D YouTube overlay with target 3D screen mesh
+        if (this.cssObject && this.cssTargetNode) {
+          const sceneEl = this.el.sceneEl;
+          const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
+          if (!this._tempWorldPos) {
+            this._tempWorldPos = new THREE_LIB.Vector3();
+            this._tempWorldQuat = new THREE_LIB.Quaternion();
+            this._tempWorldScale = new THREE_LIB.Vector3();
+          }
+
+          this.cssTargetNode.getWorldPosition(this._tempWorldPos);
+          this.cssTargetNode.getWorldQuaternion(this._tempWorldQuat);
+          this.cssTargetNode.getWorldScale(this._tempWorldScale);
+
+          // Push slightly forward along target's local Z axis to eliminate z-fighting with the screen bezel
+          const offset = new THREE_LIB.Vector3(0, 0, 0.02 * (this._tempWorldScale.z || 1)).applyQuaternion(this._tempWorldQuat);
+          this.cssObject.position.copy(this._tempWorldPos).add(offset);
+          this.cssObject.quaternion.copy(this._tempWorldQuat);
+
+          const baseScale = this.baseScale || 0.003125;
+          this.cssObject.scale.set(
+            baseScale * Math.abs(this._tempWorldScale.x || 1),
+            baseScale * Math.abs(this._tempWorldScale.y || 1),
+            baseScale * Math.abs(this._tempWorldScale.z || 1)
+          );
+
+          if (sceneEl && sceneEl._css3dRenderer && sceneEl._css3dScene && sceneEl.camera) {
+            sceneEl._css3dRenderer.render(sceneEl._css3dScene, sceneEl.camera);
+          }
+        }
+
+        // 2. Synchronize WebGL VideoTextures
         if (this.data.playing && this.videoTextures.length > 0) {
           for (let i = 0; i < this.videoTextures.length; i++) {
             const tex = this.videoTextures[i];
@@ -623,7 +841,19 @@ if (typeof AFRAME !== 'undefined') {
           }
         }
       },
-      update: function () {
+      update: function (oldData) {
+        if (oldData && (oldData.src !== this.data.src || oldData.targetMesh !== this.data.targetMesh)) {
+          this.applyVideo();
+        }
+        if (this.youtubeIframe && this.youtubeIframe.contentWindow) {
+          try {
+            const cmd = this.data.playing ? 'playVideo' : 'pauseVideo';
+            this.youtubeIframe.contentWindow.postMessage(
+              JSON.stringify({ event: 'command', func: cmd, args: [] }),
+              '*'
+            );
+          } catch (e) {}
+        }
         if (this.data.playing) {
           this.videos.forEach((v) => v.play().catch(() => {}));
         } else {
@@ -636,6 +866,14 @@ if (typeof AFRAME !== 'undefined') {
         if (sceneEl) {
           sceneEl.removeEventListener('targetFound', this.applyVideo);
           sceneEl.removeEventListener('arReady', this.applyVideo);
+          if (this.cssObject && sceneEl._css3dScene) {
+            sceneEl._css3dScene.remove(this.cssObject);
+            this.cssObject = null;
+          }
+        }
+        if (this.youtubeIframe && this.youtubeIframe.parentElement) {
+          this.youtubeIframe.parentElement.remove();
+          this.youtubeIframe = null;
         }
         ['pointerdown', 'touchstart', 'click', 'keydown'].forEach((evt) => {
           window.removeEventListener(evt, this.unlockVideos);

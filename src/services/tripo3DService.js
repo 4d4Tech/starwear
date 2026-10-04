@@ -327,3 +327,188 @@ export async function generate3DWithTripo({
 
   throw new Error('Tripo3D generation timed out after 5 minutes. Please check your dashboard on tripo3d.ai.');
 }
+
+export const TRIPO_ANIMATION_PRESETS = [
+  { id: 'preset:idle', name: 'Idle / Breathing', icon: 'person' },
+  { id: 'preset:walk', name: 'Natural Walk Cycle', icon: 'directions_walk' },
+  { id: 'preset:run', name: 'Athletic Run Cycle', icon: 'directions_run' },
+  { id: 'preset:jump', name: 'Jump', icon: 'sports_gymnastics' },
+  { id: 'preset:dance', name: 'Dance Groove', icon: 'nightlife' },
+  { id: 'preset:wave', name: 'Friendly Wave', icon: 'waving_hand' }
+];
+
+export async function rigModelWithTripo({
+  apiKey = DEFAULT_TRIPO_KEY,
+  originalModelTaskId,
+  outFormat = 'glb',
+  rigType = 'biped',
+  spec = 'tripo',
+  onProgress = () => {}
+}) {
+  const key = (apiKey || DEFAULT_TRIPO_KEY).trim();
+  if (!key) throw new Error('Tripo3D API Key is required.');
+  if (!originalModelTaskId) throw new Error('Original model task ID is required for Tripo3D rigging.');
+
+  onProgress({ status: 'SUBMITTING', message: 'Submitting auto-rig task to Tripo3D AI cluster...' });
+
+  const payload = {
+    type: 'animate_rig',
+    original_model_task_id: originalModelTaskId,
+    out_format: outFormat,
+    rig_type: rigType,
+    spec: spec
+  };
+
+  const endpoint = resolveTripoEndpoint('/v2/openapi/task');
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    let errDetail = '';
+    try {
+      const errJson = await res.json();
+      errDetail = errJson.message || errJson.error || JSON.stringify(errJson);
+    } catch {
+      const errText = await res.text();
+      errDetail = errText.slice(0, 200);
+    }
+    throw new Error(`Tripo3D Rigging Error (${res.status}): ${errDetail}`);
+  }
+
+  const taskData = await res.json();
+  const taskId = taskData.data?.task_id || taskData.task_id;
+  if (!taskId) throw new Error('No task_id returned from Tripo3D animate_rig API.');
+
+  onProgress({ status: 'PROCESSING', message: `Rigging task ${taskId} in progress...` });
+
+  const statusEndpoint = resolveTripoEndpoint(`/v2/openapi/task/${taskId}`);
+  let attempts = 0;
+  const maxAttempts = 120;
+
+  while (attempts < maxAttempts) {
+    await new Promise((r) => setTimeout(r, 2500));
+    attempts++;
+
+    const pollRes = await fetch(statusEndpoint, {
+      headers: { 'Authorization': `Bearer ${key}`, 'Accept': 'application/json' }
+    });
+
+    if (pollRes.ok) {
+      const pollData = await pollRes.json();
+      const data = pollData.data || pollData;
+      const status = (data.status || '').toLowerCase();
+
+      if (status === 'success') {
+        const output = data.output || {};
+        const downloadUrl = output.model_url || output.model || output.pbr_model || output.glb;
+        if (!downloadUrl) throw new Error('Rigging succeeded, but no model_url was provided.');
+
+        const proxyDownloadUrl = `/api-asset-proxy?url=${encodeURIComponent(downloadUrl)}`;
+        return {
+          glbUrl: proxyDownloadUrl,
+          rigTaskId: taskId
+        };
+      } else if (status === 'failed') {
+        throw new Error(`Tripo3D Rigging Failed: ${data.message || data.error || 'Unknown error'}`);
+      } else {
+        const progress = data.progress !== undefined ? data.progress : Math.min(95, attempts * 2);
+        onProgress({ status: 'PROCESSING', message: `Tripo3D AI Rigging Biped Skeleton (${progress}%)...` });
+      }
+    }
+  }
+
+  throw new Error('Tripo3D Rigging timed out after 5 minutes.');
+}
+
+export async function retargetModelWithTripo({
+  apiKey = DEFAULT_TRIPO_KEY,
+  rigTaskId,
+  preset = 'preset:idle',
+  outFormat = 'glb',
+  onProgress = () => {}
+}) {
+  const key = (apiKey || DEFAULT_TRIPO_KEY).trim();
+  if (!key) throw new Error('Tripo3D API Key is required.');
+  if (!rigTaskId) throw new Error('Rigged model task ID is required for animation retargeting.');
+
+  onProgress({ status: 'SUBMITTING', message: `Applying animation [${preset}] via Tripo3D...` });
+
+  const payload = {
+    type: 'animate_retarget',
+    original_model_task_id: rigTaskId,
+    preset: preset,
+    out_format: outFormat
+  };
+
+  const endpoint = resolveTripoEndpoint('/v2/openapi/task');
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    let errDetail = '';
+    try {
+      const errJson = await res.json();
+      errDetail = errJson.message || errJson.error || JSON.stringify(errJson);
+    } catch {
+      const errText = await res.text();
+      errDetail = errText.slice(0, 200);
+    }
+    throw new Error(`Tripo3D Retarget Error (${res.status}): ${errDetail}`);
+  }
+
+  const taskData = await res.json();
+  const taskId = taskData.data?.task_id || taskData.task_id;
+  if (!taskId) throw new Error('No task_id returned from Tripo3D retarget API.');
+
+  onProgress({ status: 'PROCESSING', message: `Synthesizing animation motion tracks [${preset}]...` });
+
+  const statusEndpoint = resolveTripoEndpoint(`/v2/openapi/task/${taskId}`);
+  let attempts = 0;
+  const maxAttempts = 120;
+
+  while (attempts < maxAttempts) {
+    await new Promise((r) => setTimeout(r, 2500));
+    attempts++;
+
+    const pollRes = await fetch(statusEndpoint, {
+      headers: { 'Authorization': `Bearer ${key}`, 'Accept': 'application/json' }
+    });
+
+    if (pollRes.ok) {
+      const pollData = await pollRes.json();
+      const data = pollData.data || pollData;
+      const status = (data.status || '').toLowerCase();
+
+      if (status === 'success') {
+        const output = data.output || {};
+        const downloadUrl = output.model_url || output.model || output.pbr_model || output.glb;
+        if (!downloadUrl) throw new Error('Animation retargeting succeeded, but no model_url was provided.');
+
+        const proxyDownloadUrl = `/api-asset-proxy?url=${encodeURIComponent(downloadUrl)}`;
+        return proxyDownloadUrl;
+      } else if (status === 'failed') {
+        throw new Error(`Tripo3D Animation Retarget Failed: ${data.message || data.error || 'Unknown error'}`);
+      } else {
+        const progress = data.progress !== undefined ? data.progress : Math.min(95, attempts * 2);
+        onProgress({ status: 'PROCESSING', message: `Tripo3D Generating Animation [${preset}] (${progress}%)...` });
+      }
+    }
+  }
+
+  throw new Error('Tripo3D Retargeting timed out after 5 minutes.');
+}
+

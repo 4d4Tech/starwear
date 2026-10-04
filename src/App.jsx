@@ -13,6 +13,7 @@ import AdminDashboard from './pages/AdminDashboard';
 import AdminInventory from './pages/AdminInventory';
 import AdminOrders from './pages/AdminOrders';
 import AdminSettings from './pages/AdminSettings';
+import AdminModelTemplates from './pages/AdminModelTemplates';
 import SeedDatabase from './pages/SeedDatabase';
 import Studio4D4 from './pages/Studio4D4';
 
@@ -43,6 +44,8 @@ function App() {
           <Route path="/ar-test" element={<ARTest />} />
           <Route path="/ar-test-live" element={<ARExperienceLauncher />} />
           <Route path="/studio44" element={<Studio4D4 />} />
+          <Route path="/studio" element={<Studio4D4 />} />
+          <Route path="/studio4d4" element={<Studio4D4 />} />
 
           {/* Admin Login Portal */}
           <Route path="/admin/login" element={<AdminLogin />} />
@@ -54,6 +57,8 @@ function App() {
               <Route path="dashboard" element={<AdminDashboard />} />
               <Route path="analytics" element={<AdminAnalytics />} />
               <Route path="inventory" element={<AdminInventory />} />
+              <Route path="model-templates" element={<AdminModelTemplates />} />
+              <Route path="templates" element={<AdminModelTemplates />} />
               <Route path="orders" element={<AdminOrders />} />
               <Route path="settings" element={<AdminSettings />} />
             </Route>

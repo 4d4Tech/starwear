@@ -265,10 +265,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     if (!model3D) return;
     const THREE_LIB = (typeof AFRAME !== 'undefined' && AFRAME.THREE) ? AFRAME.THREE : THREE;
 
-    const screenKeywords = [
-      'video', 'screen', 'display', 'curved', 'plane', 'front', 'panel',
-      'cloth', 'graphic', 'print', 'texture', 'layer', 'tee', 'shirt', 'hoodie', 'fabric'
-    ];
+    const screenKeywords = ['video', 'screen', 'display', 'cinema', 'videomat', 'screenmat'];
 
     const matchedMeshes = [];
     const allMeshes = [];
@@ -285,7 +282,14 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         } else if (targetParam !== 'auto' && (nodeName === targetParam || nodeUuid === targetParam)) {
           matchedMeshes.push(node);
         } else {
-          if (screenKeywords.some((kw) => nodeName.includes(kw)) || node.userData?.hasVideo || node.userData?.videoUrl) {
+          const hasVideo = !!(
+            node.userData?.hasVideo ||
+            node.userData?.videoUrl ||
+            (Array.isArray(node.material)
+              ? node.material.some((m) => m?.userData?.hasVideo || m?.userData?.isVideoLayer)
+              : (node.material?.userData?.hasVideo || node.material?.userData?.isVideoLayer))
+          );
+          if (hasVideo || screenKeywords.some((kw) => nodeName.includes(kw))) {
             autoScreenMeshes.push(node);
           }
         }
@@ -294,12 +298,22 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
     let finalTargetMeshes = matchedMeshes;
     if (finalTargetMeshes.length === 0) {
-      finalTargetMeshes = autoScreenMeshes.length > 0 ? autoScreenMeshes : allMeshes;
+      finalTargetMeshes = autoScreenMeshes;
     }
 
     finalTargetMeshes.forEach((node) => {
       const materials = Array.isArray(node.material) ? node.material : [node.material];
-      materials.forEach((mat) => {
+      const targetSlot = typeof node.userData?.videoTargetMaterialIndex === 'number'
+        ? node.userData.videoTargetMaterialIndex
+        : null;
+
+      materials.forEach((mat, idx) => {
+        const isTarget = targetSlot !== null
+          ? idx === targetSlot
+          : (mat?.userData?.hasVideo || mat?.userData?.isVideoLayer || materials.length === 1 || (node.userData?.archetype === 'VIDEO_SCREEN' && idx === 4));
+
+        if (!isTarget) return;
+
         ['map', 'emissiveMap'].forEach((mapName) => {
           if (mat[mapName]) {
             const tex = mat[mapName];
