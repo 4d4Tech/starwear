@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { collection, getDocs } from 'firebase/firestore';
-import { db } from '../firebase';
+import { ref, getDownloadURL } from 'firebase/storage';
+import { db, storage } from '../firebase';
 import Header from '../components/Header';
+import ProductViewer from '../components/ProductViewer';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 
@@ -11,8 +13,10 @@ export default function StoreFront() {
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState('ALL');
   const [cartToast, setCartToast] = useState('');
+  const [featuredModelUrl, setFeaturedModelUrl] = useState('');
+  const [featuredVideoUrl, setFeaturedVideoUrl] = useState('');
   const { addToCart } = useCart();
-  const { isSuperAdmin } = useAuth();
+  const { isAdmin, isSuperAdmin } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -50,9 +54,51 @@ export default function StoreFront() {
     setTimeout(() => setCartToast(''), 3500);
   };
 
-  // Featured Asset (defaults to first asset or 'video' asset)
-  const featuredAsset = inventory.find(i => i.id === 'video') || inventory[0] || null;
+  // Featured Asset (prioritizes assets with verified working 3D models & video layers)
+  const featuredAsset =
+    inventory.find(i => i.id === 'shirtvid') ||
+    inventory.find(i => i.id === 'better') ||
+    inventory.find(i => i.id === 'shirt') ||
+    inventory.find(i => (i.video_url || i.videoUrl || i.video_file_path)) ||
+    inventory[0] ||
+    null;
   const featuredPrice = featuredAsset?.price !== undefined ? Number(featuredAsset.price) : 99.00;
+
+  // Resolve 3D Model and Video Download URLs for Featured Asset
+  useEffect(() => {
+    let isMounted = true;
+    async function resolveFeaturedMedia() {
+      if (!featuredAsset) return;
+
+      // 1. Resolve 3D Model URL
+      let mUrl = featuredAsset.gltf_url || featuredAsset.modelUrl || '';
+      if (!mUrl && featuredAsset.gltf_file_path) {
+        try {
+          const fileRef = ref(storage, featuredAsset.gltf_file_path);
+          mUrl = await getDownloadURL(fileRef);
+        } catch (e) {
+          console.warn('Featured model storage lookup notice:', e);
+        }
+      }
+      if (isMounted) setFeaturedModelUrl(mUrl);
+
+      // 2. Resolve Video Layer URL
+      let vUrl = featuredAsset.video_url || featuredAsset.videoUrl || featuredAsset.ar_config?.video_url || featuredAsset.ar_config?.videoUrl || '';
+      const vPath = featuredAsset.video_file_path || featuredAsset.ar_config?.video_file_path || '';
+      if ((!vUrl || !vUrl.startsWith('http')) && vPath) {
+        try {
+          const vRef = ref(storage, vPath);
+          vUrl = await getDownloadURL(vRef);
+        } catch (vErr) {
+          console.warn('Featured video storage lookup notice:', vErr);
+        }
+      }
+      if (isMounted) setFeaturedVideoUrl(vUrl);
+    }
+
+    resolveFeaturedMedia();
+    return () => { isMounted = false; };
+  }, [featuredAsset]);
 
   // Filtered Assets
   const filteredAssets = inventory.filter(item => {
@@ -178,6 +224,45 @@ export default function StoreFront() {
                   })}
                 </div>
 
+                {/* Mobile Quick 3D Preview Hint */}
+                {featuredAsset && (
+                  <div className="md:hidden mt-6 p-3 rounded-xl bg-black/60 border border-white/10 backdrop-blur-md flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-cyan-400 text-lg">view_in_ar</span>
+                      <span className="text-xs font-mono text-white font-bold">{featuredAsset.name || featuredAsset.id}</span>
+                    </div>
+                    <Link
+                      to={`/product/${featuredAsset.id}`}
+                      className="text-[11px] font-mono font-bold text-cyan-300 hover:underline flex items-center gap-1"
+                    >
+                      <span>Inspect 3D</span>
+                      <span className="material-symbols-outlined text-xs">arrow_forward</span>
+                    </Link>
+                  </div>
+                )}
+
+              </div>
+            </div>
+
+            {/* Right Side: 3D Interactive Canvas & Live Video Screen */}
+            <div className="hidden md:flex absolute inset-y-0 right-0 w-1/2 items-center justify-center p-8 z-10 pointer-events-auto">
+              <div className="w-full h-[620px] max-h-[85vh] rounded-3xl overflow-hidden border border-white/20 shadow-[0_30px_90px_rgba(0,0,0,0.85)] bg-black/60 backdrop-blur-2xl relative">
+                {featuredModelUrl ? (
+                  <ProductViewer
+                    modelUrl={featuredModelUrl}
+                    videoUrl={featuredVideoUrl}
+                    config={featuredAsset?.ar_config || {}}
+                    assetName={featuredAsset?.name || featuredAsset?.id || 'Featured Digital Asset'}
+                    assetId={featuredAsset?.id || ''}
+                  />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center space-y-4 p-8 text-center bg-slate-950/80">
+                    <div className="w-12 h-12 border-3 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin"></div>
+                    <span className="text-xs font-mono font-bold tracking-widest text-cyan-300 uppercase">
+                      Initializing 3D Interactive Canvas
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -256,7 +341,7 @@ export default function StoreFront() {
               <div className="text-center py-24 border border-dashed border-outline-variant/30 rounded-2xl p-8">
                 <span className="material-symbols-outlined text-5xl text-secondary mb-3">inventory_2</span>
                 <h3 className="text-xl font-bold text-on-surface mb-2 uppercase">No Assets In Inventory</h3>
-                {isSuperAdmin ? (
+                {(isAdmin || isSuperAdmin) ? (
                   <>
                     <p className="text-sm text-on-surface-variant max-w-md mx-auto mb-6">
                       Add 3D GLB models and target images in the Admin Inventory to populate the storefront catalog.
@@ -399,10 +484,12 @@ export default function StoreFront() {
           <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/">STOREFRONT</Link>
           <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/shop">SHOP</Link>
           <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/collections">COLLECTIONS</Link>
-          {isSuperAdmin && (
+          {(isAdmin || isSuperAdmin) && (
             <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/admin/inventory">ADMIN INVENTORY</Link>
           )}
-          <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/ar-test">AR TEST</Link>
+          {(isAdmin || isSuperAdmin) && (
+            <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/ar-test">AR TEST</Link>
+          )}
         </div>
         <div className="text-sm text-secondary font-mono">
           © 2026 STAR WEAR. ALL RIGHTS RESERVED.

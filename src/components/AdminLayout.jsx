@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 const AdminLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { currentUser, userType, logout } = useAuth();
+  const { currentUser, userType, isSuperAdmin, logout } = useAuth();
 
   const handleLogout = async () => {
     await logout();
@@ -29,7 +29,7 @@ const AdminLayout = () => {
           <div className="flex items-center justify-between">
             <h1 className="font-headline-lg text-headline-lg-mobile text-primary tracking-widest">LUXE</h1>
             <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/20 text-primary uppercase">
-              {userType || 'SUPERADMIN'}
+              {userType ? userType.toUpperCase() : (isSuperAdmin ? 'SUPERADMIN' : 'ADMIN')}
             </span>
           </div>
           <p className="text-on-surface-variant mt-1 text-xs">Management Suite</p>
@@ -67,6 +67,11 @@ const AdminLayout = () => {
               <span>STUDIO 4D*4</span>
               <span className="material-symbols-outlined text-xs ml-auto text-secondary">open_in_new</span>
             </Link>
+            <Link to="/ar-test" target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 px-4 py-2 rounded-lg text-xs text-primary font-semibold hover:text-on-background hover:bg-surface-container-highest transition-colors mx-2">
+              <span className="material-symbols-outlined text-base">tune</span>
+              <span>AR CALIBRATOR (AR-TEST)</span>
+              <span className="material-symbols-outlined text-xs ml-auto text-secondary">open_in_new</span>
+            </Link>
             <Link to="/shop" className="flex items-center gap-3 px-4 py-2 rounded-lg text-xs text-secondary hover:text-on-background transition-colors mx-2">
               <span className="material-symbols-outlined text-base">storefront</span>
               <span>VIEW SHOP</span>
@@ -81,7 +86,7 @@ const AdminLayout = () => {
             </div>
             <div className="min-w-0 flex-1">
               <p className="font-bold text-on-surface text-xs truncate">
-                {currentUser?.displayName || 'Superadmin'}
+                {currentUser?.displayName || (isSuperAdmin ? 'Superadmin' : 'Admin')}
               </p>
               <p className="text-on-surface-variant text-[11px] truncate font-mono">
                 {currentUser?.email || 'brandonrobinson81@gmail.com'}

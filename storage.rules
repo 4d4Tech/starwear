@@ -2,8 +2,45 @@ rules_version = '2';
 
 service firebase.storage {
   match /b/{bucket}/o {
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && (
+        (request.auth.token.email is string && request.auth.token.email.lower() == 'brandonrobinson81@gmail.com') ||
+        request.auth.token.role == 'superadmin' ||
+        request.auth.token.userType == 'superadmin' ||
+        request.auth.token.superadmin == true
+      );
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        isSuperAdmin() ||
+        request.auth.token.role == 'admin' ||
+        request.auth.token.userType == 'admin' ||
+        request.auth.token.admin == true ||
+        request.auth.token.isAdmin == true ||
+        (
+          firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+          (
+            firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'superadmin'] ||
+            firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.userType in ['admin', 'superadmin'] ||
+            firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin == true ||
+            firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.isSuperAdmin == true
+          )
+        )
+      );
+    }
+
+    // Public Assets (3D models, textures, templates, AR targets, videos)
+    // Read: Public for web experiences and AR players
+    // Write: Restricted to verified admins and superadmins
     match /{allPaths=**} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isAdmin();
     }
   }
 }

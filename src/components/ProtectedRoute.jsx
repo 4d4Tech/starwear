@@ -2,8 +2,8 @@ import React from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-export default function ProtectedRoute() {
-  const { currentUser, isSuperAdmin, loading } = useAuth();
+export default function ProtectedRoute({ requireSuperAdmin = false }) {
+  const { currentUser, isAdmin, isSuperAdmin, loading } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -17,11 +17,13 @@ export default function ProtectedRoute() {
     );
   }
 
-  // Only authenticated users with superadmin role are granted access to admin views
-  if (!currentUser || !isSuperAdmin) {
+  // Grant access if user meets the role requirement (superadmin or general admin)
+  const hasAccess = currentUser && (requireSuperAdmin ? isSuperAdmin : (isAdmin || isSuperAdmin));
+
+  if (!hasAccess) {
     return (
       <Navigate 
-        to={`/admin/login?redirect=${encodeURIComponent(location.pathname)}`} 
+        to={`/admin/login?redirect=${encodeURIComponent(location.pathname + location.search)}`} 
         replace 
       />
     );

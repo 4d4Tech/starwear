@@ -9,7 +9,7 @@ export default function AdminLogin() {
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  const { login, logout, currentUser, isSuperAdmin } = useAuth();
+  const { login, logout, currentUser, isAdmin, isSuperAdmin } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -17,12 +17,12 @@ export default function AdminLogin() {
   const searchParams = new URLSearchParams(location.search);
   const redirectPath = searchParams.get('redirect') || '/admin/dashboard';
 
-  // If already logged in as superadmin, redirect directly
+  // If already logged in as admin or superadmin, redirect directly
   React.useEffect(() => {
-    if (currentUser && isSuperAdmin) {
+    if (currentUser && (isAdmin || isSuperAdmin)) {
       navigate(redirectPath, { replace: true });
     }
-  }, [currentUser, isSuperAdmin, navigate, redirectPath]);
+  }, [currentUser, isAdmin, isSuperAdmin, navigate, redirectPath]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -31,17 +31,17 @@ export default function AdminLogin() {
 
     try {
       const result = await login(email.trim(), password);
-      if (result.isSuperAdmin) {
+      if (result.isSuperAdmin || result.isAdmin) {
         navigate(redirectPath, { replace: true });
       } else {
-        // Authenticated, but not superadmin
+        // Authenticated, but neither admin nor superadmin
         await logout();
-        setErrorMessage('Access Denied: This account does not possess Superadmin privileges.');
+        setErrorMessage('Access Denied: This account does not possess Admin privileges.');
       }
     } catch (err) {
       console.error('Login error:', err);
       if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
-        setErrorMessage('Invalid email or password. Please verify your superadmin credentials.');
+        setErrorMessage('Invalid email or password. Please verify your admin credentials.');
       } else if (err.code === 'auth/too-many-requests') {
         setErrorMessage('Too many failed attempts. Please wait a moment and try again.');
       } else {
@@ -92,7 +92,7 @@ export default function AdminLogin() {
               Admin Suite
             </h1>
             <p className="text-xs text-[#a1a1aa] max-w-xs mx-auto">
-              Sign in with your verified superadmin credentials to manage inventory, catalog & analytics.
+              Sign in with your verified admin credentials to manage inventory, catalog & analytics.
             </p>
           </div>
 
@@ -164,7 +164,7 @@ export default function AdminLogin() {
                 </>
               ) : (
                 <>
-                  <span>Sign In as Superadmin</span>
+                  <span>Sign In to Admin Suite</span>
                   <span className="material-symbols-outlined text-base">arrow_forward</span>
                 </>
               )}
@@ -179,7 +179,7 @@ export default function AdminLogin() {
               className="text-xs text-[#71717a] hover:text-[#38bdf8] transition-colors inline-flex items-center gap-1.5 cursor-pointer"
             >
               <span className="material-symbols-outlined text-sm">key</span>
-              <span>Fill Superadmin Credentials</span>
+              <span>Fill Admin Credentials</span>
             </button>
           </div>
         </div>

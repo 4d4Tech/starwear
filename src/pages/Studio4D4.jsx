@@ -15,6 +15,7 @@ import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRe
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '../firebase';
+import { isYouTubeUrl, extractYouTubeId } from '../utils/aframe-components';
 import MeshTemplateBrowser from '../components/MeshTemplateBrowser';
 import ThreeDAIStudioModal from '../components/ThreeDAIStudioModal';
 import { getMeshTemplates, fetchTemplatesFromBucket } from '../utils/meshTemplates';
@@ -319,14 +320,14 @@ export class VideoDisplayManager {
     let targetMesh = mesh;
     if (!mesh.isMesh) {
       mesh.traverse?.((n) => {
-        if (!targetMesh.isMesh && n.isMesh && (n.userData?.hasVideo || n.userData?.videoTexture)) {
+        if (!targetMesh.isMesh && n.isMesh && (n.userData?.hasVideo || n.userData?.videoTexture || n.userData?.isCSS3D)) {
           targetMesh = n;
         }
       });
     }
     if (!targetMesh) return;
 
-    // Find and clean video entry
+    // Find and clean WebGL video entry
     for (const [vId, entry] of this.videoTextures.entries()) {
       if (entry.mesh === targetMesh || entry.mesh === mesh) {
         if (entry.video) {
@@ -336,6 +337,17 @@ export class VideoDisplayManager {
           entry.video.remove?.();
         }
         this.videoTextures.delete(vId);
+      }
+    }
+
+    // Clean CSS3D YouTube overlays associated with this mesh or parent
+    for (let i = this.css3dEntries.length - 1; i >= 0; i--) {
+      const entry = this.css3dEntries[i];
+      if (entry.targetMesh === targetMesh || entry.bezelMesh === targetMesh || entry.targetMesh === mesh || entry.bezelMesh === mesh) {
+        if (entry.cssObject && this.cssScene) {
+          this.cssScene.remove(entry.cssObject);
+        }
+        this.css3dEntries.splice(i, 1);
       }
     }
 
@@ -353,23 +365,49 @@ export class VideoDisplayManager {
     } else {
       const mats = Array.isArray(targetMesh.material) ? targetMesh.material : [targetMesh.material];
       mats.forEach((m) => {
-        if (m.userData?.hasVideo || m.userData?.isVideoLayer || m.map === targetMesh.userData?.videoTexture) {
+        if (m.userData?.hasVideo || m.userData?.isVideoLayer || m.userData?.isCSS3D || m.map === targetMesh.userData?.videoTexture) {
           m.map = null;
           m.emissiveMap = null;
           m.needsUpdate = true;
           delete m.userData?.hasVideo;
           delete m.userData?.videoUrl;
+          delete m.userData?.videoSrc;
           delete m.userData?.isVideoLayer;
+          delete m.userData?.isCSS3D;
+          delete m.userData?.videoId;
+          delete m.userData?.youtubeId;
         }
       });
     }
 
     targetMesh.userData.hasVideo = false;
+    delete targetMesh.userData.isCSS3D;
+    delete targetMesh.userData.videoId;
+    delete targetMesh.userData.youtubeId;
+    delete targetMesh.userData.css3dId;
     delete targetMesh.userData.videoTexture;
     delete targetMesh.userData.videoEl;
     delete targetMesh.userData.videoFile;
     delete targetMesh.userData.videoUrl;
+    delete targetMesh.userData.videoSrc;
     delete targetMesh.userData.videoTargetMaterialIndex;
+
+    // Clean top-level object metadata if mesh is nested
+    let topParent = targetMesh;
+    while (topParent.parent && topParent.parent !== this.app.scene) {
+      topParent = topParent.parent;
+    }
+    if (topParent && topParent !== targetMesh && topParent.userData) {
+      delete topParent.userData.hasVideo;
+      delete topParent.userData.isCSS3D;
+      delete topParent.userData.videoId;
+      delete topParent.userData.youtubeId;
+      delete topParent.userData.videoUrl;
+      delete topParent.userData.videoSrc;
+      delete topParent.userData.videoTargetMeshName;
+      delete topParent.userData.videoTargetMeshUuid;
+      delete topParent.userData.videoTargetMaterialIndex;
+    }
 
     this.app.updatePropertiesPanel();
     this.app.updateDiagnostics(`Removed video layer from "${targetMesh.name || 'Mesh'}". Base materials restored.`);
@@ -380,16 +418,18 @@ export class VideoDisplayManager {
     let targetMesh = mesh;
     if (!mesh.isMesh) {
       mesh.traverse?.((n) => {
-        if (!targetMesh.isMesh && n.isMesh && (n.userData?.hasVideo || n.userData?.videoTexture)) {
+        if (!targetMesh.isMesh && n.isMesh && (n.userData?.hasVideo || n.userData?.videoTexture || n.userData?.isCSS3D)) {
           targetMesh = n;
         }
       });
     }
-    if (!targetMesh || !targetMesh.userData?.videoTexture) return;
+    if (!targetMesh || (!targetMesh.userData?.videoTexture && !targetMesh.userData?.isCSS3D)) return;
 
-    const vTex = targetMesh.userData.videoTexture;
+    const vTex = targetMesh.userData.videoTexture || null;
     const oldSlot = targetMesh.userData.videoTargetMaterialIndex ?? 0;
     const initialVideoUrl = targetMesh.userData.videoUrl || '';
+    const isCSS3D = !!targetMesh.userData.isCSS3D;
+    const videoId = targetMesh.userData.videoId || targetMesh.userData.youtubeId || '';
 
     if (Array.isArray(targetMesh.material) && newSlotIndex >= 0 && newSlotIndex < targetMesh.material.length) {
       targetMesh.material = [...targetMesh.material];
@@ -403,23 +443,35 @@ export class VideoDisplayManager {
         oldMat.emissiveMap = null;
         delete oldMat.userData?.hasVideo;
         delete oldMat.userData?.isVideoLayer;
+        delete oldMat.userData?.isCSS3D;
+        delete oldMat.userData?.videoId;
+        delete oldMat.userData?.youtubeId;
         oldMat.needsUpdate = true;
         targetMesh.material[oldSlot] = oldMat;
       }
 
-      // Clone new slot material and attach video texture strictly to this slot
+      // Clone new slot material and attach video texture/styling strictly to this slot
       const newMat = targetMesh.material[newSlotIndex].clone();
-      newMat.map = vTex;
-      newMat.emissiveMap = vTex;
-      newMat.emissive = new THREE.Color(0xffffff);
-      newMat.emissiveIntensity = 0.4;
+      if (vTex) {
+        newMat.map = vTex;
+        newMat.emissiveMap = vTex;
+        newMat.emissive = new THREE.Color(0xffffff);
+        newMat.emissiveIntensity = 0.4;
+      } else if (isCSS3D) {
+        newMat.color = new THREE.Color(0x0e1322);
+        newMat.emissive = new THREE.Color(0x1e1b4b);
+        newMat.emissiveIntensity = 0.4;
+      }
       newMat.needsUpdate = true;
       newMat.userData = {
         ...newMat.userData,
         hasVideo: true,
         videoUrl: initialVideoUrl,
         videoSrc: initialVideoUrl,
-        isVideoLayer: true
+        isVideoLayer: true,
+        isCSS3D: isCSS3D,
+        videoId: videoId,
+        youtubeId: videoId
       };
       targetMesh.material[newSlotIndex] = newMat;
 
@@ -782,8 +834,17 @@ export class VideoDisplayManager {
     return (match && match[2].length === 11) ? match[2] : 'dQw4w9WgXcQ';
   }
 
-  addCSS3DYouTubeOverlay({ urlOrId = 'dQw4w9WgXcQ', aspectRatio = '16:9', frameStyle = 'cyber_bezel', name = 'YouTube_3D_Display' }) {
+  addCSS3DYouTubeOverlay({
+    urlOrId = 'dQw4w9WgXcQ',
+    aspectRatio = '16:9',
+    frameStyle = 'cyber_bezel',
+    name = 'YouTube_3D_Display',
+    targetMode = 'FLAT_DISPLAY',
+    selectedMesh = null,
+    targetMaterialIndex = 0
+  }) {
     const videoId = this.extractYouTubeId(urlOrId);
+    const fullVideoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
     let iframeW = 640;
     let iframeH = 360;
@@ -817,12 +878,163 @@ export class VideoDisplayManager {
 
     // 2. Create CSS3DObject
     const cssObject = new CSS3DObject(containerDiv);
-    const baseScale = 0.005;
+    let baseScale = 0.005;
+    if (targetMode === 'SELECTED_MESH' && selectedMesh) {
+      let calcMesh = selectedMesh;
+      if (!calcMesh.isMesh) {
+        calcMesh.traverse?.((c) => { if (!calcMesh.isMesh && c.isMesh) calcMesh = c; });
+      }
+      if (calcMesh && calcMesh.geometry) {
+        if (!calcMesh.geometry.boundingBox) calcMesh.geometry.computeBoundingBox();
+        if (calcMesh.geometry.boundingBox) {
+          const bSize = new THREE.Vector3();
+          calcMesh.geometry.boundingBox.getSize(bSize);
+          const maxDim = Math.max(bSize.x, bSize.y);
+          if (maxDim > 0.05) {
+            baseScale = (maxDim * 0.85) / iframeW;
+          }
+        }
+      }
+    }
     cssObject.scale.set(baseScale, baseScale, baseScale);
     cssObject.position.set(0, 2.0, 0);
     this.cssScene.add(cssObject);
 
-    // 3. Create WebGL Bezel / Stand Mesh to synchronize with Three.js selection & gizmos
+    const entryId = `css3d_${Date.now()}`;
+
+    // CASE A: Map onto specified 3D mesh & distinct material/face slot
+    if (targetMode === 'SELECTED_MESH' && selectedMesh) {
+      let mesh = selectedMesh;
+      if (!mesh.isMesh) {
+        mesh.traverse?.((child) => {
+          if (!mesh.isMesh && child.isMesh) mesh = child;
+        });
+      }
+
+      if (mesh && mesh.isMesh) {
+        const slot = typeof targetMaterialIndex === 'number' && targetMaterialIndex >= 0 ? targetMaterialIndex : 0;
+
+        const extraUserData = {
+          hasVideo: true,
+          videoUrl: fullVideoUrl,
+          videoSrc: fullVideoUrl,
+          isVideoLayer: true,
+          isCSS3D: true,
+          videoId,
+          youtubeId: videoId,
+          aspectRatio,
+          frameStyle,
+          videoTargetMaterialIndex: slot,
+          archetype: 'CSS3D_YOUTUBE'
+        };
+
+        if (Array.isArray(mesh.material)) {
+          if (!mesh.userData.originalMaterials) {
+            mesh.userData.originalMaterials = mesh.material.map((m) => m.clone());
+          }
+          mesh.material = [...mesh.material];
+          const targetSlot = Math.min(slot, mesh.material.length - 1);
+          const origMat = mesh.material[targetSlot] || new THREE.MeshStandardMaterial();
+          const screenMat = origMat.clone();
+          screenMat.color = new THREE.Color(0x0e1322);
+          screenMat.roughness = 0.3;
+          screenMat.metalness = 0.8;
+          screenMat.emissive = new THREE.Color(0x1e1b4b);
+          screenMat.emissiveIntensity = 0.4;
+          screenMat.needsUpdate = true;
+          screenMat.userData = { ...screenMat.userData, ...extraUserData };
+          mesh.material[targetSlot] = screenMat;
+          mesh.userData.videoTargetMaterialIndex = targetSlot;
+          if (mesh.userData?.materials?.lit && Array.isArray(mesh.userData.materials.lit)) {
+            mesh.userData.materials.lit = [...mesh.material];
+          }
+        } else if (mesh.geometry?.groups && mesh.geometry.groups.length > 1) {
+          const origMat = mesh.material || new THREE.MeshStandardMaterial();
+          if (!mesh.userData.originalMaterials) {
+            mesh.userData.originalMaterials = origMat.clone();
+          }
+          const numGroups = mesh.geometry.groups.length;
+          const mats = Array.from({ length: Math.max(numGroups, 2) }, () => origMat.clone());
+          const targetSlot = Math.min(slot, mats.length - 1);
+          const screenMat = origMat.clone();
+          screenMat.color = new THREE.Color(0x0e1322);
+          screenMat.roughness = 0.3;
+          screenMat.metalness = 0.8;
+          screenMat.emissive = new THREE.Color(0x1e1b4b);
+          screenMat.emissiveIntensity = 0.4;
+          screenMat.needsUpdate = true;
+          screenMat.userData = { ...screenMat.userData, ...extraUserData };
+          mats[targetSlot] = screenMat;
+          mesh.material = mats;
+          mesh.userData.videoTargetMaterialIndex = targetSlot;
+          if (mesh.userData?.materials?.lit) {
+            mesh.userData.materials.lit = mats;
+          }
+        } else if (mesh.material) {
+          if (!mesh.userData.originalMaterials) {
+            mesh.userData.originalMaterials = mesh.material.clone();
+          }
+          const screenMat = mesh.material.clone();
+          screenMat.color = new THREE.Color(0x0e1322);
+          screenMat.roughness = 0.3;
+          screenMat.metalness = 0.8;
+          screenMat.emissive = new THREE.Color(0x1e1b4b);
+          screenMat.emissiveIntensity = 0.4;
+          screenMat.needsUpdate = true;
+          screenMat.userData = { ...screenMat.userData, ...extraUserData };
+          mesh.material = screenMat;
+          mesh.userData.videoTargetMaterialIndex = 0;
+          if (mesh.userData?.materials?.lit) {
+            mesh.userData.materials.lit = [screenMat];
+          }
+        }
+
+        mesh.userData = {
+          ...mesh.userData,
+          ...extraUserData,
+          css3dId: entryId
+        };
+
+        // Also assign to top-level object if mesh is inside a Group
+        let topParent = mesh;
+        while (topParent.parent && topParent.parent !== this.app.scene) {
+          topParent = topParent.parent;
+        }
+        if (topParent && topParent !== mesh) {
+          topParent.userData = {
+            ...topParent.userData,
+            hasVideo: true,
+            isCSS3D: true,
+            videoId,
+            youtubeId: videoId,
+            videoUrl: fullVideoUrl,
+            aspectRatio,
+            frameStyle,
+            videoTargetMeshName: mesh.name,
+            videoTargetMeshUuid: mesh.uuid,
+            videoTargetMaterialIndex: mesh.userData.videoTargetMaterialIndex ?? 0
+          };
+        }
+
+        this.css3dEntries.push({
+          id: entryId,
+          cssObject,
+          bezelMesh: mesh,
+          targetMesh: mesh,
+          videoId,
+          baseScale,
+          aspectRatio,
+          slotIndex: mesh.userData.videoTargetMaterialIndex ?? 0
+        });
+
+        this.app.selectObject(mesh);
+        this.app.updatePropertiesPanel();
+        this.app.updateDiagnostics(`Attached YouTube Video [${videoId}] to "${mesh.name || 'Selected Mesh'}" [Layer/Slot ${mesh.userData.videoTargetMaterialIndex ?? 0}]`);
+        return mesh;
+      }
+    }
+
+    // CASE B: Create WebGL Bezel / Stand Mesh to synchronize with Three.js selection & gizmos
     const worldW = iframeW * baseScale;
     const worldH = iframeH * baseScale;
     const bezelThickness = 0.08;
@@ -842,17 +1054,19 @@ export class VideoDisplayManager {
     bezelMesh.name = name || `YouTube_${videoId}`;
     bezelMesh.position.set(0, 2.0, 0);
 
-    const entryId = `css3d_${Date.now()}`;
     bezelMesh.userData = {
       isGenerated: true,
       archetype: 'CSS3D_YOUTUBE',
       isCSS3D: true,
       css3dId: entryId,
       videoId,
-      iframe,
-      cssObject,
+      youtubeId: videoId,
+      videoUrl: fullVideoUrl,
+      aspectRatio,
       baseScale,
       frameStyle,
+      hasVideo: true,
+      isVideoLayer: true,
       materials: { lit: bezelMats }
     };
 
@@ -860,6 +1074,7 @@ export class VideoDisplayManager {
       id: entryId,
       cssObject,
       bezelMesh,
+      targetMesh: bezelMesh,
       videoId,
       baseScale
     });
@@ -871,21 +1086,64 @@ export class VideoDisplayManager {
   }
 
   update() {
-    // 1. Sync CSS3D YouTube overlays to WebGL bezel positions
+    // 1. Sync CSS3D YouTube overlays to WebGL target mesh positions
+    if (!this._tempWorldPos) {
+      this._tempWorldPos = new THREE.Vector3();
+      this._tempWorldQuat = new THREE.Quaternion();
+      this._tempWorldScale = new THREE.Vector3();
+    }
+
     for (let i = this.css3dEntries.length - 1; i >= 0; i--) {
       const entry = this.css3dEntries[i];
-      if (!this.app.objects.includes(entry.bezelMesh)) {
+      const target = entry.targetMesh || entry.bezelMesh;
+      if (!target) {
         this.cssScene.remove(entry.cssObject);
         this.css3dEntries.splice(i, 1);
         continue;
       }
-      entry.cssObject.position.copy(entry.bezelMesh.position);
-      entry.cssObject.quaternion.copy(entry.bezelMesh.quaternion);
-      const s = entry.baseScale;
+
+      let inScene = this.app.objects.includes(target) || target === this.app.scene;
+      if (!inScene) {
+        let p = target.parent;
+        while (p) {
+          if (this.app.objects.includes(p) || p === this.app.scene) {
+            inScene = true;
+            break;
+          }
+          p = p.parent;
+        }
+      }
+
+      if (!inScene) {
+        this.cssScene.remove(entry.cssObject);
+        this.css3dEntries.splice(i, 1);
+        continue;
+      }
+
+      target.getWorldPosition(this._tempWorldPos);
+      target.getWorldQuaternion(this._tempWorldQuat);
+      target.getWorldScale(this._tempWorldScale);
+
+      // If target has geometry, calculate bounding box center for accurate submesh surface alignment
+      if (target.geometry) {
+        if (!target.geometry.boundingBox) target.geometry.computeBoundingBox();
+        if (target.geometry.boundingBox) {
+          const geomCenter = new THREE.Vector3();
+          target.geometry.boundingBox.getCenter(geomCenter);
+          geomCenter.applyMatrix4(target.matrixWorld);
+          this._tempWorldPos.copy(geomCenter);
+        }
+      }
+
+      const offset = new THREE.Vector3(0, 0, 0.02 * Math.abs(this._tempWorldScale.z || 1)).applyQuaternion(this._tempWorldQuat);
+      entry.cssObject.position.copy(this._tempWorldPos).add(offset);
+      entry.cssObject.quaternion.copy(this._tempWorldQuat);
+
+      const s = entry.baseScale || 0.005;
       entry.cssObject.scale.set(
-        entry.bezelMesh.scale.x * s,
-        entry.bezelMesh.scale.y * s,
-        entry.bezelMesh.scale.z * s
+        Math.abs(this._tempWorldScale.x || 1) * s,
+        Math.abs(this._tempWorldScale.y || 1) * s,
+        Math.abs(this._tempWorldScale.z || 1) * s
       );
     }
 
@@ -2290,6 +2548,25 @@ export default function Studio4D4() {
             if (videoBadge) videoBadge.textContent = 'CSS3D YouTube';
             if (webglControls) webglControls.classList.add('hidden');
             if (css3dControls) css3dControls.classList.remove('hidden');
+
+            const ytSlotSelect = document.getElementById('youtube-slot-select');
+            const ytSlotContainer = document.getElementById('youtube-slot-container');
+            if (ytSlotSelect && ytSlotContainer) {
+              const slots = this.getMaterialSlotsForMesh(videoOwner);
+              if (slots.length > 1) {
+                ytSlotContainer.classList.remove('hidden');
+                ytSlotSelect.innerHTML = '';
+                slots.forEach((s) => {
+                  const opt = document.createElement('option');
+                  opt.value = s.index;
+                  opt.textContent = `${s.name} ${s.hasVideo ? '★ (Active YouTube)' : ''}`;
+                  ytSlotSelect.appendChild(opt);
+                });
+                ytSlotSelect.value = videoOwner.userData?.videoTargetMaterialIndex ?? 0;
+              } else {
+                ytSlotContainer.classList.add('hidden');
+              }
+            }
           } else if (videoOwner.userData?.hasVideo) {
             if (videoBadge) videoBadge.textContent = 'WebGL Texture';
             if (webglControls) webglControls.classList.remove('hidden');
@@ -2510,6 +2787,15 @@ export default function Studio4D4() {
         });
 
         document.getElementById('btn-remove-video-layer')?.addEventListener('click', () => {
+          this.videoDisplayManager.removeVideoFromMesh(this.selectedObject);
+        });
+
+        document.getElementById('youtube-slot-select')?.addEventListener('change', (e) => {
+          const slot = parseInt(e.target.value, 10);
+          this.videoDisplayManager.switchVideoTargetSlot(this.selectedObject, slot);
+        });
+
+        document.getElementById('btn-remove-youtube-layer')?.addEventListener('click', () => {
           this.videoDisplayManager.removeVideoFromMesh(this.selectedObject);
         });
 
@@ -2758,22 +3044,63 @@ export default function Studio4D4() {
       prepareMeshForExport(obj) {
         if (!obj || obj.isLight || obj.isHelper) return null;
 
+        const sanitizeUserData = (rawUserData) => {
+          if (!rawUserData || typeof rawUserData !== 'object') return {};
+          const clean = {};
+          for (const [key, val] of Object.entries(rawUserData)) {
+            // Strip DOM elements, circular references, and complex Three.js objects
+            if (
+              key === 'iframe' ||
+              key === 'cssObject' ||
+              key === 'videoEl' ||
+              key === 'videoTexture' ||
+              key === 'materials' ||
+              key === 'originalMaterials' ||
+              key === 'skeleton' ||
+              key === 'parent' ||
+              key === 'children'
+            ) {
+              continue;
+            }
+            if (val instanceof HTMLElement || (typeof EventTarget !== 'undefined' && val instanceof EventTarget)) continue;
+            if (val && typeof val === 'object') {
+              if (val.isObject3D || val.isMaterial || val.isTexture) continue;
+            }
+            clean[key] = val;
+          }
+          return clean;
+        };
+
         const sanitizeMaterial = (m) => {
           if (!m) return new THREE.MeshStandardMaterial({ color: 0x888888 });
-          const cm = m.clone();
+          let cm;
+          try {
+            cm = m.clone();
+          } catch {
+            cm = new THREE.MeshStandardMaterial({
+              color: m.color ? m.color.clone() : 0x888888,
+              roughness: m.roughness ?? 0.5,
+              metalness: m.metalness ?? 0.0
+            });
+          }
+          cm.userData = sanitizeUserData(m.userData);
           // Snapshot dynamic video textures into static canvas textures for GLTF export
           if (cm.map && (cm.map.isVideoTexture || (cm.map.image && typeof cm.map.image.play === 'function'))) {
             const video = cm.map.image;
             if (video && (video.videoWidth || video.width)) {
-              const canvas = document.createElement('canvas');
-              canvas.width = video.videoWidth || video.width || 512;
-              canvas.height = video.videoHeight || video.height || 512;
-              const ctx = canvas.getContext('2d');
-              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-              const staticTex = new THREE.CanvasTexture(canvas);
-              staticTex.colorSpace = THREE.SRGBColorSpace;
-              cm.map = staticTex;
-              if (cm.emissiveMap) cm.emissiveMap = staticTex;
+              try {
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth || video.width || 512;
+                canvas.height = video.videoHeight || video.height || 512;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const staticTex = new THREE.CanvasTexture(canvas);
+                staticTex.colorSpace = THREE.SRGBColorSpace;
+                cm.map = staticTex;
+                if (cm.emissiveMap) cm.emissiveMap = staticTex;
+              } catch (e) {
+                console.warn('Could not snapshot video texture to canvas:', e);
+              }
             }
           }
           return cm;
@@ -2792,8 +3119,20 @@ export default function Studio4D4() {
             clonedRig.position.copy(obj.position);
             clonedRig.quaternion.copy(obj.quaternion);
             clonedRig.scale.copy(obj.scale);
-            clonedRig.userData = { ...obj.userData };
+            clonedRig.userData = sanitizeUserData(obj.userData);
+            if (obj.userData?.hasVideo || obj.userData?.videoId || obj.userData?.videoUrl) {
+              clonedRig.userData.hasVideo = true;
+              clonedRig.userData.videoUrl = obj.userData.videoUrl || '';
+              clonedRig.userData.videoSrc = obj.userData.videoSrc || obj.userData.videoUrl || '';
+              clonedRig.userData.isCSS3D = !!obj.userData.isCSS3D;
+              clonedRig.userData.videoId = obj.userData.videoId || obj.userData.youtubeId || '';
+              clonedRig.userData.youtubeId = obj.userData.youtubeId || obj.userData.videoId || '';
+              clonedRig.userData.aspectRatio = obj.userData.aspectRatio || '16:9';
+              clonedRig.userData.frameStyle = obj.userData.frameStyle || 'cyber_bezel';
+              clonedRig.userData.videoTargetMaterialIndex = typeof obj.userData.videoTargetMaterialIndex === 'number' ? obj.userData.videoTargetMaterialIndex : 0;
+            }
             clonedRig.traverse((child) => {
+              child.userData = sanitizeUserData(child.userData);
               if (child.isMesh && child.material) {
                 if (Array.isArray(child.material)) {
                   child.material = child.material.map(sanitizeMaterial);
@@ -2846,8 +3185,14 @@ export default function Studio4D4() {
           }
 
           const isCSS3D = !!(obj.userData?.isCSS3D || obj.userData?.archetype === 'CSS3D_YOUTUBE');
-          const videoId = obj.userData?.videoId || obj.userData?.youtubeId || '';
-          const videoSrc = obj.userData?.videoEl?.src || obj.userData?.videoUrl || (obj.material?.map?.image?.src || '') || (videoId ? `https://www.youtube.com/watch?v=${videoId}` : '');
+          let videoId = obj.userData?.videoId || obj.userData?.youtubeId || '';
+          let videoSrc = obj.userData?.videoEl?.src || obj.userData?.videoUrl || obj.userData?.videoSrc || (obj.material?.map?.image?.src || '') || '';
+          if (!videoId && videoSrc && isYouTubeUrl(videoSrc)) {
+            videoId = extractYouTubeId(videoSrc);
+          }
+          if (videoId && !videoSrc) {
+            videoSrc = `https://www.youtube.com/watch?v=${videoId}`;
+          }
           const hasVideo = !!(obj.userData?.hasVideo || videoSrc || obj.userData?.videoTexture || isCSS3D || videoId);
           const aspectRatio = obj.userData?.aspectRatio || '16:9';
           const frameStyle = obj.userData?.frameStyle || 'cyber_bezel';
@@ -2862,7 +3207,7 @@ export default function Studio4D4() {
               videoUrl: videoSrc,
               videoSrc: videoSrc,
               isVideoLayer: true,
-              isCSS3D: isCSS3D,
+              isCSS3D: isCSS3D || !!videoId,
               videoId: videoId,
               youtubeId: videoId,
               aspectRatio: aspectRatio,
@@ -2890,17 +3235,18 @@ export default function Studio4D4() {
           cloneMesh.quaternion.copy(obj.quaternion);
           cloneMesh.scale.copy(obj.scale);
           cloneMesh.userData = {
+            ...sanitizeUserData(obj.userData),
             isGenerated: true,
             hasVideo: hasVideo,
             videoUrl: hasVideo ? videoSrc : '',
             videoSrc: hasVideo ? videoSrc : '',
-            isCSS3D: isCSS3D,
+            isCSS3D: isCSS3D || !!videoId,
             videoId: videoId,
             youtubeId: videoId,
             aspectRatio: aspectRatio,
             frameStyle: frameStyle,
             videoTargetMaterialIndex: typeof obj.userData?.videoTargetMaterialIndex === 'number' ? obj.userData.videoTargetMaterialIndex : 0,
-            archetype: isCSS3D ? 'CSS3D_YOUTUBE' : (obj.userData?.archetype || 'STANDARD')
+            archetype: (isCSS3D || videoId) ? 'CSS3D_YOUTUBE' : (obj.userData?.archetype || 'STANDARD')
           };
           return cloneMesh;
         }
@@ -2912,8 +3258,22 @@ export default function Studio4D4() {
           cloneGroup.position.copy(obj.position);
           cloneGroup.quaternion.copy(obj.quaternion);
           cloneGroup.scale.copy(obj.scale);
-          const { hasVideo, videoUrl, videoSrc, iframe, cssObject, ...safeUserData } = obj.userData || {};
-          cloneGroup.userData = safeUserData;
+
+          const safeUserData = sanitizeUserData(obj.userData);
+          // Preserve top group video metadata
+          if (obj.userData?.hasVideo || obj.userData?.videoId || obj.userData?.videoUrl) {
+            safeUserData.hasVideo = true;
+            safeUserData.videoUrl = obj.userData.videoUrl || '';
+            safeUserData.videoSrc = obj.userData.videoSrc || obj.userData.videoUrl || '';
+            safeUserData.isCSS3D = !!obj.userData.isCSS3D;
+            safeUserData.videoId = obj.userData.videoId || obj.userData.youtubeId || '';
+            safeUserData.youtubeId = obj.userData.youtubeId || obj.userData.videoId || '';
+            safeUserData.aspectRatio = obj.userData.aspectRatio || '16:9';
+            safeUserData.frameStyle = obj.userData.frameStyle || 'cyber_bezel';
+            safeUserData.videoTargetMaterialIndex = typeof obj.userData.videoTargetMaterialIndex === 'number' ? obj.userData.videoTargetMaterialIndex : 0;
+            if (obj.userData.videoTargetMeshName) safeUserData.videoTargetMeshName = obj.userData.videoTargetMeshName;
+            if (obj.userData.videoTargetMeshUuid) safeUserData.videoTargetMeshUuid = obj.userData.videoTargetMeshUuid;
+          }
 
           obj.children.forEach((child) => {
             const preparedChild = this.prepareMeshForExport(child);
@@ -2921,6 +3281,24 @@ export default function Studio4D4() {
               cloneGroup.add(preparedChild);
             }
           });
+
+          // If child meshes have video metadata, ensure the group reflects hasVideo if not already set
+          if (!safeUserData.hasVideo) {
+            cloneGroup.traverse((child) => {
+              if (child !== cloneGroup && (child.userData?.hasVideo || child.userData?.videoId)) {
+                safeUserData.hasVideo = true;
+                safeUserData.videoUrl = child.userData.videoUrl || '';
+                safeUserData.videoSrc = child.userData.videoSrc || '';
+                safeUserData.isCSS3D = !!child.userData.isCSS3D;
+                safeUserData.videoId = child.userData.videoId || child.userData.youtubeId || '';
+                safeUserData.youtubeId = child.userData.youtubeId || child.userData.videoId || '';
+                safeUserData.aspectRatio = child.userData.aspectRatio || '16:9';
+                safeUserData.frameStyle = child.userData.frameStyle || 'cyber_bezel';
+              }
+            });
+          }
+
+          cloneGroup.userData = safeUserData;
 
           if (cloneGroup.children.length > 0) {
             return cloneGroup;
@@ -3742,6 +4120,30 @@ export default function Studio4D4() {
                   Click inside the screen directly in the 3D viewport to control the YouTube player, scrub playback, or adjust volume.
                 </p>
               </div>
+
+              <div id="youtube-slot-container" className="p-2.5 bg-slate-950/70 border border-slate-800 rounded-xl space-y-1 hidden">
+                <div className="flex items-center justify-between mb-1">
+                  <label htmlFor="youtube-slot-select" className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                    Target Face / Material Layer
+                  </label>
+                  <span className="text-[9px] text-emerald-400 font-mono">Isolated</span>
+                </div>
+                <select
+                  id="youtube-slot-select"
+                  className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
+                >
+                  <option value="0">Slot 0 (Primary)</option>
+                </select>
+              </div>
+
+              <button
+                type="button"
+                id="btn-remove-youtube-layer"
+                className="w-full py-1.5 px-2 bg-red-950/30 hover:bg-red-900/50 text-red-300 text-xs font-medium rounded-lg border border-red-500/20 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-xs">delete</span>
+                Remove YouTube Layer
+              </button>
             </div>
           </div>
 
@@ -4150,6 +4552,22 @@ export default function Studio4D4() {
               const applyWebGLVideo = (sourceUrlOrFile, clipName) => {
                 if (!appRef.current?.videoDisplayManager) return;
                 const targetMesh = videoTargetMode === 'SELECTED_MESH' ? activeTargetMesh : null;
+
+                // Auto-route YouTube URLs to addCSS3DYouTubeOverlay
+                if (typeof sourceUrlOrFile === 'string' && isYouTubeUrl(sourceUrlOrFile)) {
+                  appRef.current.videoDisplayManager.addCSS3DYouTubeOverlay({
+                    urlOrId: sourceUrlOrFile,
+                    aspectRatio: '16:9',
+                    frameStyle: 'cyber_bezel',
+                    name: clipName || 'YouTube_3D_Screen',
+                    targetMode: videoTargetMode,
+                    selectedMesh: targetMesh,
+                    targetMaterialIndex: videoTargetMaterialIndex
+                  });
+                  setVideoModalOpen(false);
+                  return;
+                }
+
                 appRef.current.videoDisplayManager.addWebGLVideoDisplay({
                   source: sourceUrlOrFile,
                   targetMode: videoTargetMode,
@@ -4432,101 +4850,266 @@ export default function Studio4D4() {
 
 
             {/* TAB 2: CSS3D YOUTUBE OVERLAY */}
-            {videoTab === 'youtube' && (
-              <div className="space-y-4 animate-fade-in">
-                <div className="p-3 bg-fuchsia-950/40 border border-fuchsia-500/20 rounded-xl text-xs text-fuchsia-300 leading-relaxed">
-                  📺 <strong>Interactive CSS3D Player:</strong> Embedded directly into 3D scene space. Allows live user interaction, volume scrubbing, playlist controls, and YouTube streaming inside the 3D viewport.
-                </div>
+            {videoTab === 'youtube' && (() => {
+              const candidateMeshes = appRef.current?.getAllCandidateMeshes?.() || [];
+              const activeTargetMesh = videoTargetMeshUuid
+                ? appRef.current?.findMeshByUuid?.(videoTargetMeshUuid)
+                : (appRef.current?.selectedObject?.isMesh ? appRef.current.selectedObject : (candidateMeshes[0]?.mesh || null));
+              const materialSlots = activeTargetMesh ? appRef.current?.getMaterialSlotsForMesh?.(activeTargetMesh) || [] : [];
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-                    YouTube Video URL or ID
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="https://www.youtube.com/watch?v=... or Video ID"
-                    value={youtubeUrlInput}
-                    onChange={(e) => setYoutubeUrlInput(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono"
-                  />
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    <span className="text-[10px] text-slate-500 self-center">Presets:</span>
-                    <button
-                      type="button"
-                      onClick={() => setYoutubeUrlInput('https://www.youtube.com/watch?v=jfKfPfyJRdk')}
-                      className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 cursor-pointer"
-                    >
-                      ☕ Lofi Radio
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setYoutubeUrlInput('https://www.youtube.com/watch?v=ysz5S6PUM-U')}
-                      className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 cursor-pointer"
-                    >
-                      🌿 4K Nature
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setYoutubeUrlInput('https://www.youtube.com/watch?v=dQw4w9WgXcQ')}
-                      className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 cursor-pointer"
-                    >
-                      🎵 Music Video
-                    </button>
+              return (
+                <div className="space-y-4 animate-fade-in">
+                  <div className="p-3 bg-fuchsia-950/40 border border-fuchsia-500/20 rounded-xl text-xs text-fuchsia-300 leading-relaxed">
+                    📺 <strong>Interactive CSS3D YouTube Player:</strong> Embedded directly into 3D scene space or attached to a model surface/face. Allows live user interaction, audio playback, volume scrubbing, playlist controls, and YouTube streaming in WebAR.
                   </div>
-                </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                  {/* Target Geometry Selector for YouTube */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
+                      Target 3D Placement
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVideoTargetMode('SELECTED_MESH');
+                          if (!videoTargetMeshUuid && candidateMeshes.length > 0) {
+                            setVideoTargetMeshUuid(candidateMeshes[0].uuid);
+                          }
+                        }}
+                        disabled={candidateMeshes.length === 0}
+                        className={`p-2.5 rounded-xl border text-left transition-all flex items-center gap-2 cursor-pointer ${
+                          videoTargetMode === 'SELECTED_MESH'
+                            ? 'border-indigo-500 bg-indigo-950/60 text-white shadow-sm ring-1 ring-indigo-500/50'
+                            : candidateMeshes.length > 0
+                            ? 'border-slate-800 bg-slate-950/70 text-slate-300 hover:border-slate-700'
+                            : 'border-slate-800/50 bg-slate-950/30 text-slate-600 cursor-not-allowed'
+                        }`}
+                      >
+                        <span className="material-symbols-outlined text-indigo-400 text-xl">view_in_ar</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="font-bold text-xs">Attach to 3D Mesh / Face</div>
+                          <div className="text-[10px] text-slate-400 truncate">
+                            {candidateMeshes.length > 0 ? `${candidateMeshes.length} mesh${candidateMeshes.length > 1 ? 'es' : ''} in scene` : 'No meshes in scene'}
+                          </div>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setVideoTargetMode('FLAT_DISPLAY')}
+                        className={`p-2.5 rounded-xl border text-left transition-all flex items-center gap-2 cursor-pointer ${
+                          videoTargetMode === 'FLAT_DISPLAY'
+                            ? 'border-indigo-500 bg-indigo-950/60 text-white shadow-sm ring-1 ring-indigo-500/50'
+                            : 'border-slate-800 bg-slate-950/70 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <span className="material-symbols-outlined text-indigo-400 text-xl">tv</span>
+                        <div>
+                          <div className="font-bold text-xs">Standalone 3D Display</div>
+                          <div className="text-[10px] text-slate-400">Floating interactive chassis</div>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Distinctive Face & Submesh Selector for YouTube on Scene Meshes */}
+                  {videoTargetMode === 'SELECTED_MESH' && (
+                    <div className="p-3.5 bg-slate-950/90 border border-slate-800 rounded-xl space-y-3 animate-fade-in shadow-inner">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                          <span className="material-symbols-outlined text-sm text-indigo-400">layers</span>
+                          Distinctive Face / Layer Target
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleStartFacePicking}
+                          className="px-2.5 py-1 bg-indigo-600/30 hover:bg-indigo-600 border border-indigo-500/50 hover:border-indigo-400 text-indigo-200 hover:text-white rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer shadow-sm"
+                          title="Click directly on the 3D surface in the viewport to select"
+                        >
+                          <span className="material-symbols-outlined text-sm">ads_click</span>
+                          🎯 Pick 3D Face in Viewport
+                        </button>
+                      </div>
+
+                      {/* Candidate Mesh Dropdown */}
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                          Target Submesh / Geometry:
+                        </label>
+                        <select
+                          value={videoTargetMeshUuid}
+                          onChange={(e) => {
+                            setVideoTargetMeshUuid(e.target.value);
+                            setVideoTargetMaterialIndex(0);
+                            const m = appRef.current?.findMeshByUuid?.(e.target.value);
+                            if (m) appRef.current?.flashMeshHighlight?.(m);
+                          }}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
+                        >
+                          {candidateMeshes.map((c) => (
+                            <option key={c.uuid} value={c.uuid}>
+                              {c.parentName && c.parentName !== c.name ? `[${c.parentName}] ` : ''}{c.name} ({c.materialCount} layer{c.materialCount > 1 ? 's' : ''}){c.hasVideo ? ' 🎬' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Material Slot / Face Picker Cards */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-[11px] font-semibold text-slate-400">
+                            Target Face / Material Slot:
+                          </label>
+                          <span className="text-[10px] text-emerald-400 font-mono">
+                            ✓ Locks YouTube overlay to selected layer
+                          </span>
+                        </div>
+
+                        {materialSlots.length === 0 ? (
+                          <p className="text-xs text-slate-500 italic">No material slots found on selected mesh.</p>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto studio-scroll p-1 bg-slate-900/60 rounded-lg border border-slate-800/80">
+                            {materialSlots.map((slot) => {
+                              const isSelected = videoTargetMaterialIndex === slot.index;
+                              return (
+                                <button
+                                  key={slot.index}
+                                  type="button"
+                                  onClick={() => setVideoTargetMaterialIndex(slot.index)}
+                                  className={`p-2 rounded-lg border text-left transition-all flex items-center gap-2 cursor-pointer ${
+                                    isSelected
+                                      ? 'border-indigo-500 bg-indigo-950/80 text-white shadow-sm ring-1 ring-indigo-500/50'
+                                      : 'border-slate-800/80 bg-slate-950/60 text-slate-300 hover:border-slate-700 hover:bg-slate-800/40'
+                                  }`}
+                                >
+                                  <span
+                                    className="w-3.5 h-3.5 rounded-full flex-shrink-0 border border-white/20 shadow-inner"
+                                    style={{ backgroundColor: slot.color || '#6366f1' }}
+                                  />
+                                  <div className="truncate flex-1 min-w-0">
+                                    <div className="font-semibold text-[11px] truncate flex items-center gap-1">
+                                      <span className="text-slate-400 font-mono text-[10px]">#{slot.index}</span>
+                                      <span className="truncate">{slot.name}</span>
+                                    </div>
+                                    {slot.hasVideo && (
+                                      <span className="text-[9px] text-amber-400 font-bold tracking-wider uppercase">
+                                        🎬 Has Video
+                                      </span>
+                                    )}
+                                  </div>
+                                  {isSelected && (
+                                    <span className="material-symbols-outlined text-indigo-400 text-sm">
+                                      check_circle
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="text-[11px] text-slate-400 bg-slate-900/80 border border-slate-800 p-2 rounded-lg leading-relaxed">
+                        💡 <strong>Model Surface Locking:</strong> YouTube overlay will sync with face layer <code className="text-indigo-300 bg-indigo-950/60 px-1 py-0.5 rounded font-mono">#{videoTargetMaterialIndex}</code>, persisting in viewport and WebAR export.
+                      </div>
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-                      Aspect Ratio
+                      YouTube Video URL or ID
                     </label>
-                    <select
-                      value={youtubeAspect}
-                      onChange={(e) => setYoutubeAspect(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-medium focus:outline-none focus:border-indigo-500"
-                    >
-                      <option value="16:9">16:9 Widescreen</option>
-                      <option value="9:16">9:16 Shorts / Reels</option>
-                      <option value="21:9">21:9 UltraWide Cinema</option>
-                    </select>
+                    <input
+                      type="text"
+                      placeholder="https://www.youtube.com/watch?v=... or Video ID"
+                      value={youtubeUrlInput}
+                      onChange={(e) => setYoutubeUrlInput(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono"
+                    />
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      <span className="text-[10px] text-slate-500 self-center">Presets:</span>
+                      <button
+                        type="button"
+                        onClick={() => setYoutubeUrlInput('https://www.youtube.com/watch?v=jfKfPfyJRdk')}
+                        className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 cursor-pointer"
+                      >
+                        ☕ Lofi Radio
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setYoutubeUrlInput('https://www.youtube.com/watch?v=ysz5S6PUM-U')}
+                        className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 cursor-pointer"
+                      >
+                        🌿 4K Nature
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setYoutubeUrlInput('https://www.youtube.com/watch?v=dQw4w9WgXcQ')}
+                        className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 cursor-pointer"
+                      >
+                        🎵 Music Video
+                      </button>
+                    </div>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-                      Bezel Frame Style
-                    </label>
-                    <select
-                      value={youtubeBezel}
-                      onChange={(e) => setYoutubeBezel(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-medium focus:outline-none focus:border-indigo-500"
-                    >
-                      <option value="cyber_bezel">Cyberpunk Indigo Bezel</option>
-                      <option value="glass_float">Floating Glass (Frosted)</option>
-                      <option value="minimal">Minimal Stealth Black</option>
-                    </select>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                        Aspect Ratio
+                      </label>
+                      <select
+                        value={youtubeAspect}
+                        onChange={(e) => setYoutubeAspect(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-medium focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="16:9">16:9 Widescreen</option>
+                        <option value="9:16">9:16 Shorts / Reels</option>
+                        <option value="21:9">21:9 UltraWide Cinema</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                        Bezel Frame Style
+                      </label>
+                      <select
+                        value={youtubeBezel}
+                        onChange={(e) => setYoutubeBezel(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-medium focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="cyber_bezel">Cyberpunk Indigo Bezel</option>
+                        <option value="glass_float">Floating Glass (Frosted)</option>
+                        <option value="minimal">Minimal Stealth Black</option>
+                      </select>
+                    </div>
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (appRef.current?.videoDisplayManager) {
+                        const targetMesh = videoTargetMode === 'SELECTED_MESH' ? activeTargetMesh : null;
+                        appRef.current.videoDisplayManager.addCSS3DYouTubeOverlay({
+                          urlOrId: youtubeUrlInput,
+                          aspectRatio: youtubeAspect,
+                          frameStyle: youtubeBezel,
+                          name: 'YouTube_3D_Screen',
+                          targetMode: videoTargetMode,
+                          selectedMesh: targetMesh,
+                          targetMaterialIndex: videoTargetMaterialIndex
+                        });
+                      }
+                      setVideoModalOpen(false);
+                    }}
+                    className="w-full py-3 bg-gradient-to-r from-fuchsia-600 to-indigo-600 hover:from-fuchsia-500 hover:to-indigo-500 text-white text-xs font-bold uppercase tracking-wider rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98 mt-3"
+                  >
+                    <span className="material-symbols-outlined text-sm">play_circle</span>
+                    {videoTargetMode === 'SELECTED_MESH' ? 'Attach YouTube Video to Model Surface' : 'Spawn Interactive YouTube Screen'}
+                  </button>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (appRef.current?.videoDisplayManager) {
-                      appRef.current.videoDisplayManager.addCSS3DYouTubeOverlay({
-                        urlOrId: youtubeUrlInput,
-                        aspectRatio: youtubeAspect,
-                        frameStyle: youtubeBezel,
-                        name: 'YouTube_3D_Screen'
-                      });
-                    }
-                    setVideoModalOpen(false);
-                  }}
-                  className="w-full py-3 bg-gradient-to-r from-fuchsia-600 to-indigo-600 hover:from-fuchsia-500 hover:to-indigo-500 text-white text-xs font-bold uppercase tracking-wider rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98 mt-3"
-                >
-                  <span className="material-symbols-outlined text-sm">play_circle</span>
-                  Spawn Interactive YouTube Screen
-                </button>
-              </div>
-            )}
+              );
+            })()}
           </div>
         </div>
       )}

@@ -65,7 +65,7 @@ const CURATED_COLLECTION = [
       { title: 'Changeable Styles', desc: 'Swap out new visual effects directly from your phone.' }
     ],
     category: 'VIDEO',
-    video_url: 'https://assets.mixkit.co/videos/preview/mixkit-digital-animation-of-blue-screens-and-lights-42938-large.mp4',
+    video_url: 'https://firebasestorage.googleapis.com/v0/b/star-wear-ecb39.firebasestorage.app/o/assets%2Fshirt%2Fkeep-it-going.mov?alt=media&token=cad5f38d-e4c0-4a7f-bf4a-1f2b4849518a',
     ar_config: {
       ambientIntensity: 1.5,
       dir1Color: '#c084fc',
@@ -173,7 +173,7 @@ const CURATED_COLLECTION = [
       { title: 'Built Tough', desc: 'Weatherproof construction made for daily wear.' }
     ],
     category: 'VIDEO',
-    video_url: 'https://assets.mixkit.co/videos/preview/mixkit-digital-animation-of-blue-screens-and-lights-42938-large.mp4',
+    video_url: 'https://firebasestorage.googleapis.com/v0/b/star-wear-ecb39.firebasestorage.app/o/assets%2Fshirt%2Fkeep-it-going.mov?alt=media&token=cad5f38d-e4c0-4a7f-bf4a-1f2b4849518a',
     ar_config: {
       ambientIntensity: 1.5,
       dir1Color: '#34d399',
@@ -187,13 +187,14 @@ export default function Shop() {
   const [collectionList, setCollectionList] = useState(CURATED_COLLECTION);
   const [selectedProduct, setSelectedProduct] = useState(CURATED_COLLECTION[0]);
   const [activeModelUrl, setActiveModelUrl] = useState('');
+  const [activeVideoUrl, setActiveVideoUrl] = useState('');
   const [selectedSizes, setSelectedSizes] = useState({});
   const [selectedColors, setSelectedColors] = useState({});
   const [activeSubTab, setActiveSubTab] = useState('overview');
   const [cartToast, setCartToast] = useState(null);
 
   const { addToCart, getCartCount } = useCart();
-  const { isSuperAdmin } = useAuth();
+  const { isAdmin, isSuperAdmin } = useAuth();
   const navigate = useNavigate();
 
   // Section references for sectioned-out cover parallax (at least 500px height)
@@ -310,31 +311,38 @@ export default function Shop() {
     return () => { isMounted = false; };
   }, []);
 
-  // Resolve 3D Model URL
+  // Resolve 3D Model and Video URLs
   useEffect(() => {
     let isMounted = true;
-    async function resolveModel() {
+    async function resolveMedia() {
       if (!selectedProduct) return;
 
-      if (selectedProduct.glb_url || selectedProduct.model_url) {
-        if (isMounted) setActiveModelUrl(selectedProduct.glb_url || selectedProduct.model_url);
-        return;
-      }
-
-      if (selectedProduct.gltf_file_path) {
+      // 1. Resolve 3D Model URL
+      let mUrl = selectedProduct.glb_url || selectedProduct.model_url || '';
+      if (!mUrl && selectedProduct.gltf_file_path) {
         try {
           const fileRef = ref(storage, selectedProduct.gltf_file_path);
-          const url = await getDownloadURL(fileRef);
-          if (isMounted) setActiveModelUrl(url);
-          return;
+          mUrl = await getDownloadURL(fileRef);
         } catch (e) {
           console.warn('Storage 3D model lookup fallback:', e);
         }
       }
+      if (isMounted) setActiveModelUrl(mUrl);
 
-      if (isMounted) setActiveModelUrl('');
+      // 2. Resolve Video Layer URL (YouTube URL, direct HTTP URL, or Storage path)
+      let vUrl = selectedProduct.video_url || selectedProduct.videoUrl || selectedProduct.ar_config?.video_url || selectedProduct.ar_config?.videoUrl || '';
+      const vPath = selectedProduct.video_file_path || selectedProduct.ar_config?.video_file_path || '';
+      if ((!vUrl || !vUrl.startsWith('http')) && vPath) {
+        try {
+          const vRef = ref(storage, vPath);
+          vUrl = await getDownloadURL(vRef);
+        } catch (vErr) {
+          console.warn('Storage video lookup fallback:', vErr);
+        }
+      }
+      if (isMounted) setActiveVideoUrl(vUrl);
     }
-    resolveModel();
+    resolveMedia();
     return () => { isMounted = false; };
   }, [selectedProduct]);
 
@@ -501,7 +509,7 @@ export default function Shop() {
               playsInline
               className="absolute inset-0 w-full h-full object-cover mix-blend-screen opacity-25"
             >
-              <source src="https://assets.mixkit.co/videos/preview/mixkit-digital-animation-of-blue-screens-and-lights-42938-large.mp4" type="video/mp4" />
+              <source src="https://firebasestorage.googleapis.com/v0/b/star-wear-ecb39.firebasestorage.app/o/assets%2Fshirt%2Fkeep-it-going.mov?alt=media&token=cad5f38d-e4c0-4a7f-bf4a-1f2b4849518a" type="video/mp4" />
             </video>
             {/* Dark Scrim & Top/Bottom Transitions */}
             <div className="absolute inset-0 bg-gradient-to-b from-black/85 via-black/55 to-black" />
@@ -792,7 +800,7 @@ export default function Shop() {
               playsInline
               className="absolute inset-0 w-full h-full object-cover mix-blend-color-dodge opacity-25"
             >
-              <source src="https://assets.mixkit.co/videos/preview/mixkit-digital-animation-of-blue-screens-and-lights-42938-large.mp4" type="video/mp4" />
+              <source src="https://firebasestorage.googleapis.com/v0/b/star-wear-ecb39.firebasestorage.app/o/assets%2Fshirt%2Fkeep-it-going.mov?alt=media&token=cad5f38d-e4c0-4a7f-bf4a-1f2b4849518a" type="video/mp4" />
             </video>
             <div className="absolute inset-0 bg-gradient-to-b from-black via-black/40 to-black" />
           </div>
@@ -838,7 +846,7 @@ export default function Shop() {
               playsInline
               className="absolute inset-0 w-full h-full object-cover mix-blend-color-dodge opacity-25"
             >
-              <source src="https://assets.mixkit.co/videos/preview/mixkit-digital-animation-of-blue-screens-and-lights-42938-large.mp4" type="video/mp4" />
+              <source src="https://firebasestorage.googleapis.com/v0/b/star-wear-ecb39.firebasestorage.app/o/assets%2Fshirt%2Fkeep-it-going.mov?alt=media&token=cad5f38d-e4c0-4a7f-bf4a-1f2b4849518a" type="video/mp4" />
             </video>
             <div className="absolute inset-0 bg-gradient-to-b from-black via-black/65 to-black" />
             <div className="absolute inset-0 bg-radial from-transparent via-black/40 to-black" />
@@ -883,7 +891,7 @@ export default function Shop() {
               >
                 <ProductViewer
                   modelUrl={activeModelUrl}
-                  videoUrl={selectedProduct?.video_url || selectedProduct?.videoUrl || selectedProduct?.video_file_path || ''}
+                  videoUrl={activeVideoUrl || selectedProduct?.video_url || selectedProduct?.videoUrl || ''}
                   config={selectedProduct?.ar_config || {}}
                   assetName={selectedProduct?.name || selectedProduct?.id}
                   assetId={selectedProduct?.id}
@@ -1273,7 +1281,7 @@ export default function Shop() {
               <Link to="/shop" className="text-white font-medium transition-colors">Shop</Link>
               <Link to="/collections" className="hover:text-white transition-colors">Collections</Link>
               <Link to="/cart" className="hover:text-white transition-colors">Bag ({getCartCount()})</Link>
-              {isSuperAdmin && (
+              {(isAdmin || isSuperAdmin) && (
                 <Link to="/admin/inventory" className="hover:text-white transition-colors">Admin</Link>
               )}
             </div>

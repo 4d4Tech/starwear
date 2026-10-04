@@ -675,7 +675,18 @@ if (typeof AFRAME !== 'undefined') {
 
         // 5. Create CSS3DObject
         const cssObject = new CSS3DObject(containerDiv);
-        const baseScale = 0.003125;
+        let baseScale = 0.003125;
+        if (this.cssTargetNode && this.cssTargetNode.geometry) {
+          if (!this.cssTargetNode.geometry.boundingBox) this.cssTargetNode.geometry.computeBoundingBox();
+          if (this.cssTargetNode.geometry.boundingBox) {
+            const bSize = new THREE_LIB.Vector3();
+            this.cssTargetNode.geometry.boundingBox.getSize(bSize);
+            const maxDim = Math.max(bSize.x, bSize.y);
+            if (maxDim > 0.05) {
+              baseScale = (maxDim * 0.85) / iframeW;
+            }
+          }
+        }
         cssObject.scale.set(baseScale, baseScale, baseScale);
         cssScene.add(cssObject);
         this.cssObject = cssObject;
@@ -684,13 +695,23 @@ if (typeof AFRAME !== 'undefined') {
         // 6. Style backing WebGL screen mesh so it acts as bezel
         if (this.cssTargetNode && this.cssTargetNode.material) {
           const materials = Array.isArray(this.cssTargetNode.material) ? this.cssTargetNode.material : [this.cssTargetNode.material];
-          materials.forEach((mat) => {
-            if (mat.color) mat.color.setHex(0x0e1322);
-            mat.roughness = 0.3;
-            mat.metalness = 0.8;
-            if (mat.emissive) mat.emissive.setHex(0x1e1b4b);
-            mat.emissiveIntensity = 0.2;
-            mat.needsUpdate = true;
+          const targetSlot = typeof this.cssTargetNode.userData?.videoTargetMaterialIndex === 'number'
+            ? this.cssTargetNode.userData.videoTargetMaterialIndex
+            : null;
+
+          materials.forEach((mat, idx) => {
+            const isTarget = targetSlot !== null
+              ? idx === targetSlot
+              : (mat?.userData?.hasVideo || mat?.userData?.isVideoLayer || materials.length === 1);
+
+            if (isTarget) {
+              if (mat.color) mat.color.setHex(0x0e1322);
+              mat.roughness = 0.3;
+              mat.metalness = 0.8;
+              if (mat.emissive) mat.emissive.setHex(0x1e1b4b);
+              mat.emissiveIntensity = 0.2;
+              mat.needsUpdate = true;
+            }
           });
         }
       },
@@ -723,9 +744,10 @@ if (typeof AFRAME !== 'undefined') {
               const hasVideo = !!(
                 node.userData?.hasVideo ||
                 node.userData?.videoUrl ||
+                node.userData?.videoId ||
                 (Array.isArray(node.material)
-                  ? node.material.some((m) => m?.userData?.hasVideo || m?.userData?.isVideoLayer)
-                  : (node.material?.userData?.hasVideo || node.material?.userData?.isVideoLayer))
+                  ? node.material.some((m) => m?.userData?.hasVideo || m?.userData?.isVideoLayer || m?.userData?.videoId)
+                  : (node.material?.userData?.hasVideo || node.material?.userData?.isVideoLayer || node.material?.userData?.videoId))
               );
               if (hasVideo || screenKeywords.some((kw) => nodeName.includes(kw))) {
                 autoScreenMeshes.push(node);
@@ -748,20 +770,75 @@ if (typeof AFRAME !== 'undefined') {
           ytId = extractYouTubeId(this.data.src);
         }
 
+        // 1. Check root group/model obj.userData
+        if (!ytId && obj.userData) {
+          const rootData = obj.userData;
+          if (rootData.videoId || rootData.youtubeId) {
+            ytId = rootData.videoId || rootData.youtubeId;
+            if (rootData.aspectRatio) ytAspect = rootData.aspectRatio;
+          } else if (rootData.videoUrl && isYouTubeUrl(rootData.videoUrl)) {
+            ytId = extractYouTubeId(rootData.videoUrl);
+            if (rootData.aspectRatio) ytAspect = rootData.aspectRatio;
+          } else if (rootData.videoSrc && isYouTubeUrl(rootData.videoSrc)) {
+            ytId = extractYouTubeId(rootData.videoSrc);
+            if (rootData.aspectRatio) ytAspect = rootData.aspectRatio;
+          }
+
+          if (ytId && (rootData.videoTargetMeshName || rootData.videoTargetMeshUuid)) {
+            const targetName = (rootData.videoTargetMeshName || '').toLowerCase();
+            const targetUuid = (rootData.videoTargetMeshUuid || '').toLowerCase();
+            obj.traverse((node) => {
+              if (node.isMesh && ((node.name && node.name.toLowerCase() === targetName) || (node.uuid && node.uuid.toLowerCase() === targetUuid))) {
+                ytTargetNode = node;
+              }
+            });
+          }
+        }
+
+        // 2. Check child meshes, groups, and material slots
         if (!ytId) {
           obj.traverse((node) => {
-            if (node.isMesh && !ytId) {
-              const uData = node.userData || {};
-              if (uData.isCSS3D && (uData.videoId || uData.youtubeId)) {
-                ytId = uData.videoId || uData.youtubeId;
-                ytTargetNode = node;
-                if (uData.aspectRatio) ytAspect = uData.aspectRatio;
-              } else if (uData.videoUrl && isYouTubeUrl(uData.videoUrl)) {
-                ytId = extractYouTubeId(uData.videoUrl);
-                ytTargetNode = node;
+            if (ytId) return;
+            const uData = node.userData || {};
+            if (uData.videoId || uData.youtubeId) {
+              ytId = uData.videoId || uData.youtubeId;
+              ytTargetNode = node.isMesh ? node : (node.children?.find((c) => c.isMesh) || node);
+              if (uData.aspectRatio) ytAspect = uData.aspectRatio;
+            } else if (uData.videoUrl && isYouTubeUrl(uData.videoUrl)) {
+              ytId = extractYouTubeId(uData.videoUrl);
+              ytTargetNode = node.isMesh ? node : (node.children?.find((c) => c.isMesh) || node);
+              if (uData.aspectRatio) ytAspect = uData.aspectRatio;
+            } else if (uData.videoSrc && isYouTubeUrl(uData.videoSrc)) {
+              ytId = extractYouTubeId(uData.videoSrc);
+              ytTargetNode = node.isMesh ? node : (node.children?.find((c) => c.isMesh) || node);
+              if (uData.aspectRatio) ytAspect = uData.aspectRatio;
+            } else if (node.isMesh && node.material) {
+              const mats = Array.isArray(node.material) ? node.material : [node.material];
+              for (const m of mats) {
+                const mData = m?.userData || {};
+                if (mData.videoId || mData.youtubeId) {
+                  ytId = mData.videoId || mData.youtubeId;
+                  ytTargetNode = node;
+                  if (mData.aspectRatio) ytAspect = mData.aspectRatio;
+                  break;
+                } else if (mData.videoUrl && isYouTubeUrl(mData.videoUrl)) {
+                  ytId = extractYouTubeId(mData.videoUrl);
+                  ytTargetNode = node;
+                  if (mData.aspectRatio) ytAspect = mData.aspectRatio;
+                  break;
+                } else if (mData.videoSrc && isYouTubeUrl(mData.videoSrc)) {
+                  ytId = extractYouTubeId(mData.videoSrc);
+                  ytTargetNode = node;
+                  if (mData.aspectRatio) ytAspect = mData.aspectRatio;
+                  break;
+                }
               }
             }
           });
+        }
+
+        if (ytId && ytTargetNode === obj && finalTargetMeshes.length > 0) {
+          ytTargetNode = finalTargetMeshes[0];
         }
 
         if (ytId) {
@@ -943,8 +1020,19 @@ if (typeof AFRAME !== 'undefined') {
           this.cssTargetNode.getWorldQuaternion(this._tempWorldQuat);
           this.cssTargetNode.getWorldScale(this._tempWorldScale);
 
+          // If target has geometry, calculate bounding box center for accurate submesh surface alignment
+          if (this.cssTargetNode.geometry) {
+            if (!this.cssTargetNode.geometry.boundingBox) this.cssTargetNode.geometry.computeBoundingBox();
+            if (this.cssTargetNode.geometry.boundingBox) {
+              const geomCenter = new THREE_LIB.Vector3();
+              this.cssTargetNode.geometry.boundingBox.getCenter(geomCenter);
+              geomCenter.applyMatrix4(this.cssTargetNode.matrixWorld);
+              this._tempWorldPos.copy(geomCenter);
+            }
+          }
+
           // Push slightly forward along target's local Z axis to eliminate z-fighting with the screen bezel
-          const offset = new THREE_LIB.Vector3(0, 0, 0.02 * (this._tempWorldScale.z || 1)).applyQuaternion(this._tempWorldQuat);
+          const offset = new THREE_LIB.Vector3(0, 0, 0.02 * Math.abs(this._tempWorldScale.z || 1)).applyQuaternion(this._tempWorldQuat);
           this.cssObject.position.copy(this._tempWorldPos).add(offset);
           this.cssObject.quaternion.copy(this._tempWorldQuat);
 

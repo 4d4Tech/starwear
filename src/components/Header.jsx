@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 export default function Header() {
   const location = useLocation();
   const { getCartCount } = useCart();
-  const { isSuperAdmin } = useAuth();
+  const { isAdmin, isSuperAdmin } = useAuth();
 
   const getLinkClasses = (path) => {
     const isActive = location.pathname === path || (path === '/shop' && (location.pathname === '/product' || location.pathname.startsWith('/product/')));
@@ -36,12 +36,12 @@ export default function Header() {
       </Link>
 
       <div className="flex items-center gap-4">
-        {/* Only Authenticated Superadmins See Admin Links */}
-        {isSuperAdmin && (
+        {/* Only Authenticated Admins & Superadmins See Admin Links */}
+        {(isAdmin || isSuperAdmin) && (
           <Link 
             to="/admin/dashboard" 
             className="px-3 py-1 rounded-full border border-primary/50 bg-primary/10 text-primary text-[11px] font-bold tracking-wider hover:bg-primary hover:text-black transition-all flex items-center gap-1 shadow-sm"
-            title="Superadmin Management Suite"
+            title="Admin Management Suite"
           >
             <span className="material-symbols-outlined text-sm">shield_person</span>
             <span>ADMIN</span>

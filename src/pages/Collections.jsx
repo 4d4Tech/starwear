@@ -13,7 +13,7 @@ export default function Collections() {
   const [activeCategory, setActiveCategory] = useState('ALL');
   const [cartToast, setCartToast] = useState('');
   const { addToCart } = useCart();
-  const { isSuperAdmin } = useAuth();
+  const { isAdmin, isSuperAdmin } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -154,8 +154,8 @@ export default function Collections() {
                 </ul>
               </div>
 
-              {/* Admin Jump - Restricted to Authenticated Superadmins */}
-              {isSuperAdmin && (
+              {/* Admin Jump - Restricted to Authenticated Admins & Superadmins */}
+              {(isAdmin || isSuperAdmin) && (
                 <div className="pt-6 border-t border-outline-variant/20">
                   <Link
                     to="/admin/inventory"
@@ -185,7 +185,7 @@ export default function Collections() {
               <div className="text-center py-24 border border-dashed border-outline-variant/30 rounded-2xl p-8">
                 <span className="material-symbols-outlined text-5xl text-secondary mb-3">inventory_2</span>
                 <h3 className="text-xl font-bold text-on-surface mb-2 uppercase">No Assets Found</h3>
-                {isSuperAdmin ? (
+                {(isAdmin || isSuperAdmin) ? (
                   <>
                     <p className="text-sm text-on-surface-variant max-w-md mx-auto mb-6">
                       Add 3D GLB models in Admin Inventory to display products here.
@@ -297,10 +297,12 @@ export default function Collections() {
           <Link className="font-label-caps text-[12px] tracking-widest text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/">STOREFRONT</Link>
           <Link className="font-label-caps text-[12px] tracking-widest text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/shop">SHOP</Link>
           <Link className="font-label-caps text-[12px] tracking-widest text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/collections">COLLECTIONS</Link>
-          {isSuperAdmin && (
+          {(isAdmin || isSuperAdmin) && (
             <Link className="font-label-caps text-[12px] tracking-widest text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/admin/inventory">ADMIN INVENTORY</Link>
           )}
-          <Link className="font-label-caps text-[12px] tracking-widest text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/ar-test">AR TEST</Link>
+          {(isAdmin || isSuperAdmin) && (
+            <Link className="font-label-caps text-[12px] tracking-widest text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/ar-test">AR TEST</Link>
+          )}
         </div>
         <div className="font-label-caps text-[12px] tracking-widest text-on-surface-variant uppercase font-mono">
           © 2026 STAR WEAR. ALL RIGHTS RESERVED.

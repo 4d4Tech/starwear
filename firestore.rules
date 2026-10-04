@@ -2,8 +2,109 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && (
+        (request.auth.token.email is string && request.auth.token.email.lower() == 'brandonrobinson81@gmail.com') ||
+        request.auth.token.role == 'superadmin' ||
+        request.auth.token.userType == 'superadmin' ||
+        request.auth.token.superadmin == true
+      );
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        isSuperAdmin() ||
+        request.auth.token.role == 'admin' ||
+        request.auth.token.userType == 'admin' ||
+        request.auth.token.admin == true ||
+        request.auth.token.isAdmin == true ||
+        (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'superadmin'] ||
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.userType in ['admin', 'superadmin'] ||
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true ||
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isSuperAdmin == true
+          )
+        )
+      );
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && (
+        isAdmin() ||
+        (
+          isOwner(userId) &&
+          (!('role' in request.resource.data) || request.resource.data.role == 'user' || request.resource.data.role == 'client') &&
+          (!('userType' in request.resource.data) || request.resource.data.userType == 'user') &&
+          (!('isAdmin' in request.resource.data) || request.resource.data.isAdmin == false) &&
+          (!('isSuperAdmin' in request.resource.data) || request.resource.data.isSuperAdmin == false)
+        )
+      );
+      allow update: if isAuthenticated() && (
+        isAdmin() ||
+        (
+          isOwner(userId) &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.userType == resource.data.userType &&
+          request.resource.data.isAdmin == resource.data.isAdmin &&
+          request.resource.data.isSuperAdmin == resource.data.isSuperAdmin
+        )
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Model Templates (Studio 4D*4 Catalog)
+    match /model_templates/{templateId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Merchants
+    match /merchants/{merchantId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Assets & Batches (AR Catalog & Mind AR files)
+    match /assets/{assetId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /batches/{batchId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Orders Collection
+    match /orders/{orderId} {
+      allow read: if isAdmin() || (
+        isAuthenticated() && (
+          resource.data.userId == request.auth.uid ||
+          (resource.data.customerEmail is string && request.auth.token.email is string && resource.data.customerEmail.lower() == request.auth.token.email.lower())
+        )
+      );
+      allow create: if true;
+      allow update, delete: if isAdmin();
+    }
+
+    // Default Fallback
     match /{document=**} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isAdmin();
     }
   }
 }

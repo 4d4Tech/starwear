@@ -13,7 +13,7 @@ function ProductDetails() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { addToCart } = useCart();
-  const { isSuperAdmin } = useAuth();
+  const { isAdmin, isSuperAdmin } = useAuth();
 
   // Resolve target asset ID from URL path or query string
   const routeAssetId = params.id || searchParams.get('id') || searchParams.get('batchId') || '';
@@ -109,10 +109,11 @@ function ProductDetails() {
         }
 
         // 3. Resolve Video Layer Download URL
-        let resolvedVideoUrl = assetData.video_url || assetData.videoUrl || mergedConfig.videoUrl || '';
-        if ((!resolvedVideoUrl || !resolvedVideoUrl.startsWith('http')) && assetData.video_file_path) {
+        let resolvedVideoUrl = assetData.video_url || assetData.videoUrl || mergedConfig.video_url || mergedConfig.videoUrl || '';
+        const targetVideoPath = assetData.video_file_path || mergedConfig.video_file_path || '';
+        if ((!resolvedVideoUrl || !resolvedVideoUrl.startsWith('http')) && targetVideoPath) {
           try {
-            const videoRef = ref(storage, assetData.video_file_path);
+            const videoRef = ref(storage, targetVideoPath);
             resolvedVideoUrl = await getDownloadURL(videoRef);
           } catch (vErr) {
             console.warn("Video layer fetch notice:", vErr);
@@ -288,8 +289,8 @@ function ProductDetails() {
                     </div>
                   </div>
 
-                  {/* Quick Admin Navigation Link - Restricted to Authenticated Superadmins */}
-                  {isSuperAdmin && (
+                  {/* Quick Admin Navigation Link - Restricted to Authenticated Admins & Superadmins */}
+                  {(isAdmin || isSuperAdmin) && (
                     <div className="pt-2 flex items-center gap-4 text-xs font-mono text-secondary">
                       <Link to="/admin/inventory" className="hover:text-primary transition-colors flex items-center gap-1">
                         <span className="material-symbols-outlined text-sm">inventory_2</span>
@@ -423,10 +424,12 @@ function ProductDetails() {
         <div className="flex flex-wrap justify-center gap-6">
           <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/">STOREFRONT</Link>
           <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/collections">COLLECTIONS</Link>
-          {isSuperAdmin && (
+          {(isAdmin || isSuperAdmin) && (
             <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/admin/inventory">ADMIN INVENTORY</Link>
           )}
-          <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/ar-test">AR TEST</Link>
+          {(isAdmin || isSuperAdmin) && (
+            <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/ar-test">AR TEST</Link>
+          )}
         </div>
         <div className="text-sm text-secondary font-mono">
           © 2026 STAR WEAR. ALL RIGHTS RESERVED.

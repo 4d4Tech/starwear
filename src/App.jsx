@@ -41,8 +41,6 @@ function App() {
           <Route path="/success" element={<OrderSuccess />} />
           <Route path="/seed" element={<SeedDatabase />} />
           <Route path="/ar/:batchId" element={<ARExperience />} />
-          <Route path="/ar-test" element={<ARTest />} />
-          <Route path="/ar-test-live" element={<ARExperienceLauncher />} />
           <Route path="/studio44" element={<Studio4D4 />} />
           <Route path="/studio" element={<Studio4D4 />} />
           <Route path="/studio4d4" element={<Studio4D4 />} />
@@ -50,8 +48,12 @@ function App() {
           {/* Admin Login Portal */}
           <Route path="/admin/login" element={<AdminLogin />} />
 
-          {/* Protected Admin Routes - Restricted to Authenticated Superadmins */}
+          {/* Protected Admin Routes - Restricted to Authenticated Admins & Superadmins */}
           <Route element={<ProtectedRoute />}>
+            {/* AR Calibration & Testing Suite */}
+            <Route path="/ar-test" element={<ARTest />} />
+            <Route path="/ar-test-live" element={<ARExperienceLauncher />} />
+
             <Route path="/admin" element={<AdminLayout />}>
               <Route index element={<Navigate to="/admin/dashboard" replace />} />
               <Route path="dashboard" element={<AdminDashboard />} />
