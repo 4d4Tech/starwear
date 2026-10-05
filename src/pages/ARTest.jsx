@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import BuyNowButton from '../components/BuyNowButton';
 import { db, storage, functions, analytics } from '../firebase';
 import { doc, getDoc, getDocFromServer, setDoc, collection, getDocs } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
 
 if (typeof THREE !== 'undefined' && THREE.Cache) {
   THREE.Cache.enabled = false;
@@ -12,8 +12,7 @@ if (typeof THREE !== 'undefined' && THREE.Cache) {
 }
 import { httpsCallable } from 'firebase/functions';
 import { logEvent } from 'firebase/analytics';
-import '../utils/aframe-components';
-import { isYouTubeUrl, extractYouTubeId } from '../utils/aframe-components';
+import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfaceFrame, purgeAllSceneVideoLayers } from '../utils/aframe-components';
 
 // =========================================================================
 // 1. REUSABLE TYPED SLIDER CONTROL WITH DUAL-WAY DATA BINDING
@@ -378,6 +377,54 @@ const RotationDial = ({
 };
 
 // =========================================================================
+// TEXTURE MAPPING TRANSFORM HELPERS (PLACEMENT, ORIENTATION, SIZE)
+// =========================================================================
+const TEXTURE_MAP_SLOTS = ['map', 'emissiveMap', 'roughnessMap', 'metalnessMap', 'normalMap', 'bumpMap', 'alphaMap'];
+
+const applyTextureTransform = (tex, transform) => {
+  if (!tex || (!tex.isTexture && !tex.isCanvasTexture && !tex.isVideoTexture)) return;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  if (tex.center) tex.center.set(0.5, 0.5);
+
+  const repX = transform.textureRepeatX !== undefined && transform.textureRepeatX !== null ? Number(transform.textureRepeatX) : 1.0;
+  const repY = transform.textureRepeatY !== undefined && transform.textureRepeatY !== null ? Number(transform.textureRepeatY) : 1.0;
+  const flipX = Boolean(transform.textureFlipX);
+  const flipY = Boolean(transform.textureFlipY);
+  const offX = transform.textureOffsetX !== undefined && transform.textureOffsetX !== null ? Number(transform.textureOffsetX) : 0.0;
+  const offY = transform.textureOffsetY !== undefined && transform.textureOffsetY !== null ? Number(transform.textureOffsetY) : 0.0;
+  const rotDeg = transform.textureRotation !== undefined && transform.textureRotation !== null ? Number(transform.textureRotation) : 0.0;
+
+  if (tex.repeat) tex.repeat.set(flipX ? -repX : repX, flipY ? -repY : repY);
+  if (tex.offset) tex.offset.set(offX, offY);
+  tex.rotation = (rotDeg * Math.PI) / 180;
+
+  tex.matrixAutoUpdate = true;
+  if (typeof tex.updateMatrix === 'function') {
+    tex.updateMatrix();
+  }
+  tex.needsUpdate = true;
+};
+
+const applyMaterialTextureTransform = (material, transform) => {
+  if (!material) return;
+  const mats = Array.isArray(material) ? material : [material];
+  mats.forEach((mat) => {
+    let hasUpdatedTex = false;
+    TEXTURE_MAP_SLOTS.forEach((slot) => {
+      const tex = mat[slot];
+      if (tex && (tex.isTexture || tex.isCanvasTexture || tex.isVideoTexture)) {
+        applyTextureTransform(tex, transform);
+        hasUpdatedTex = true;
+      }
+    });
+    if (hasUpdatedTex) {
+      mat.needsUpdate = true;
+    }
+  });
+};
+
+// =========================================================================
 // 3. OBJECT POSITIONING D-PAD & STEPPER COMPONENT
 // =========================================================================
 const PositioningDpad = ({
@@ -527,6 +574,11 @@ const ARTest = () => {
   const [meshList, setMeshList] = useState([]);
   const [selectedMeshUuid, setSelectedMeshUuid] = useState(null); // null = entire model (root)
   const [searchFilter, setSearchFilter] = useState('');
+  const [deletedMeshNames, setDeletedMeshNames] = useState([]);
+  const [confirmDeleteUuid, setConfirmDeleteUuid] = useState(null);
+  const deletedNodesRef = useRef(new Map()); // uuid -> { node, parent, name }
+  const [textureUploadingUuid, setTextureUploadingUuid] = useState(null);
+  const pendingTextureFilesRef = useRef(new Map()); // meshName -> { meshUuid, meshName, file, previewUrl }
 
   // Global Model Transform States (for entire model root)
   const [modelScale, setModelScale] = useState(0.4);
@@ -582,11 +634,21 @@ const ARTest = () => {
 
   // Video Layer & Local Asset Testing States
   const [videoMode, setVideoMode] = useState('webgl'); // 'webgl' | 'youtube'
+  const [videoAspectRatio, setVideoAspectRatio] = useState('16:9'); // '16:9' | '9:16' | '21:9'
   const [youtubeUrlInput, setYoutubeUrlInput] = useState('');
   const [activeVideoUrl, setActiveVideoUrl] = useState('');
   const [customVideoUrl, setCustomVideoUrl] = useState('');
   const [videoTargetMesh, setVideoTargetMesh] = useState('auto'); // 'auto' | 'all' | mesh name/uuid
   const [videoFlipX, setVideoFlipX] = useState(false); // Mirror horizontal orientation
+  const [videoScale, setVideoScale] = useState(1.0);
+  const [videoOffsetX, setVideoOffsetX] = useState(0.0);
+  const [videoOffsetY, setVideoOffsetY] = useState(0.0);
+  const [videoOffsetZ, setVideoOffsetZ] = useState(0.0);
+  const [videoRotation, setVideoRotation] = useState(0);
+  const [videoTextureRepeatX, setVideoTextureRepeatX] = useState(1.0);
+  const [videoTextureRepeatY, setVideoTextureRepeatY] = useState(1.0);
+  const [videoTextureOffsetX, setVideoTextureOffsetX] = useState(0.0);
+  const [videoTextureOffsetY, setVideoTextureOffsetY] = useState(0.0);
   const [localGlbUrl, setLocalGlbUrl] = useState('');
   const [localGlbName, setLocalGlbName] = useState('');
   const [localVideoName, setLocalVideoName] = useState('');
@@ -655,6 +717,19 @@ const ARTest = () => {
 
     model3D.traverse((node) => {
       if (node.isMesh) {
+        if (deletedMeshNames.includes(node.name) || deletedMeshNames.includes(node.uuid)) {
+          return;
+        }
+
+        // Cache pristine original material backup if not yet done
+        if (!node.userData.__originalMaterialBackup && node.material) {
+          if (Array.isArray(node.material)) {
+            node.userData.__originalMaterialBackup = node.material.map((m) => m.clone());
+          } else {
+            node.userData.__originalMaterialBackup = node.material.clone();
+          }
+        }
+
         const rotDegX = Math.round((node.rotation.x * 180) / Math.PI);
         const rotDegY = Math.round((node.rotation.y * 180) / Math.PI);
         const rotDegZ = Math.round((node.rotation.z * 180) / Math.PI);
@@ -682,6 +757,50 @@ const ARTest = () => {
           wireframe = !!mat.wireframe;
         }
 
+        const ovr = (arData?.config?.meshOverrides && (arData.config.meshOverrides[node.name] || arData.config.meshOverrides[node.uuid])) || null;
+        const customTexUrl = ovr?.material?.textureUrl || (node.userData?.__hasCustomTexture ? node.userData?.__customTextureUrl : null);
+        const customStoragePath = ovr?.material?.textureStoragePath || null;
+        const hasCustomTex = !!customTexUrl || !!node.userData?.__hasCustomTexture;
+
+        let origHexColor = hexColor;
+        if (node.userData.__originalMaterialBackup) {
+          const origM = Array.isArray(node.userData.__originalMaterialBackup) ? node.userData.__originalMaterialBackup[0] : node.userData.__originalMaterialBackup;
+          if (origM?.color && typeof origM.color.getHexString === 'function') {
+            origHexColor = '#' + origM.color.getHexString();
+          }
+        }
+
+        const firstMat = node.material ? (Array.isArray(node.material) ? node.material[0] : node.material) : null;
+        const activeMap = firstMat ? (firstMat.map || firstMat.emissiveMap) : null;
+
+        let initialOffsetX = ovr?.material?.textureOffsetX;
+        let initialOffsetY = ovr?.material?.textureOffsetY;
+        let initialRot = ovr?.material?.textureRotation;
+        let initialRepX = ovr?.material?.textureRepeatX;
+        let initialRepY = ovr?.material?.textureRepeatY;
+        let initialFlipX = ovr?.material?.textureFlipX;
+        let initialFlipY = ovr?.material?.textureFlipY;
+
+        if (activeMap) {
+          if (initialRepX === undefined && activeMap.repeat) {
+            initialRepX = Math.abs(activeMap.repeat.x);
+            if (initialFlipX === undefined) initialFlipX = activeMap.repeat.x < 0;
+          }
+          if (initialRepY === undefined && activeMap.repeat) {
+            initialRepY = Math.abs(activeMap.repeat.y);
+            if (initialFlipY === undefined) initialFlipY = activeMap.repeat.y < 0;
+          }
+          if (initialOffsetX === undefined && activeMap.offset) {
+            initialOffsetX = Number(activeMap.offset.x.toFixed(3));
+          }
+          if (initialOffsetY === undefined && activeMap.offset) {
+            initialOffsetY = Number(activeMap.offset.y.toFixed(3));
+          }
+          if (initialRot === undefined && activeMap.rotation !== undefined) {
+            initialRot = Math.round((activeMap.rotation * 180) / Math.PI);
+          }
+        }
+
         detected.push({
           uuid: node.uuid,
           name: node.name || `Mesh_${idx}`,
@@ -690,6 +809,7 @@ const ARTest = () => {
           position: { x: Number(node.position.x.toFixed(3)), y: Number(node.position.y.toFixed(3)), z: Number(node.position.z.toFixed(3)) },
           rotation: { x: rotDegX, y: rotDegY, z: rotDegZ },
           scale: { x: Number(node.scale.x.toFixed(2)), y: Number(node.scale.y.toFixed(2)), z: Number(node.scale.z.toFixed(2)) },
+          originalColor: origHexColor,
           material: {
             color: hexColor,
             metalness,
@@ -697,7 +817,18 @@ const ARTest = () => {
             emissive,
             emissiveIntensity,
             opacity,
-            wireframe
+            wireframe,
+            textureUrl: customTexUrl,
+            textureStoragePath: customStoragePath,
+            hasCustomTexture: hasCustomTex,
+            textureFileName: ovr?.material?.textureFileName || null,
+            textureOffsetX: initialOffsetX !== undefined ? Number(initialOffsetX) : 0.0,
+            textureOffsetY: initialOffsetY !== undefined ? Number(initialOffsetY) : 0.0,
+            textureRotation: initialRot !== undefined ? Number(initialRot) : 0.0,
+            textureRepeatX: initialRepX !== undefined ? Number(initialRepX) : 1.0,
+            textureRepeatY: initialRepY !== undefined ? Number(initialRepY) : 1.0,
+            textureFlipX: Boolean(initialFlipX),
+            textureFlipY: Boolean(initialFlipY)
           }
         });
         idx++;
@@ -705,7 +836,7 @@ const ARTest = () => {
     });
 
     setMeshList(detected);
-  }, []);
+  }, [deletedMeshNames, arData]);
 
   // Load Global Tracking Defaults from Firestore (settings/tracking) on mount
   useEffect(() => {
@@ -743,8 +874,24 @@ const ARTest = () => {
         const overrides = arData.config.meshOverrides;
         model3D.traverse((node) => {
           if (node.isMesh) {
+            // Pristine backup of original material before any overrides are applied
+            if (!node.userData.__originalMaterialBackup && node.material) {
+              if (Array.isArray(node.material)) {
+                node.userData.__originalMaterialBackup = node.material.map((m) => m.clone());
+              } else {
+                node.userData.__originalMaterialBackup = node.material.clone();
+              }
+            }
+
             const ovr = overrides[node.name] || overrides[node.uuid];
             if (ovr) {
+              if (ovr.deleted || ovr.visible === false) {
+                node.visible = false;
+                if (ovr.deleted && node.parent) {
+                  node.parent.remove(node);
+                }
+                return;
+              }
               if (ovr.position) node.position.set(ovr.position.x, ovr.position.y, ovr.position.z);
               if (ovr.rotation) {
                 node.rotation.set(
@@ -772,6 +919,23 @@ const ARTest = () => {
                   if (ovr.material.wireframe !== undefined) m.wireframe = !!ovr.material.wireframe;
                   m.needsUpdate = true;
                 });
+                if (ovr.material.textureUrl) {
+                  const loader = new THREE.TextureLoader();
+                  loader.load(ovr.material.textureUrl, (tex) => {
+                    tex.colorSpace = THREE.SRGBColorSpace;
+                    tex.flipY = false;
+                    applyTextureTransform(tex, ovr.material);
+                    mats.forEach((m) => {
+                      m.map = tex;
+                      m.needsUpdate = true;
+                    });
+                    node.userData.__currentCustomTexture = tex;
+                    node.userData.__hasCustomTexture = true;
+                    node.userData.__customTextureUrl = ovr.material.textureUrl;
+                  });
+                } else {
+                  applyMaterialTextureTransform(node.material, ovr.material);
+                }
               }
             }
           }
@@ -914,7 +1078,13 @@ const ARTest = () => {
     const modelEl = document.getElementById('ar-model');
     if (!modelEl) return;
     const model3D = modelEl.getObject3D('mesh');
-    if (!model3D || !videoUrl) return;
+    if (!model3D) return;
+
+    if (!videoUrl) {
+      const sceneEl = document.querySelector('a-scene');
+      purgeAllSceneVideoLayers(sceneEl);
+      return;
+    }
 
     // Check if videoUrl is a YouTube URL: bypass HTML5 <video> to prevent fatal browser CORS errors
     if (isYouTubeUrl(videoUrl)) {
@@ -922,7 +1092,7 @@ const ARTest = () => {
       if (existingVid) {
         existingVid.pause();
         existingVid.removeAttribute('src');
-        try { existingVid.load(); } catch {}
+        try { existingVid.load(); } catch { }
       }
       return;
     }
@@ -1010,9 +1180,28 @@ const ARTest = () => {
     });
 
     let finalTargetMeshes = matchedMeshes;
-    if (finalTargetMeshes.length === 0) {
+    if (finalTargetMeshes.length === 0 && targetParam === 'auto') {
       finalTargetMeshes = autoScreenMeshes;
     }
+
+    // Ensure non-target meshes have any video texture stripped
+    allMeshes.forEach((node) => {
+      if (!finalTargetMeshes.includes(node)) {
+        const materials = Array.isArray(node.material) ? node.material : [node.material];
+        materials.forEach((mat) => {
+          if (mat.map && (mat.map.isVideoTexture || mat.map.image instanceof HTMLVideoElement)) {
+            try { mat.map.dispose(); } catch { }
+            mat.map = null;
+            mat.needsUpdate = true;
+          }
+          if (mat.emissiveMap && (mat.emissiveMap.isVideoTexture || mat.emissiveMap.image instanceof HTMLVideoElement)) {
+            try { mat.emissiveMap.dispose(); } catch { }
+            mat.emissiveMap = null;
+            mat.needsUpdate = true;
+          }
+        });
+      }
+    });
 
     finalTargetMeshes.forEach((node) => {
       const materials = Array.isArray(node.material) ? node.material : [node.material];
@@ -1041,6 +1230,9 @@ const ARTest = () => {
         videoTexture.needsUpdate = true;
         mat.map = videoTexture;
         mat.emissiveMap = videoTexture;
+        if (mat.color && typeof mat.color.set === 'function') {
+          mat.color.set(0xffffff);
+        }
         if (mat.emissive && typeof mat.emissive.set === 'function') {
           mat.emissive.set(0xffffff);
         }
@@ -1054,7 +1246,7 @@ const ARTest = () => {
     };
   }, [activeVideoUrl, customVideoUrl, arData, videoTargetMesh, videoFlipX, mediaPlaying, meshList]);
 
-  // Live Mirror Video Layer / Mesh Texture Inversion (Flip X)
+  // Live Video Layer / Mesh Texture Transformations (Flip, Scale, Offset, Rotation)
   const applyFlipXToScene = useCallback((isFlipped) => {
     const modelEl = document.getElementById('ar-model');
     if (!modelEl) return;
@@ -1074,11 +1266,11 @@ const ARTest = () => {
         const nodeName = (node.name || '').toLowerCase();
         const nodeUuid = (node.uuid || '').toLowerCase();
 
-        if (selectedMeshUuid && (node.uuid === selectedMeshUuid || node.name === selectedMeshUuid)) {
-          matchedMeshes.push(node);
-        } else if (targetParam === 'all') {
+        if (targetParam === 'all') {
           matchedMeshes.push(node);
         } else if (targetParam !== 'auto' && (nodeName === targetParam || nodeUuid === targetParam)) {
+          matchedMeshes.push(node);
+        } else if (targetParam === 'auto' && selectedMeshUuid && (node.uuid === selectedMeshUuid || node.name === selectedMeshUuid)) {
           matchedMeshes.push(node);
         } else {
           const hasVideo = !!(
@@ -1096,7 +1288,7 @@ const ARTest = () => {
     });
 
     let finalTargetMeshes = matchedMeshes;
-    if (finalTargetMeshes.length === 0) {
+    if (finalTargetMeshes.length === 0 && targetParam === 'auto') {
       finalTargetMeshes = autoScreenMeshes;
     }
 
@@ -1117,15 +1309,18 @@ const ARTest = () => {
           ['map', 'emissiveMap'].forEach((mapName) => {
             if (m[mapName]) {
               const tex = m[mapName];
-              if (isFlipped) {
-                tex.wrapS = THREE.RepeatWrapping;
-                tex.repeat.set(-1, 1);
-                tex.offset.set(1, 0);
-              } else {
-                tex.wrapS = THREE.ClampToEdgeWrapping;
-                tex.repeat.set(1, 1);
-                tex.offset.set(0, 0);
-              }
+              const repX = (videoTextureRepeatX || 1.0);
+              const repY = (videoTextureRepeatY || 1.0);
+              const offX = (videoTextureOffsetX || 0.0);
+              const offY = (videoTextureOffsetY || 0.0);
+              const rot = (videoRotation || 0.0);
+
+              tex.wrapS = THREE.RepeatWrapping;
+              tex.wrapT = THREE.RepeatWrapping;
+              tex.repeat.set(isFlipped ? -Math.abs(repX) : Math.abs(repX), repY);
+              tex.offset.set(isFlipped ? (1.0 - offX) : offX, offY);
+              tex.center.set(0.5, 0.5);
+              tex.rotation = (rot * Math.PI) / 180;
               tex.matrixAutoUpdate = true;
               if (tex.updateMatrix) tex.updateMatrix();
               tex.needsUpdate = true;
@@ -1135,12 +1330,41 @@ const ARTest = () => {
         });
       }
     });
-  }, [selectedMeshUuid, videoTargetMesh]);
+  }, [selectedMeshUuid, videoTargetMesh, videoTextureRepeatX, videoTextureRepeatY, videoTextureOffsetX, videoTextureOffsetY, videoRotation]);
 
-  // Reactive Effect to apply FlipX whenever videoFlipX, mesh target, or model changes
+  // Reactive Effect to apply Video Transforms whenever state, target, or model changes
   useEffect(() => {
     applyFlipXToScene(videoFlipX);
-  }, [videoFlipX, applyFlipXToScene, localGlbUrl, meshList]);
+  }, [videoFlipX, videoScale, videoOffsetX, videoOffsetY, videoOffsetZ, videoRotation, videoTextureRepeatX, videoTextureRepeatY, videoTextureOffsetX, videoTextureOffsetY, applyFlipXToScene, localGlbUrl, meshList]);
+
+  // Snap video layer to exact 3D geometry / face and reset mapping
+  const snapVideoToLayer = (targetParam) => {
+    const target = targetParam || videoTargetMesh;
+    setVideoTargetMesh(target);
+    setVideoScale(1.0);
+    setVideoOffsetX(0.0);
+    setVideoOffsetY(0.0);
+    setVideoOffsetZ(0.0);
+    setVideoRotation(0);
+    setVideoTextureRepeatX(1.0);
+    setVideoTextureRepeatY(1.0);
+    setVideoTextureOffsetX(0.0);
+    setVideoTextureOffsetY(0.0);
+
+    const modelEl = document.getElementById('ar-model') || document.getElementById('preview-model');
+    if (modelEl && modelEl.components && modelEl.components['play-gltf-video']) {
+      const comp = modelEl.components['play-gltf-video'];
+      if (typeof comp.applyVideo === 'function') {
+        comp.data.targetMesh = target;
+        comp.data.videoScale = 1.0;
+        comp.data.videoOffsetX = 0.0;
+        comp.data.videoOffsetY = 0.0;
+        comp.data.videoOffsetZ = 0.0;
+        comp.data.videoRotation = 0;
+        comp.applyVideo();
+      }
+    }
+  };
 
   // Direct Perspective View Angles Switcher (Front, Back, Left, Right, Top, Bottom)
   const setCameraView = (viewName) => {
@@ -1199,6 +1423,85 @@ const ARTest = () => {
       }
     }
   };
+
+  // Reposition camera in front of a specific 3D mesh object (frontal view)
+  const focusCameraOnMesh = useCallback((uuid, meshName) => {
+    const sceneEl = document.querySelector('a-scene');
+    const cameraEl = document.getElementById('scene-camera') || (sceneEl && sceneEl.camera && sceneEl.camera.el);
+    if (!cameraEl) return;
+
+    const modelEl = document.getElementById('ar-model');
+    const model3D = modelEl?.getObject3D('mesh');
+    if (!model3D) return;
+
+    let targetNode = null;
+    model3D.traverse((node) => {
+      if ((node.uuid === uuid || (meshName && node.name === meshName)) && node.isMesh) {
+        targetNode = node;
+      }
+    });
+
+    if (!targetNode) return;
+
+    // Ensure object world matrix is up to date
+    targetNode.updateWorldMatrix(true, false);
+
+    // Compute surface geometry frame (worldCenter, worldNormal, size)
+    const frame = computeGeometrySurfaceFrame(targetNode);
+
+    const worldCenter = frame.worldCenter ? frame.worldCenter.clone() : new THREE.Vector3();
+    let normal = frame.worldNormal && frame.worldNormal.lengthSq() > 0.001
+      ? frame.worldNormal.clone().normalize()
+      : new THREE.Vector3(0, 0, 1);
+
+    if (normal.lengthSq() < 0.01) {
+      normal.set(0, 0, 1);
+    }
+
+    // Frame object comfortably within the camera's FOV (45 deg)
+    const maxDim = Math.max(frame.size.x || 0, frame.size.y || 0, frame.size.z || 0, 0.1);
+    const fov = 45 * (Math.PI / 180);
+    let dist = (maxDim / 2) / Math.tan(fov / 2) * 1.6;
+    dist = Math.max(0.35, Math.min(dist, 4.0));
+
+    // Camera position placed along outward normal vector from object's center
+    const cameraPos = worldCenter.clone().addScaledVector(normal, dist);
+
+    // Direction vector from camera to object center (-normal)
+    const viewDir = new THREE.Vector3().subVectors(worldCenter, cameraPos).normalize();
+
+    // Compute pitch (vertical angle) and yaw (horizontal angle) for A-Frame look-controls
+    const pitchRad = Math.asin(Math.max(-1, Math.min(1, viewDir.y)));
+    const pitchDeg = (pitchRad * 180) / Math.PI;
+
+    const yawRad = Math.atan2(-viewDir.x, -viewDir.z);
+    const yawDeg = (yawRad * 180) / Math.PI;
+
+    // Apply new position to camera
+    cameraEl.setAttribute('position', `${cameraPos.x.toFixed(4)} ${cameraPos.y.toFixed(4)} ${cameraPos.z.toFixed(4)}`);
+    if (cameraEl.object3D) {
+      cameraEl.object3D.position.copy(cameraPos);
+    }
+
+    // Update look-controls internal pitch & yaw objects to maintain exact orientation
+    const lookControls = cameraEl.components && cameraEl.components['look-controls'];
+    if (lookControls) {
+      if (lookControls.pitchObject) {
+        lookControls.pitchObject.rotation.x = THREE.MathUtils.degToRad(pitchDeg);
+      }
+      if (lookControls.yawObject) {
+        lookControls.yawObject.rotation.y = THREE.MathUtils.degToRad(yawDeg);
+      }
+    }
+
+    if (sceneEl.camera) {
+      sceneEl.camera.position.copy(cameraPos);
+      sceneEl.camera.updateMatrixWorld();
+    }
+
+    // Select the mesh so the user sees it highlighted and auto-spin pauses
+    setSelectedMeshUuid(uuid);
+  }, []);
 
   // Handlers to update either individual mesh or root model transform/materials
   const handleRotationChange = (axis, deg) => {
@@ -1299,8 +1602,93 @@ const ARTest = () => {
     );
   };
 
-  const handleMeshMaterialChange = (prop, val) => {
+  const handleDeleteMesh = useCallback((uuid, meshName) => {
+    const modelEl = document.getElementById('ar-model');
+    const model3D = modelEl?.getObject3D('mesh');
+    let resolvedName = meshName || '';
+
+    if (model3D) {
+      model3D.traverse((node) => {
+        if ((node.uuid === uuid || (meshName && node.name === meshName)) && node.isMesh) {
+          resolvedName = node.name || meshName || `Mesh_${uuid}`;
+          node.visible = false;
+          if (node.parent) {
+            deletedNodesRef.current.set(uuid, { node, parent: node.parent, name: resolvedName });
+            node.parent.remove(node);
+          }
+        }
+      });
+    }
+
+    if (resolvedName) {
+      setDeletedMeshNames((prev) => Array.from(new Set([...prev, resolvedName])));
+    }
+
+    setMeshList((prev) => prev.filter((m) => m.uuid !== uuid && m.name !== meshName));
+
+    if (selectedMeshUuid === uuid) {
+      setSelectedMeshUuid(null);
+      const sceneEl = document.querySelector('a-scene');
+      const threeScene = sceneEl?.object3D;
+      const oldHelper = threeScene?.getObjectByName('mesh-selection-helper');
+      if (oldHelper && threeScene) {
+        threeScene.remove(oldHelper);
+        if (oldHelper.geometry) oldHelper.geometry.dispose();
+      }
+    }
+
+    if (videoTargetMesh && (videoTargetMesh === meshName || videoTargetMesh === resolvedName || videoTargetMesh === uuid)) {
+      setVideoTargetMesh('auto');
+    }
+
+    setConfirmDeleteUuid(null);
+  }, [selectedMeshUuid, videoTargetMesh]);
+
+  const handleRestoreMesh = useCallback((nameOrUuid) => {
+    let restoredEntry = null;
+    let targetKey = null;
+
+    for (const [key, val] of deletedNodesRef.current.entries()) {
+      if (key === nameOrUuid || val.name === nameOrUuid) {
+        restoredEntry = val;
+        targetKey = key;
+        break;
+      }
+    }
+
+    if (restoredEntry && restoredEntry.parent && restoredEntry.node) {
+      restoredEntry.parent.add(restoredEntry.node);
+      restoredEntry.node.visible = true;
+      if (targetKey) deletedNodesRef.current.delete(targetKey);
+    }
+
+    setDeletedMeshNames((prev) => prev.filter((n) => n !== nameOrUuid));
+    setTimeout(() => {
+      scanMeshes();
+    }, 50);
+  }, [scanMeshes]);
+
+  const handleRestoreAllMeshes = useCallback(() => {
+    for (const [, val] of deletedNodesRef.current.entries()) {
+      if (val.parent && val.node) {
+        val.parent.add(val.node);
+        val.node.visible = true;
+      }
+    }
+    deletedNodesRef.current.clear();
+    setDeletedMeshNames([]);
+    setTimeout(() => {
+      scanMeshes();
+    }, 50);
+  }, [scanMeshes]);
+
+  const handleMeshMaterialChange = (propOrUpdates, maybeVal) => {
     if (!selectedMeshUuid) return;
+
+    const updates = typeof propOrUpdates === 'string' ? { [propOrUpdates]: maybeVal } : (propOrUpdates || {});
+    const isTextureProp = Object.keys(updates).some((k) =>
+      ['textureOffsetX', 'textureOffsetY', 'textureRotation', 'textureRepeatX', 'textureRepeatY', 'textureFlipX', 'textureFlipY'].includes(k)
+    );
 
     const modelEl = document.getElementById('ar-model');
     const model3D = modelEl?.getObject3D('mesh');
@@ -1309,18 +1697,24 @@ const ARTest = () => {
         if (node.uuid === selectedMeshUuid && node.isMesh && node.material) {
           const mats = Array.isArray(node.material) ? node.material : [node.material];
           mats.forEach((mat) => {
-            if (prop === 'color' && mat.color) mat.color.set(val);
-            if (prop === 'metalness' && mat.metalness !== undefined) mat.metalness = val;
-            if (prop === 'roughness' && mat.roughness !== undefined) mat.roughness = val;
-            if (prop === 'emissive' && mat.emissive) mat.emissive.set(val);
-            if (prop === 'emissiveIntensity' && mat.emissiveIntensity !== undefined) mat.emissiveIntensity = val;
-            if (prop === 'opacity') {
-              mat.opacity = val;
-              if (val < 1.0) mat.transparent = true;
+            if (updates.color !== undefined && mat.color) mat.color.set(updates.color);
+            if (updates.metalness !== undefined && mat.metalness !== undefined) mat.metalness = updates.metalness;
+            if (updates.roughness !== undefined && mat.roughness !== undefined) mat.roughness = updates.roughness;
+            if (updates.emissive !== undefined && mat.emissive) mat.emissive.set(updates.emissive);
+            if (updates.emissiveIntensity !== undefined && mat.emissiveIntensity !== undefined) mat.emissiveIntensity = updates.emissiveIntensity;
+            if (updates.opacity !== undefined) {
+              mat.opacity = updates.opacity;
+              if (updates.opacity < 1.0) mat.transparent = true;
             }
-            if (prop === 'wireframe') mat.wireframe = !!val;
+            if (updates.wireframe !== undefined) mat.wireframe = !!updates.wireframe;
             mat.needsUpdate = true;
           });
+
+          if (isTextureProp) {
+            const currentMesh = meshList.find((m) => m.uuid === selectedMeshUuid);
+            const combinedMat = { ...(currentMesh?.material || {}), ...updates };
+            applyMaterialTextureTransform(node.material, combinedMat);
+          }
         }
       });
     }
@@ -1328,10 +1722,427 @@ const ARTest = () => {
     setMeshList((prev) =>
       prev.map((m) =>
         m.uuid === selectedMeshUuid
-          ? { ...m, material: { ...m.material, [prop]: val } }
+          ? { ...m, material: { ...m.material, ...updates } }
           : m
       )
     );
+
+    const targetMesh = meshList.find((m) => m.uuid === selectedMeshUuid);
+    if (targetMesh) {
+      setArData((prev) => {
+        if (!prev) return prev;
+        const currentOverrides = prev.config?.meshOverrides || {};
+        const existingNodeOvr = currentOverrides[targetMesh.name] || currentOverrides[targetMesh.uuid] || {};
+        return {
+          ...prev,
+          config: {
+            ...(prev.config || {}),
+            meshOverrides: {
+              ...currentOverrides,
+              [targetMesh.name]: {
+                ...existingNodeOvr,
+                material: {
+                  ...(existingNodeOvr.material || {}),
+                  ...updates
+                }
+              }
+            }
+          }
+        };
+      });
+    }
+  };
+
+  const handleResetMeshTextureTransform = () => {
+    handleMeshMaterialChange({
+      textureOffsetX: 0.0,
+      textureOffsetY: 0.0,
+      textureRotation: 0.0,
+      textureRepeatX: 1.0,
+      textureRepeatY: 1.0,
+      textureFlipX: false,
+      textureFlipY: false
+    });
+  };
+
+  // Upload and Apply Image Texture / UV Map to a specific 3D Mesh
+  const handleApplyMeshTexture = async (mesh, file) => {
+    if (!mesh || !file) return;
+
+    setTextureUploadingUuid(mesh.uuid);
+    setUploadProgress(`Loading texture for ${mesh.name}...`);
+    setError(null);
+
+    try {
+      const previewUrl = URL.createObjectURL(file);
+      const modelEl = document.getElementById('ar-model');
+      const model3D = modelEl?.getObject3D('mesh');
+
+      let targetNode = null;
+      if (model3D) {
+        model3D.traverse((node) => {
+          if ((node.uuid === mesh.uuid || node.name === mesh.name) && node.isMesh) {
+            targetNode = node;
+          }
+        });
+      }
+
+      if (!targetNode) {
+        throw new Error(`Could not find 3D mesh "${mesh.name}" in scene.`);
+      }
+
+      // 1. Preserve original material and texture if not already backed up
+      if (!targetNode.userData.__originalMaterialBackup && targetNode.material) {
+        if (Array.isArray(targetNode.material)) {
+          targetNode.userData.__originalMaterialBackup = targetNode.material.map((m) => m.clone());
+        } else {
+          targetNode.userData.__originalMaterialBackup = targetNode.material.clone();
+        }
+      }
+
+      // 2. Load texture into Three.js
+      const loader = new THREE.TextureLoader();
+      const texture = await new Promise((resolve, reject) => {
+        loader.load(
+          previewUrl,
+          (t) => resolve(t),
+          undefined,
+          (err) => reject(new Error('Failed to load image texture: ' + (err?.message || 'Invalid image file')))
+        );
+      });
+
+      if (THREE.SRGBColorSpace !== undefined) {
+        texture.colorSpace = THREE.SRGBColorSpace;
+      }
+      texture.flipY = false; // GLTF standard UV mapping orientation
+      const currentMeshItem = meshList.find((m) => m.uuid === mesh.uuid || m.name === mesh.name);
+      const curTransform = currentMeshItem?.material || mesh.material || {};
+      applyTextureTransform(texture, curTransform);
+
+      // Dispose previously applied custom texture if any
+      if (targetNode.userData.__currentCustomTexture) {
+        try { targetNode.userData.__currentCustomTexture.dispose(); } catch { }
+      }
+      targetNode.userData.__currentCustomTexture = texture;
+      targetNode.userData.__hasCustomTexture = true;
+
+      const mats = Array.isArray(targetNode.material) ? targetNode.material : [targetNode.material];
+      mats.forEach((m) => {
+        m.map = texture;
+        if (m.color && typeof m.color.set === 'function') {
+          m.color.set(0xffffff);
+        }
+        m.needsUpdate = true;
+      });
+
+      let finalTextureUrl = previewUrl;
+      let finalStoragePath = '';
+
+      // 3. If batchId is present, upload directly to Firebase Cloud Storage
+      const bId = (batchId || '').trim();
+      if (bId) {
+        setUploadProgress(`Uploading ${file.name} to Cloud Storage...`);
+        const cleanMeshName = (mesh.name || 'mesh').replace(/[^a-zA-Z0-9._-]/g, '_');
+        const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const storagePath = `assets/${bId}/textures/${cleanMeshName}_${Date.now()}_${cleanFileName}`;
+        const storageRef = ref(storage, storagePath);
+
+        await uploadBytes(storageRef, file);
+        const downloadUrl = await getDownloadURL(storageRef);
+
+        finalTextureUrl = downloadUrl;
+        finalStoragePath = storagePath;
+        targetNode.userData.__customTextureUrl = downloadUrl;
+
+        // Persist to Firestore batch & asset documents
+        const meshOverridePayload = {
+          ar_config: {
+            meshOverrides: {
+              [mesh.name]: {
+                material: {
+                  ...curTransform,
+                  textureUrl: downloadUrl,
+                  textureStoragePath: storagePath,
+                  hasCustomTexture: true,
+                  textureFileName: file.name,
+                  color: '#ffffff'
+                }
+              }
+            }
+          }
+        };
+
+        await Promise.all([
+          setDoc(doc(db, 'batches', bId), meshOverridePayload, { merge: true }),
+          setDoc(doc(db, 'assets', bId), meshOverridePayload, { merge: true })
+        ]);
+        console.log(`[ARTest] Persisted texture override for ${mesh.name} to Firestore`);
+      } else {
+        // Queue for saving when batch ID is entered
+        pendingTextureFilesRef.current.set(mesh.name, {
+          meshUuid: mesh.uuid,
+          meshName: mesh.name,
+          file,
+          previewUrl
+        });
+      }
+
+      // 4. Update React state
+      setMeshList((prev) =>
+        prev.map((m) => {
+          if (m.uuid === mesh.uuid || m.name === mesh.name) {
+            return {
+              ...m,
+              material: {
+                ...m.material,
+                color: '#ffffff',
+                textureUrl: finalTextureUrl,
+                textureStoragePath: finalStoragePath,
+                hasCustomTexture: true,
+                textureFileName: file.name
+              }
+            };
+          }
+          return m;
+        })
+      );
+
+      // Update arData config state
+      setArData((prev) => {
+        if (!prev) return prev;
+        const currentOverrides = prev.config?.meshOverrides || {};
+        return {
+          ...prev,
+          config: {
+            ...(prev.config || {}),
+            meshOverrides: {
+              ...currentOverrides,
+              [mesh.name]: {
+                ...(currentOverrides[mesh.name] || {}),
+                material: {
+                  ...(currentOverrides[mesh.name]?.material || {}),
+                  textureUrl: finalTextureUrl,
+                  textureStoragePath: finalStoragePath,
+                  hasCustomTexture: true,
+                  textureFileName: file.name,
+                  color: '#ffffff'
+                }
+              }
+            }
+          }
+        };
+      });
+
+      const timeStr = new Date().toLocaleTimeString();
+      setSaveSuccessMsg(
+        bId
+          ? `Texture applied to ${mesh.name} & saved to Cloud Storage at ${timeStr}`
+          : `Texture preview applied to ${mesh.name}. Save to batch to upload to Cloud Storage.`
+      );
+      setTimeout(() => setSaveSuccessMsg(''), 6000);
+    } catch (err) {
+      console.error('Error applying mesh texture:', err);
+      setError('Error applying texture: ' + err.message);
+    } finally {
+      setTextureUploadingUuid(null);
+      setUploadProgress('');
+    }
+  };
+
+  // Revert Mesh Texture / Material back to Original & Delete from Cloud Storage
+  const handleRemoveMeshTexture = async (uuid, meshName) => {
+    const targetMeshItem = meshList.find((m) => m.uuid === uuid || m.name === meshName);
+    const targetName = meshName || targetMeshItem?.name || '';
+    const bId = (batchId || '').trim();
+
+    // 1. Gather all candidate Cloud Storage targets to delete
+    const targetsToDelete = [
+      targetMeshItem?.material?.textureStoragePath,
+      targetMeshItem?.material?.textureUrl,
+      arData?.config?.meshOverrides?.[targetName]?.material?.textureStoragePath,
+      arData?.config?.meshOverrides?.[targetName]?.material?.textureUrl
+    ].filter(Boolean);
+
+    // 2. Revert the Three.js mesh back to the original material/texture
+    const modelEl = document.getElementById('ar-model');
+    const model3D = modelEl?.getObject3D('mesh');
+    let restoredOriginal = false;
+
+    if (model3D) {
+      model3D.traverse((node) => {
+        if ((node.uuid === uuid || node.name === targetName) && node.isMesh) {
+          // Dispose current custom texture
+          if (node.userData.__currentCustomTexture) {
+            try { node.userData.__currentCustomTexture.dispose(); } catch { }
+            node.userData.__currentCustomTexture = null;
+          }
+          node.userData.__hasCustomTexture = false;
+          node.userData.__customTextureUrl = null;
+
+          // Restore from original material backup
+          if (node.userData.__originalMaterialBackup) {
+            if (Array.isArray(node.userData.__originalMaterialBackup)) {
+              node.material = node.userData.__originalMaterialBackup.map((m) => m.clone());
+            } else {
+              node.material = node.userData.__originalMaterialBackup.clone();
+            }
+            node.material.needsUpdate = true;
+            restoredOriginal = true;
+          } else if (node.material) {
+            // Fallback if backup wasn't cloned
+            const mats = Array.isArray(node.material) ? node.material : [node.material];
+            mats.forEach((m) => {
+              m.map = null;
+              m.needsUpdate = true;
+            });
+          }
+        }
+      });
+    }
+
+    // 3. Delete texture file(s) from Firebase Cloud Storage
+    let deletedCount = 0;
+    const triedPaths = new Set();
+
+    for (const item of targetsToDelete) {
+      if (!item || typeof item !== 'string') continue;
+      const trimmed = item.trim();
+      if (!trimmed || trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
+        continue;
+      }
+      try {
+        let storageRef = null;
+        if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('gs://')) {
+          if (trimmed.includes('firebasestorage.googleapis.com') || trimmed.startsWith('gs://')) {
+            storageRef = ref(storage, trimmed);
+          }
+        } else {
+          storageRef = ref(storage, trimmed);
+        }
+
+        if (storageRef && !triedPaths.has(storageRef.fullPath)) {
+          triedPaths.add(storageRef.fullPath);
+          await deleteObject(storageRef);
+          deletedCount++;
+          console.log('[ARTest] Deleted texture object from Cloud Storage:', storageRef.fullPath);
+        }
+      } catch (err) {
+        if (err?.code !== 'storage/object-not-found') {
+          console.warn('[ARTest] Could not delete texture from Storage:', trimmed, err);
+        }
+      }
+    }
+
+    // 4. Update Firestore documents to remove texture override
+    if (bId && targetName) {
+      try {
+        const clearPayload = {
+          ar_config: {
+            meshOverrides: {
+              [targetName]: {
+                material: {
+                  textureUrl: null,
+                  textureStoragePath: null,
+                  hasCustomTexture: false,
+                  textureFileName: null,
+                  textureOffsetX: 0.0,
+                  textureOffsetY: 0.0,
+                  textureRotation: 0.0,
+                  textureRepeatX: 1.0,
+                  textureRepeatY: 1.0,
+                  textureFlipX: false,
+                  textureFlipY: false
+                }
+              }
+            }
+          }
+        };
+        await Promise.all([
+          setDoc(doc(db, 'batches', bId), clearPayload, { merge: true }),
+          setDoc(doc(db, 'assets', bId), clearPayload, { merge: true })
+        ]);
+        console.log(`[ARTest] Removed texture override in Firestore for ${targetName}`);
+      } catch (fsErr) {
+        console.warn('[ARTest] Firestore texture removal warning:', fsErr);
+      }
+    }
+
+    // Clear any pending upload for this mesh
+    if (targetName && pendingTextureFilesRef.current.has(targetName)) {
+      const pending = pendingTextureFilesRef.current.get(targetName);
+      if (pending?.previewUrl) {
+        try { URL.revokeObjectURL(pending.previewUrl); } catch { }
+      }
+      pendingTextureFilesRef.current.delete(targetName);
+    }
+
+    // 5. Update meshList state
+    setMeshList((prev) =>
+      prev.map((m) => {
+        if (m.uuid === uuid || m.name === targetName) {
+          const origHex = m.originalColor || '#ffffff';
+          return {
+            ...m,
+            material: {
+              ...m.material,
+              color: origHex,
+              textureUrl: null,
+              textureStoragePath: null,
+              hasCustomTexture: false,
+              textureFileName: null,
+              textureOffsetX: 0.0,
+              textureOffsetY: 0.0,
+              textureRotation: 0.0,
+              textureRepeatX: 1.0,
+              textureRepeatY: 1.0,
+              textureFlipX: false,
+              textureFlipY: false
+            }
+          };
+        }
+        return m;
+      })
+    );
+
+    // Update arData state
+    setArData((prev) => {
+      if (!prev) return prev;
+      const currentOverrides = { ...(prev.config?.meshOverrides || {}) };
+      if (currentOverrides[targetName]) {
+        currentOverrides[targetName] = {
+          ...currentOverrides[targetName],
+          material: {
+            ...(currentOverrides[targetName].material || {}),
+            textureUrl: null,
+            textureStoragePath: null,
+            hasCustomTexture: false,
+            textureFileName: null,
+            textureOffsetX: 0.0,
+            textureOffsetY: 0.0,
+            textureRotation: 0.0,
+            textureRepeatX: 1.0,
+            textureRepeatY: 1.0,
+            textureFlipX: false,
+            textureFlipY: false
+          }
+        };
+      }
+      return {
+        ...prev,
+        config: {
+          ...(prev.config || {}),
+          meshOverrides: currentOverrides
+        }
+      };
+    });
+
+    const timeStr = new Date().toLocaleTimeString();
+    if (deletedCount > 0) {
+      setSaveSuccessMsg(`Texture deleted from Cloud Storage (${deletedCount} file${deletedCount > 1 ? 's' : ''}) & original material restored on ${targetName} at ${timeStr}`);
+    } else {
+      setSaveSuccessMsg(`Custom texture removed & original material restored on ${targetName} at ${timeStr}`);
+    }
+    setTimeout(() => setSaveSuccessMsg(''), 6000);
   };
 
   const resetCurrentTargetTransform = () => {
@@ -1385,6 +2196,9 @@ const ARTest = () => {
       setCustomVideoUrl('');
       setLocalVideoName(file.name);
       setMediaPlaying(true);
+      if (selectedMesh) {
+        setVideoTargetMesh(selectedMesh.name || selectedMesh.uuid);
+      }
     }
   };
 
@@ -1395,13 +2209,176 @@ const ARTest = () => {
     setSelectedVideoFile(null);
     setLocalVideoName('');
     setMediaPlaying(true);
+    if (selectedMesh) {
+      setVideoTargetMesh(selectedMesh.name || selectedMesh.uuid);
+    }
     if (isYouTubeUrl(trimmed)) {
       setVideoMode('youtube');
       setYoutubeUrlInput(trimmed);
+      if (isYouTubeShortUrl(trimmed)) {
+        setVideoAspectRatio('9:16');
+      }
     } else {
       setVideoMode('webgl');
     }
   };
+
+  const handleRemoveVideoLayer = useCallback(async () => {
+    // 1. Collect all candidate Cloud Storage targets before clearing React state
+    const targetsToDelete = [
+      arData?.config?.video_file_path,
+      arData?.video_file_path,
+      arData?.videoUrl,
+      arData?.video_url,
+      activeVideoUrl,
+      customVideoUrl
+    ].filter(Boolean);
+
+    const bId = (batchId || '').trim();
+
+    // 2. Clear all local React state
+    setActiveVideoUrl('');
+    setCustomVideoUrl('');
+    setSelectedVideoFile(null);
+    setLocalVideoName('');
+    setYoutubeUrlInput('');
+
+    // Clear video URL and path on arData so it doesn't fall back to initial batch values
+    setArData((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        videoUrl: '',
+        video_url: '',
+        video_file_path: '',
+        config: {
+          ...(prev.config || {}),
+          videoUrl: '',
+          video_url: '',
+          video_file_path: ''
+        }
+      };
+    });
+
+    // 3. Completely purge all video layers, elements, CSS3D overlays, textures, and component states from the scene
+    const sceneEl = document.querySelector('a-scene');
+    purgeAllSceneVideoLayers(sceneEl);
+
+    // Explicitly restore material colors & emissive defaults on meshes in scene
+    const modelEl = document.getElementById('ar-model');
+    const model3D = modelEl?.getObject3D('mesh');
+    if (model3D) {
+      model3D.traverse((node) => {
+        if (node.isMesh && node.material) {
+          const mats = Array.isArray(node.material) ? node.material : [node.material];
+          mats.forEach((mat) => {
+            if (mat.map && mat.map.isVideoTexture) {
+              try { mat.map.dispose(); } catch { }
+              mat.map = null;
+            }
+            if (mat.emissiveMap && mat.emissiveMap.isVideoTexture) {
+              try { mat.emissiveMap.dispose(); } catch { }
+              mat.emissiveMap = null;
+            }
+            if (mat.emissive && typeof mat.emissive.set === 'function') {
+              mat.emissive.set(matEmissive || 0x000000);
+            }
+            mat.emissiveIntensity = matEmissiveIntensity || 0;
+            mat.needsUpdate = true;
+          });
+        }
+      });
+    }
+
+    // 4. Delete video file(s) from Firebase Cloud Storage
+    let deletedCount = 0;
+    const triedPaths = new Set();
+
+    for (const item of targetsToDelete) {
+      if (!item || typeof item !== 'string') continue;
+      const trimmed = item.trim();
+      if (!trimmed || trimmed.startsWith('blob:') || trimmed.startsWith('data:') || isYouTubeUrl(trimmed)) {
+        continue;
+      }
+      try {
+        let storageRef = null;
+        if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('gs://')) {
+          if (trimmed.includes('firebasestorage.googleapis.com') || trimmed.startsWith('gs://')) {
+            storageRef = ref(storage, trimmed);
+          }
+        } else {
+          storageRef = ref(storage, trimmed);
+        }
+
+        if (storageRef && !triedPaths.has(storageRef.fullPath)) {
+          triedPaths.add(storageRef.fullPath);
+          await deleteObject(storageRef);
+          deletedCount++;
+          console.log('[ARTest] Deleted video object from Cloud Storage:', storageRef.fullPath);
+        }
+      } catch (err) {
+        if (err?.code !== 'storage/object-not-found') {
+          console.warn('[ARTest] Could not delete video target from Storage:', trimmed, err);
+        }
+      }
+    }
+
+    // If batchId is set, inspect assets/${bId} and remove any remaining video files (.mp4, .webm, .mov, etc.)
+    // NEVER delete .glb 3D models or .mind tracking markers!
+    if (bId) {
+      try {
+        const folderRef = ref(storage, `assets/${bId}`);
+        const folderList = await listAll(folderRef);
+        const videoExts = ['.mp4', '.webm', '.mov', '.m4v', '.ogg'];
+        for (const itemRef of folderList.items) {
+          const lower = itemRef.name.toLowerCase();
+          const isVideo = videoExts.some((ext) => lower.endsWith(ext));
+          if (isVideo && !triedPaths.has(itemRef.fullPath)) {
+            triedPaths.add(itemRef.fullPath);
+            try {
+              await deleteObject(itemRef);
+              deletedCount++;
+              console.log('[ARTest] Deleted batch video file from Cloud Storage:', itemRef.fullPath);
+            } catch (e) {
+              console.warn('[ARTest] Error deleting batch video item:', itemRef.fullPath, e);
+            }
+          }
+        }
+      } catch (folderErr) {
+        console.log('[ARTest] Batch folder inspection note:', folderErr?.message);
+      }
+
+      // 5. Update Firestore batch & asset documents immediately to clear video fields
+      try {
+        const clearPayload = {
+          videoUrl: '',
+          video_url: '',
+          video_file_path: '',
+          ar_config: {
+            ...(arData?.config || {}),
+            videoUrl: '',
+            video_url: '',
+            video_file_path: ''
+          }
+        };
+        await Promise.all([
+          setDoc(doc(db, 'batches', bId), clearPayload, { merge: true }),
+          setDoc(doc(db, 'assets', bId), clearPayload, { merge: true })
+        ]);
+        console.log('[ARTest] Persisted video removal to Firestore for batch:', bId);
+      } catch (fsErr) {
+        console.warn('[ARTest] Firestore video removal warning:', fsErr);
+      }
+    }
+
+    const timeStr = new Date().toLocaleTimeString();
+    if (deletedCount > 0) {
+      setSaveSuccessMsg(`Video layer purged from scene & deleted from Cloud Storage (${deletedCount} file${deletedCount > 1 ? 's' : ''}) at ${timeStr}`);
+    } else {
+      setSaveSuccessMsg(`Video layer completely purged from scene at ${timeStr}`);
+    }
+    setTimeout(() => setSaveSuccessMsg(''), 6000);
+  }, [arData, activeVideoUrl, customVideoUrl, batchId, matEmissive, matEmissiveIntensity]);
 
   const handleLoad = async (e) => {
     e.preventDefault();
@@ -1521,6 +2498,18 @@ const ARTest = () => {
       if (cfg.mediaPlaying !== undefined) setMediaPlaying(cfg.mediaPlaying);
       if (cfg.videoTargetMesh !== undefined) setVideoTargetMesh(cfg.videoTargetMesh);
       if (cfg.videoFlipX !== undefined) setVideoFlipX(!!cfg.videoFlipX);
+      if (cfg.videoScale !== undefined) setVideoScale(Number(cfg.videoScale));
+      if (cfg.videoOffsetX !== undefined) setVideoOffsetX(Number(cfg.videoOffsetX));
+      if (cfg.videoOffsetY !== undefined) setVideoOffsetY(Number(cfg.videoOffsetY));
+      if (cfg.videoOffsetZ !== undefined) setVideoOffsetZ(Number(cfg.videoOffsetZ));
+      if (cfg.videoRotation !== undefined) setVideoRotation(Number(cfg.videoRotation));
+      if (cfg.videoTextureRepeatX !== undefined) setVideoTextureRepeatX(Number(cfg.videoTextureRepeatX));
+      if (cfg.videoTextureRepeatY !== undefined) setVideoTextureRepeatY(Number(cfg.videoTextureRepeatY));
+      if (cfg.videoTextureOffsetX !== undefined) setVideoTextureOffsetX(Number(cfg.videoTextureOffsetX));
+      if (cfg.aspectRatio !== undefined) setVideoAspectRatio(cfg.aspectRatio);
+      else if (cfg.videoAspectRatio !== undefined) setVideoAspectRatio(cfg.videoAspectRatio);
+      else if (isYouTubeShortUrl(videoUrl)) setVideoAspectRatio('9:16');
+      else setVideoAspectRatio('16:9');
 
       // Populate Camera Tracking Settings if configured on batch
       const tCfg = cfg.trackingConfig || cfg.tracking || null;
@@ -1535,6 +2524,15 @@ const ARTest = () => {
         if (tCfg.uiLoading !== undefined) setTrackingUiLoading(tCfg.uiLoading);
         if (tCfg.uiScanning !== undefined) setTrackingUiScanning(tCfg.uiScanning);
         if (tCfg.uiError !== undefined) setTrackingUiError(tCfg.uiError);
+      }
+
+      if (cfg && cfg.meshOverrides) {
+        const loadedDeleted = Object.entries(cfg.meshOverrides)
+          .filter(([_, ovr]) => ovr && ovr.deleted)
+          .map(([name]) => name);
+        if (loadedDeleted.length > 0) {
+          setDeletedMeshNames(loadedDeleted);
+        }
       }
 
       setActiveVideoUrl(videoUrl);
@@ -1569,6 +2567,9 @@ const ARTest = () => {
     try {
       let finalVideoUrl = activeVideoUrl || customVideoUrl || arData?.videoUrl || '';
       let videoFilePath = arData?.config?.video_file_path || arData?.video_file_path || '';
+      if (!finalVideoUrl) {
+        videoFilePath = '';
+      }
       let finalGltfUrl = localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || '';
       let gltfFilePath = arData?.gltf_file_path || '';
 
@@ -1602,17 +2603,55 @@ const ARTest = () => {
         gltfFilePath = glbStoragePath;
       }
 
+      // 2b. Upload any staged custom mesh textures to Storage bucket
+      const textureUploadResults = new Map();
+      if (pendingTextureFilesRef.current.size > 0) {
+        for (const [meshName, pending] of pendingTextureFilesRef.current.entries()) {
+          if (pending?.file) {
+            setUploadProgress(`Uploading texture for ${meshName} to Storage...`);
+            const cleanMeshName = meshName.replace(/[^a-zA-Z0-9._-]/g, '_');
+            const cleanFileName = pending.file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+            const storagePath = `assets/${batchId.trim()}/textures/${cleanMeshName}_${Date.now()}_${cleanFileName}`;
+            const storageRef = ref(storage, storagePath);
+
+            await uploadBytes(storageRef, pending.file);
+            const downloadUrl = await getDownloadURL(storageRef);
+            textureUploadResults.set(meshName, { downloadUrl, storagePath, fileName: pending.file.name });
+          }
+        }
+        pendingTextureFilesRef.current.clear();
+      }
+
       setUploadProgress('Saving batch configuration to Firestore...');
 
       // 3. Build meshOverrides dictionary
       const meshOverrides = {};
       meshList.forEach((m) => {
+        const freshTex = textureUploadResults.get(m.name);
+        const matPayload = {
+          ...m.material,
+          ...(freshTex
+            ? {
+              textureUrl: freshTex.downloadUrl,
+              textureStoragePath: freshTex.storagePath,
+              textureFileName: freshTex.fileName,
+              hasCustomTexture: true
+            }
+            : {})
+        };
         meshOverrides[m.name] = {
           position: m.position,
           rotation: m.rotation,
           scale: m.scale,
           visible: m.visible,
-          material: m.material
+          material: matPayload
+        };
+      });
+      // Explicitly mark deleted meshes so downstream AR experiences and viewers remove them
+      deletedMeshNames.forEach((name) => {
+        meshOverrides[name] = {
+          deleted: true,
+          visible: false
         };
       });
 
@@ -1622,6 +2661,17 @@ const ARTest = () => {
         video_file_path: videoFilePath,
         videoTargetMesh,
         videoFlipX,
+        videoScale,
+        videoOffsetX,
+        videoOffsetY,
+        videoOffsetZ,
+        videoRotation,
+        videoTextureRepeatX,
+        videoTextureRepeatY,
+        videoTextureOffsetX,
+        videoTextureOffsetY,
+        aspectRatio: videoAspectRatio,
+        videoAspectRatio,
         ambientColor,
         ambientIntensity,
         dir1Color,
@@ -1831,7 +2881,7 @@ const ARTest = () => {
             '*'
           );
         }
-      } catch (e) {}
+      } catch (e) { }
     });
   };
 
@@ -1985,14 +3035,24 @@ const ARTest = () => {
             </div>
 
             {selectedMesh && (
-              <button
-                type="button"
-                onClick={() => setSelectedMeshUuid(null)}
-                className="text-[10px] font-mono px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border border-neutral-700 hover:text-white transition-colors"
-                title="Switch back to Root Model settings"
-              >
-                ✕ Deselect
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleDeleteMesh(selectedMesh.uuid, selectedMesh.name)}
+                  className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-500/40 hover:text-white transition-colors flex items-center gap-1 cursor-pointer"
+                  title="Delete this mesh from the scene"
+                >
+                  <span className="material-symbols-outlined text-xs">delete</span> Delete
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMeshUuid(null)}
+                  className="text-[10px] font-mono px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border border-neutral-700 hover:text-white transition-colors cursor-pointer"
+                  title="Switch back to Root Model settings"
+                >
+                  ✕ Deselect
+                </button>
+              </div>
             )}
           </div>
 
@@ -2258,14 +3318,26 @@ const ARTest = () => {
                   </h2>
                   <p className="text-[10px] text-neutral-500">Click any mesh below or directly inside the 3D scene to inspect</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={scanMeshes}
-                  className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 rounded text-[10px] font-medium text-neutral-300 flex items-center gap-1"
-                  title="Rescan model meshes"
-                >
-                  <span className="material-symbols-outlined text-xs">refresh</span> Rescan
-                </button>
+                <div className="flex items-center gap-1.5">
+                  {deletedMeshNames.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleRestoreAllMeshes}
+                      className="px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded text-[10px] font-mono flex items-center gap-1 transition-colors cursor-pointer"
+                      title="Restore all deleted objects"
+                    >
+                      <span className="material-symbols-outlined text-xs">undo</span> Restore ({deletedMeshNames.length})
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={scanMeshes}
+                    className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 rounded text-[10px] font-medium text-neutral-300 flex items-center gap-1 cursor-pointer"
+                    title="Rescan model meshes"
+                  >
+                    <span className="material-symbols-outlined text-xs">refresh</span> Rescan
+                  </button>
+                </div>
               </div>
 
               {/* Search Filter */}
@@ -2300,9 +3372,54 @@ const ARTest = () => {
                     <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
                       Entire 3D Model (Root Anchor)
                       {!selectedMeshUuid && <span className="text-[9px] bg-emerald-500/30 text-emerald-300 px-1.5 py-0.2 rounded font-mono">ACTIVE</span>}
+                      {Boolean(activeVideoUrl) && videoTargetMesh === 'all' && (
+                        <span className="text-[8px] bg-red-500/30 text-red-300 border border-red-500/50 px-1 py-0.2 rounded font-mono font-bold flex items-center gap-0.5">
+                          <span className="material-symbols-outlined text-[10px]">movie</span>
+                          VIDEO
+                        </span>
+                      )}
                     </h3>
                     <p className="text-[10px] text-neutral-400">Controls scene scale, global orientation & placement</p>
                   </div>
+                </div>
+
+                <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                  {Boolean(activeVideoUrl) && videoTargetMesh === 'all' && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveVideoLayer}
+                      className="w-7 h-7 rounded flex items-center justify-center text-red-400 hover:text-red-200 hover:bg-red-950/60 border border-red-500/30 transition-colors cursor-pointer"
+                      title="Remove video texture layer from entire 3D model"
+                    >
+                      <span className="material-symbols-outlined text-sm">videocam_off</span>
+                    </button>
+                  )}
+                  {Boolean(activeVideoUrl) && videoTargetMesh !== 'all' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVideoTargetMesh('all');
+                        snapVideoToLayer('all');
+                      }}
+                      className="w-7 h-7 rounded flex items-center justify-center text-neutral-400 hover:text-indigo-300 hover:bg-indigo-950/60 border border-neutral-700 transition-colors cursor-pointer"
+                      title="Attach active video to Entire 3D Model (all meshes)"
+                    >
+                      <span className="material-symbols-outlined text-sm">movie</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedMeshUuid(null);
+                      setCameraView('front');
+                    }}
+                    className="w-7 h-7 rounded flex items-center justify-center text-cyan-400 hover:text-cyan-200 hover:bg-cyan-950/60 border border-cyan-500/30 transition-colors cursor-pointer"
+                    title="Reposition camera in frontal view of entire 3D model"
+                  >
+                    <span className="material-symbols-outlined text-sm">
+                      filter_center_focus
+                    </span>
+                  </button>
                 </div>
               </div>
 
@@ -2310,6 +3427,16 @@ const ARTest = () => {
               <div className="space-y-1.5 max-h-[50vh] overflow-y-auto pr-1">
                 {filteredMeshes.map((mesh, i) => {
                   const isSelected = selectedMeshUuid === mesh.uuid;
+                  const isVideoTarget = Boolean(activeVideoUrl) && (
+                    videoTargetMesh === mesh.name ||
+                    videoTargetMesh === mesh.uuid ||
+                    (videoTargetMesh === 'auto' && (
+                      (mesh.name || '').toLowerCase().includes('screen') ||
+                      (mesh.name || '').toLowerCase().includes('display') ||
+                      (mesh.name || '').toLowerCase().includes('graphic') ||
+                      (mesh.name || '').toLowerCase().includes('cloth')
+                    ))
+                  );
                   return (
                     <div
                       key={mesh.uuid}
@@ -2325,16 +3452,36 @@ const ARTest = () => {
                           {i + 1}
                         </div>
                         <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="text-xs font-bold text-neutral-200 truncate">{mesh.name}</span>
                             {isSelected && (
                               <span className="text-[8px] bg-indigo-500/30 text-indigo-300 px-1 py-0.2 rounded font-mono font-bold">
                                 SELECTED
                               </span>
                             )}
+                            {isVideoTarget && (
+                              <span className="text-[8px] bg-red-500/30 text-red-300 border border-red-500/50 px-1 py-0.2 rounded font-mono font-bold flex items-center gap-0.5">
+                                <span className="material-symbols-outlined text-[10px]">movie</span>
+                                VIDEO
+                              </span>
+                            )}
+                            {mesh.material?.hasCustomTexture && (
+                              <span className="text-[8px] bg-purple-500/30 text-purple-300 border border-purple-500/50 px-1 py-0.2 rounded font-mono font-bold flex items-center gap-0.5" title={mesh.material.textureFileName || 'Custom Texture / UV Map'}>
+                                <span className="material-symbols-outlined text-[10px]">texture</span>
+                                TEX
+                              </span>
+                            )}
                           </div>
                           <div className="flex items-center gap-2 text-[10px] text-neutral-500 font-mono truncate">
                             <span>Mat: {mesh.materialName || 'Default'}</span>
+                            {mesh.material?.hasCustomTexture && (
+                              <>
+                                <span>•</span>
+                                <span className="text-purple-400 truncate max-w-[90px]" title={mesh.material.textureFileName || 'Custom UV Texture'}>
+                                  {mesh.material.textureFileName || 'Custom UV'}
+                                </span>
+                              </>
+                            )}
                             <span>•</span>
                             <span className="text-rose-400">R:({mesh.rotation.x}°,{mesh.rotation.y}°)</span>
                           </div>
@@ -2342,10 +3489,88 @@ const ARTest = () => {
                       </div>
 
                       <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        {/* Upload UV Map / Texture Image */}
+                        <label
+                          className={`w-6 h-6 rounded flex items-center justify-center transition-colors cursor-pointer ${mesh.material?.hasCustomTexture
+                            ? 'text-purple-300 hover:text-purple-100 hover:bg-purple-950/70 bg-purple-950/40 border border-purple-500/40'
+                            : 'text-neutral-400 hover:text-purple-300 hover:bg-purple-950/60'
+                            }`}
+                          title={
+                            mesh.material?.hasCustomTexture
+                              ? `Replace UV Map / texture on ${mesh.name}`
+                              : `Upload image for ${mesh.name}'s UV map / texture`
+                          }
+                        >
+                          {textureUploadingUuid === mesh.uuid ? (
+                            <span className="material-symbols-outlined text-sm text-purple-400 animate-spin">progress_activity</span>
+                          ) : (
+                            <span className="material-symbols-outlined text-sm">texture</span>
+                          )}
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp,image/jpg"
+                            onChange={(e) => {
+                              if (e.target.files && e.target.files[0]) {
+                                handleApplyMeshTexture(mesh, e.target.files[0]);
+                                e.target.value = '';
+                              }
+                            }}
+                            className="hidden"
+                          />
+                        </label>
+
+                        {/* Remove Custom Material & Delete from Cloud Storage */}
+                        {mesh.material?.hasCustomTexture && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveMeshTexture(mesh.uuid, mesh.name)}
+                            className="w-6 h-6 rounded flex items-center justify-center text-rose-400 hover:text-rose-200 hover:bg-rose-950/60 border border-rose-500/30 transition-colors cursor-pointer"
+                            title={`Delete custom texture from ${mesh.name}, remove from Cloud Storage, and restore original material`}
+                          >
+                            <span className="material-symbols-outlined text-sm">close</span>
+                          </button>
+                        )}
+
+                        {Boolean(activeVideoUrl) && !isVideoTarget && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const target = mesh.name || mesh.uuid;
+                              setVideoTargetMesh(target);
+                              snapVideoToLayer(target);
+                            }}
+                            className="w-6 h-6 rounded flex items-center justify-center text-neutral-400 hover:text-indigo-300 hover:bg-indigo-950/60 transition-colors cursor-pointer"
+                            title={`Attach active video to ${mesh.name}`}
+                          >
+                            <span className="material-symbols-outlined text-sm">movie</span>
+                          </button>
+                        )}
+                        {isVideoTarget && (
+                          <button
+                            type="button"
+                            onClick={handleRemoveVideoLayer}
+                            className="w-6 h-6 rounded flex items-center justify-center text-red-400 hover:text-red-200 hover:bg-red-950/60 transition-colors cursor-pointer"
+                            title={`Remove video texture layer from ${mesh.name}`}
+                          >
+                            <span className="material-symbols-outlined text-sm">videocam_off</span>
+                          </button>
+                        )}
+                        {/* Camera Frontal View Button */}
+                        <button
+                          type="button"
+                          onClick={() => focusCameraOnMesh(mesh.uuid, mesh.name)}
+                          className="w-6 h-6 rounded flex items-center justify-center text-cyan-400 hover:text-cyan-200 hover:bg-cyan-950/60 transition-colors cursor-pointer"
+                          title={`Reposition camera in front of ${mesh.name} (Frontal View)`}
+                        >
+                          <span className="material-symbols-outlined text-sm">
+                            filter_center_focus
+                          </span>
+                        </button>
+
                         <button
                           type="button"
                           onClick={() => handleMeshVisibilityToggle(mesh.uuid)}
-                          className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${mesh.visible
+                          className={`w-6 h-6 rounded flex items-center justify-center transition-colors cursor-pointer ${mesh.visible
                             ? 'text-neutral-400 hover:text-white hover:bg-neutral-800'
                             : 'text-neutral-600 bg-neutral-900'
                             }`}
@@ -2362,11 +3587,43 @@ const ARTest = () => {
                             setSelectedMeshUuid(mesh.uuid);
                             setActiveTab('transform');
                           }}
-                          className="px-2 py-1 bg-neutral-800 hover:bg-indigo-600 rounded text-[10px] font-mono text-neutral-300 hover:text-white transition-colors"
+                          className="px-2 py-1 bg-neutral-800 hover:bg-indigo-600 rounded text-[10px] font-mono text-neutral-300 hover:text-white transition-colors cursor-pointer"
                           title="Open Dials & Settings for this mesh"
                         >
                           Edit
                         </button>
+
+                        {/* Inline Delete Confirmation or Button */}
+                        {confirmDeleteUuid === mesh.uuid ? (
+                          <div className="flex items-center gap-1 bg-rose-950/90 border border-rose-500/60 rounded px-1.5 py-0.5 shadow-sm">
+                            <span className="text-[9px] font-mono text-rose-300 font-bold uppercase tracking-tight">Del?</span>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteMesh(mesh.uuid, mesh.name)}
+                              className="px-1.5 py-0.5 bg-rose-600 hover:bg-rose-500 text-white rounded text-[9px] font-bold font-mono transition-colors cursor-pointer"
+                              title="Confirm delete"
+                            >
+                              Yes
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteUuid(null)}
+                              className="px-1 py-0.5 text-neutral-400 hover:text-white text-[9px] font-mono transition-colors cursor-pointer"
+                              title="Cancel"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteUuid(mesh.uuid)}
+                            className="w-6 h-6 rounded flex items-center justify-center text-neutral-500 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
+                            title={`Delete ${mesh.name} from scene`}
+                          >
+                            <span className="material-symbols-outlined text-sm">delete</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -2378,6 +3635,48 @@ const ARTest = () => {
                   </div>
                 )}
               </div>
+
+              {/* Deleted Objects Section with Individual Restore Options */}
+              {deletedMeshNames.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-neutral-800/80 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-rose-400/90 flex items-center gap-1 font-bold">
+                      <span className="material-symbols-outlined text-xs">delete</span>
+                      Deleted Objects ({deletedMeshNames.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleRestoreAllMeshes}
+                      className="text-[10px] font-mono text-amber-400 hover:text-amber-300 hover:underline cursor-pointer"
+                    >
+                      Restore All
+                    </button>
+                  </div>
+                  <div className="space-y-1 max-h-36 overflow-y-auto pr-1">
+                    {deletedMeshNames.map((name) => (
+                      <div
+                        key={name}
+                        className="flex items-center justify-between p-2 rounded bg-neutral-900/50 border border-neutral-800/60 text-xs"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 flex-shrink-0"></span>
+                          <span className="font-mono text-[11px] truncate line-through text-neutral-500">
+                            {name}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRestoreMesh(name)}
+                          className="px-2 py-0.5 bg-neutral-800 hover:bg-neutral-700 text-amber-300 border border-neutral-700/60 rounded text-[10px] font-mono flex items-center gap-1 transition-colors cursor-pointer flex-shrink-0"
+                          title={`Restore ${name} to scene`}
+                        >
+                          <span className="material-symbols-outlined text-xs">undo</span> Restore
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -2504,6 +3803,45 @@ const ARTest = () => {
           {/* ========================================================================= */}
           {activeTab === 'materials' && (
             <div className="space-y-4">
+              {Boolean(activeVideoUrl) && (
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-red-950/30 border border-red-500/40 text-xs shadow-sm">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="material-symbols-outlined text-red-400 text-sm shrink-0">movie</span>
+                    <span className="text-[11px] text-neutral-300 truncate">
+                      Video texture layer is actively mapped to model surface.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRemoveVideoLayer}
+                    className="shrink-0 flex items-center gap-1 px-2 py-0.5 bg-red-600 hover:bg-red-500 text-white rounded text-[10px] font-bold transition-colors cursor-pointer"
+                    title="Remove video texture layer and restore standard PBR textures"
+                  >
+                    <span className="material-symbols-outlined text-xs">videocam_off</span>
+                    Remove Layer
+                  </button>
+                </div>
+              )}
+              {/* Target Object / Mesh Selector */}
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-neutral-900 border border-neutral-800">
+                <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-indigo-400">category</span>
+                  Target Object:
+                </span>
+                <select
+                  value={selectedMeshUuid || ''}
+                  onChange={(e) => setSelectedMeshUuid(e.target.value || null)}
+                  className="bg-neutral-800 text-xs text-white border border-neutral-700 rounded px-2 py-1 focus:outline-none focus:border-indigo-500 max-w-[210px] truncate cursor-pointer"
+                >
+                  <option value="">Global / Entire Model</option>
+                  {meshList.map((m) => (
+                    <option key={m.uuid} value={m.uuid}>
+                      {m.name} ({m.materialName || 'Material'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {selectedMesh ? (
                 <div className="p-3 bg-indigo-950/40 border border-indigo-500/40 rounded-lg space-y-3">
                   <div className="flex items-center justify-between">
@@ -2560,6 +3898,228 @@ const ARTest = () => {
                     color="indigo"
                     precision={2}
                   />
+
+                  {/* UV Map / Image Texture Material */}
+                  <div className="p-2.5 rounded bg-neutral-900 border border-neutral-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-sm text-purple-400">texture</span>
+                        UV Map / Texture Image
+                      </span>
+                      {selectedMesh.material?.hasCustomTexture && (
+                        <span className="text-[9px] bg-purple-500/30 text-purple-300 border border-purple-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
+                          CUSTOM
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-purple-950/50 hover:bg-purple-900/60 border border-purple-500/40 rounded text-xs text-purple-200 font-medium cursor-pointer transition-colors">
+                        {textureUploadingUuid === selectedMesh.uuid ? (
+                          <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                        ) : (
+                          <span className="material-symbols-outlined text-sm">upload_file</span>
+                        )}
+                        <span>{selectedMesh.material?.hasCustomTexture ? 'Replace UV Texture' : 'Upload UV Texture'}</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/jpg"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleApplyMeshTexture(selectedMesh, e.target.files[0]);
+                              e.target.value = '';
+                            }
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+                      {selectedMesh.material?.hasCustomTexture && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveMeshTexture(selectedMesh.uuid, selectedMesh.name)}
+                          className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                          title="Delete custom texture, remove from Cloud Storage, and restore original material"
+                        >
+                          <span className="material-symbols-outlined text-sm">close</span>
+                          <span>Revert</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Material Placement, Orientation & Size Controls */}
+                  <div className="p-3 rounded-lg bg-neutral-900/90 border border-indigo-500/40 space-y-3">
+                    <div className="flex items-center justify-between pb-1.5 border-b border-neutral-800">
+                      <span className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-sm text-indigo-400">transform</span>
+                        Material Placement, Orientation & Size
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleResetMeshTextureTransform}
+                        className="text-[10px] text-neutral-400 hover:text-white px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors flex items-center gap-1 cursor-pointer"
+                        title="Reset material placement, rotation, and size to default"
+                      >
+                        <span className="material-symbols-outlined text-xs">restart_alt</span>
+                        Reset Mapping
+                      </button>
+                    </div>
+
+                    {/* Section 1: Placement (UV Offset U & V) */}
+                    <div className="space-y-2">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-purple-400 flex items-center gap-1">
+                        <span className="material-symbols-outlined text-xs">open_with</span>
+                        Placement (UV Offset)
+                      </span>
+                      <NumberSliderInput
+                        label="Horizontal Placement (U)"
+                        value={selectedMesh.material?.textureOffsetX ?? 0.0}
+                        onChange={(val) => handleMeshMaterialChange('textureOffsetX', val)}
+                        min={-2.0}
+                        max={2.0}
+                        step={0.01}
+                        precision={2}
+                        resetValue={0.0}
+                        color="purple"
+                        description="Shift material left or right across the surface"
+                      />
+                      <NumberSliderInput
+                        label="Vertical Placement (V)"
+                        value={selectedMesh.material?.textureOffsetY ?? 0.0}
+                        onChange={(val) => handleMeshMaterialChange('textureOffsetY', val)}
+                        min={-2.0}
+                        max={2.0}
+                        step={0.01}
+                        precision={2}
+                        resetValue={0.0}
+                        color="purple"
+                        description="Shift material up or down across the surface"
+                      />
+                    </div>
+
+                    {/* Section 2: Orientation (Rotation & Mirror Flip) */}
+                    <div className="space-y-2 pt-1 border-t border-neutral-800/80">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase font-bold tracking-wider text-sky-400 flex items-center gap-1">
+                          <span className="material-symbols-outlined text-xs">rotate_right</span>
+                          Orientation & Angle
+                        </span>
+                        {/* Quick 90 deg rotation presets */}
+                        <div className="flex items-center gap-1">
+                          {[0, 90, 180, 270].map((deg) => (
+                            <button
+                              key={deg}
+                              type="button"
+                              onClick={() => handleMeshMaterialChange('textureRotation', deg)}
+                              className={`px-1.5 py-0.5 text-[9px] font-mono rounded border transition-colors cursor-pointer ${
+                                (selectedMesh.material?.textureRotation ?? 0) === deg
+                                  ? 'bg-sky-500/30 text-sky-300 border-sky-500/50'
+                                  : 'bg-neutral-800 text-neutral-400 border-neutral-700 hover:text-white'
+                              }`}
+                            >
+                              {deg}°
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <NumberSliderInput
+                        label="Rotation Angle"
+                        value={selectedMesh.material?.textureRotation ?? 0}
+                        onChange={(val) => handleMeshMaterialChange('textureRotation', val)}
+                        min={0}
+                        max={360}
+                        step={1}
+                        unit="°"
+                        precision={0}
+                        resetValue={0}
+                        color="sky"
+                      />
+
+                      {/* Mirror / Flip Toggles */}
+                      <div className="grid grid-cols-2 gap-2 pt-1">
+                        <label className="flex items-center justify-between p-2 rounded bg-neutral-900 border border-neutral-800 cursor-pointer hover:border-neutral-700 transition-colors">
+                          <span className="text-xs text-neutral-300 flex items-center gap-1.5">
+                            <span className="material-symbols-outlined text-sm text-sky-400">flip</span>
+                            Flip Horizontal
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(selectedMesh.material?.textureFlipX)}
+                            onChange={(e) => handleMeshMaterialChange('textureFlipX', e.target.checked)}
+                            className="w-4 h-4 accent-sky-500 cursor-pointer"
+                          />
+                        </label>
+                        <label className="flex items-center justify-between p-2 rounded bg-neutral-900 border border-neutral-800 cursor-pointer hover:border-neutral-700 transition-colors">
+                          <span className="text-xs text-neutral-300 flex items-center gap-1.5">
+                            <span className="material-symbols-outlined text-sm text-sky-400 rotate-90">flip</span>
+                            Flip Vertical
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(selectedMesh.material?.textureFlipY)}
+                            onChange={(e) => handleMeshMaterialChange('textureFlipY', e.target.checked)}
+                            className="w-4 h-4 accent-sky-500 cursor-pointer"
+                          />
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Section 3: Size (Scale / Tiling Repeat) */}
+                    <div className="space-y-2 pt-1 border-t border-neutral-800/80">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase font-bold tracking-wider text-emerald-400 flex items-center gap-1">
+                          <span className="material-symbols-outlined text-xs">zoom_out_map</span>
+                          Size & Scale (Repeat)
+                        </span>
+                        {/* Quick Scale Presets */}
+                        <div className="flex items-center gap-1">
+                          {[0.5, 1.0, 2.0, 4.0].map((sc) => (
+                            <button
+                              key={sc}
+                              type="button"
+                              onClick={() => {
+                                handleMeshMaterialChange({
+                                  textureRepeatX: sc,
+                                  textureRepeatY: sc
+                                });
+                              }}
+                              className={`px-1.5 py-0.5 text-[9px] font-mono rounded border transition-colors cursor-pointer ${
+                                (selectedMesh.material?.textureRepeatX ?? 1.0) === sc && (selectedMesh.material?.textureRepeatY ?? 1.0) === sc
+                                  ? 'bg-emerald-500/30 text-emerald-300 border-emerald-500/50'
+                                  : 'bg-neutral-800 text-neutral-400 border-neutral-700 hover:text-white'
+                              }`}
+                            >
+                              {sc}x
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <NumberSliderInput
+                        label="Horizontal Size (Repeat U)"
+                        value={selectedMesh.material?.textureRepeatX ?? 1.0}
+                        onChange={(val) => handleMeshMaterialChange('textureRepeatX', val)}
+                        min={0.1}
+                        max={10.0}
+                        step={0.05}
+                        precision={2}
+                        resetValue={1.0}
+                        color="emerald"
+                        description="Scale or tile material horizontally"
+                      />
+                      <NumberSliderInput
+                        label="Vertical Size (Repeat V)"
+                        value={selectedMesh.material?.textureRepeatY ?? 1.0}
+                        onChange={(val) => handleMeshMaterialChange('textureRepeatY', val)}
+                        min={0.1}
+                        max={10.0}
+                        step={0.05}
+                        precision={2}
+                        resetValue={1.0}
+                        color="emerald"
+                        description="Scale or tile material vertically"
+                      />
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -2690,8 +4250,54 @@ const ARTest = () => {
                     <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${activeVideoUrl ? (isYouTubeUrl(activeVideoUrl) ? 'bg-red-500/20 text-red-300 border border-red-500/40' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40') : 'bg-neutral-800 text-neutral-400'}`}>
                       {activeVideoUrl ? (isYouTubeUrl(activeVideoUrl) ? 'CSS3D YOUTUBE' : (activeVideoUrl.startsWith('blob:') ? 'LOCAL PREVIEW' : 'SAVED TO CLOUD')) : 'NONE'}
                     </span>
+                    {Boolean(activeVideoUrl || customVideoUrl || selectedVideoFile || youtubeUrlInput) && (
+                      <button
+                        type="button"
+                        onClick={handleRemoveVideoLayer}
+                        className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-950/60 hover:bg-red-800/80 border border-red-500/50 text-red-200 text-[10px] font-semibold transition-all hover:scale-105 cursor-pointer shadow-sm shadow-red-900/40"
+                        title="Completely remove video texture layer from 3D model and clear video URL"
+                      >
+                        <span className="material-symbols-outlined text-xs">videocam_off</span>
+                        Remove Layer
+                      </button>
+                    )}
                   </div>
                 </div>
+
+                {/* Active Video Status Banner with Remove Action */}
+                {Boolean(activeVideoUrl || selectedVideoFile || youtubeUrlInput) && (
+                  <div className="flex items-center justify-between p-2.5 rounded-lg bg-red-950/25 border border-red-500/40 text-xs shadow-inner">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-red-500/20 text-red-400 flex items-center justify-center shrink-0 border border-red-500/30">
+                        <span className="material-symbols-outlined text-lg">
+                          {isYouTubeUrl(activeVideoUrl) ? 'smart_display' : 'videocam'}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] font-bold text-white truncate">
+                            {isYouTubeUrl(activeVideoUrl) ? 'YouTube Overlay Attached' : (localVideoName ? `Video: ${localVideoName}` : 'Video Texture Attached')}
+                          </span>
+                          <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-red-500/30 text-red-200 border border-red-500/40 font-bold uppercase tracking-wider">
+                            ACTIVE
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-neutral-400 font-mono truncate max-w-[200px]">
+                          {activeVideoUrl || youtubeUrlInput}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRemoveVideoLayer}
+                      className="shrink-0 flex items-center gap-1 px-2.5 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded text-[11px] font-bold transition-all shadow-sm cursor-pointer hover:shadow-red-500/30"
+                      title="Remove video texture layer and restore default mesh materials"
+                    >
+                      <span className="material-symbols-outlined text-xs">videocam_off</span>
+                      Remove Layer
+                    </button>
+                  </div>
+                )}
 
                 {/* Mode Selector: WebGL Video vs CSS3D YouTube */}
                 <div className="grid grid-cols-2 gap-1.5 p-1 bg-black/60 border border-neutral-800 rounded">
@@ -2704,11 +4310,10 @@ const ARTest = () => {
                         setCustomVideoUrl('');
                       }
                     }}
-                    className={`py-1.5 px-2 rounded text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors ${
-                      videoMode === 'webgl'
-                        ? 'bg-indigo-600 text-white shadow'
-                        : 'text-neutral-400 hover:text-neutral-200'
-                    }`}
+                    className={`py-1.5 px-2 rounded text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors ${videoMode === 'webgl'
+                      ? 'bg-indigo-600 text-white shadow'
+                      : 'text-neutral-400 hover:text-neutral-200'
+                      }`}
                   >
                     <span className="material-symbols-outlined text-sm">video_file</span>
                     WebGL Video (.mp4)
@@ -2716,11 +4321,10 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => setVideoMode('youtube')}
-                    className={`py-1.5 px-2 rounded text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors ${
-                      videoMode === 'youtube'
-                        ? 'bg-red-600 text-white shadow'
-                        : 'text-neutral-400 hover:text-neutral-200'
-                    }`}
+                    className={`py-1.5 px-2 rounded text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors ${videoMode === 'youtube'
+                      ? 'bg-red-600 text-white shadow'
+                      : 'text-neutral-400 hover:text-neutral-200'
+                      }`}
                   >
                     <span className="material-symbols-outlined text-sm">smart_display</span>
                     CSS3D YouTube
@@ -2748,13 +4352,9 @@ const ARTest = () => {
                         {activeVideoUrl && !isYouTubeUrl(activeVideoUrl) && (
                           <button
                             type="button"
-                            onClick={() => {
-                              setActiveVideoUrl('');
-                              setCustomVideoUrl('');
-                              setLocalVideoName('');
-                            }}
-                            className="px-2 bg-neutral-800 hover:bg-red-900/50 text-neutral-300 hover:text-red-300 rounded text-xs transition-colors"
-                            title="Clear Video"
+                            onClick={handleRemoveVideoLayer}
+                            className="px-2 bg-neutral-800 hover:bg-red-900/50 text-neutral-300 hover:text-red-300 rounded text-xs transition-colors cursor-pointer"
+                            title="Remove Video Layer"
                           >
                             ✕
                           </button>
@@ -2770,7 +4370,7 @@ const ARTest = () => {
 
                     <div className="flex flex-col gap-1">
                       <div className="flex items-center justify-between">
-                        <label className="text-[11px] text-neutral-300 font-medium">YouTube URL or Video ID:</label>
+                        <label className="text-[11px] text-neutral-300 font-medium">YouTube URL, Short, or Video ID:</label>
                         {isYouTubeUrl(activeVideoUrl) && (
                           <span className="text-[10px] font-mono text-red-400 font-bold">
                             ID: {extractYouTubeId(activeVideoUrl)}
@@ -2780,7 +4380,7 @@ const ARTest = () => {
                       <div className="flex gap-1">
                         <input
                           type="text"
-                          placeholder="e.g. https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+                          placeholder="e.g. https://www.youtube.com/shorts/... or https://www.youtube.com/watch?v=..."
                           value={youtubeUrlInput || (isYouTubeUrl(activeVideoUrl) ? activeVideoUrl : '')}
                           onChange={(e) => {
                             setYoutubeUrlInput(e.target.value);
@@ -2791,17 +4391,37 @@ const ARTest = () => {
                         {isYouTubeUrl(activeVideoUrl) && (
                           <button
                             type="button"
-                            onClick={() => {
-                              setActiveVideoUrl('');
-                              setCustomVideoUrl('');
-                              setYoutubeUrlInput('');
-                            }}
-                            className="px-2 bg-neutral-800 hover:bg-red-900/50 text-neutral-300 hover:text-red-300 rounded text-xs transition-colors"
-                            title="Clear YouTube Video"
+                            onClick={handleRemoveVideoLayer}
+                            className="px-2 bg-neutral-800 hover:bg-red-900/50 text-neutral-300 hover:text-red-300 rounded text-xs transition-colors cursor-pointer"
+                            title="Remove YouTube Video Layer"
                           >
                             ✕
                           </button>
                         )}
+                      </div>
+                    </div>
+
+                    {/* Aspect Ratio Selector */}
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[11px] text-neutral-300 font-medium">Display Format / Aspect Ratio:</label>
+                      <div className="grid grid-cols-3 gap-1">
+                        {[
+                          { label: '16:9 Landscape', val: '16:9' },
+                          { label: '9:16 Shorts', val: '9:16' },
+                          { label: '21:9 Cinema', val: '21:9' }
+                        ].map((opt) => (
+                          <button
+                            key={opt.val}
+                            type="button"
+                            onClick={() => setVideoAspectRatio(opt.val)}
+                            className={`px-2 py-1 text-[10px] font-semibold rounded border transition-colors cursor-pointer ${videoAspectRatio === opt.val
+                              ? 'bg-red-600 text-white border-red-500 shadow-sm'
+                              : 'bg-neutral-900 text-neutral-300 border-neutral-700 hover:bg-neutral-800'
+                              }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
                       </div>
                     </div>
 
@@ -2810,20 +4430,23 @@ const ARTest = () => {
                       <span className="text-[10px] uppercase font-bold text-neutral-400 tracking-wider">Quick Presets:</span>
                       <div className="grid grid-cols-2 gap-1">
                         {[
-                          { label: '🌌 Lofi Beats', id: 'jfKfPfyJRdk' },
-                          { label: '⚡ Synthwave', id: '4xDzrJKXOOY' },
-                          { label: '🕹️ Cyberpunk', id: '5qap5aO4i9A' },
-                          { label: '🎸 80s Classic', id: 'dQw4w9WgXcQ' }
+                          { label: '📱 Streetwear Short', url: 'https://www.youtube.com/shorts/5wWp4oTzUHQ', aspect: '9:16' },
+                          { label: '📱 3D Fashion Short', url: 'https://www.youtube.com/shorts/5W_w_aDvhxk', aspect: '9:16' },
+                          { label: '🌌 Lofi Beats', id: 'jfKfPfyJRdk', aspect: '16:9' },
+                          { label: '⚡ Synthwave', id: '4xDzrJKXOOY', aspect: '16:9' },
+                          { label: '🕹️ Cyberpunk', id: '5qap5aO4i9A', aspect: '16:9' },
+                          { label: '🎸 80s Classic', id: 'dQw4w9WgXcQ', aspect: '16:9' }
                         ].map((preset) => (
                           <button
-                            key={preset.id}
+                            key={preset.label}
                             type="button"
                             onClick={() => {
-                              const url = `https://www.youtube.com/watch?v=${preset.id}`;
+                              const url = preset.url || `https://www.youtube.com/watch?v=${preset.id}`;
                               setYoutubeUrlInput(url);
+                              if (preset.aspect) setVideoAspectRatio(preset.aspect);
                               applyCustomVideoUrl(url);
                             }}
-                            className="px-2 py-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-600 rounded text-[10px] text-neutral-300 text-left truncate transition-colors"
+                            className="px-2 py-1 bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-600 rounded text-[10px] text-neutral-300 text-left truncate transition-colors cursor-pointer"
                           >
                             {preset.label}
                           </button>
@@ -2836,18 +4459,18 @@ const ARTest = () => {
                 {/* Preview Monitor */}
                 {activeVideoUrl && (
                   isYouTubeUrl(activeVideoUrl) ? (
-                    <div className="relative rounded overflow-hidden bg-black border border-red-500/50 mt-1 shadow-inner">
+                    <div className={`relative rounded overflow-hidden bg-black border border-red-500/50 mt-1 shadow-inner ${videoAspectRatio === '9:16' ? 'max-w-[170px] mx-auto aspect-[9/16] h-60' : 'w-full h-40'}`}>
                       <iframe
-                        key={activeVideoUrl}
+                        key={`${activeVideoUrl}-${videoAspectRatio}`}
                         src={`https://www.youtube-nocookie.com/embed/${extractYouTubeId(activeVideoUrl)}?enablejsapi=1&autoplay=0&controls=1`}
-                        className="w-full h-40 border-0 bg-black"
+                        className="w-full h-full border-0 bg-black"
                         title="YouTube CSS3D Preview"
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                         allowFullScreen
                       />
                       <div className="absolute top-1 left-1 bg-black/80 backdrop-blur px-1.5 py-0.5 rounded text-[9px] text-red-400 font-mono font-bold flex items-center gap-1 pointer-events-none">
                         <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse"></span>
-                        CSS3D YOUTUBE OVERLAY
+                        {videoAspectRatio === '9:16' ? 'YOUTUBE SHORT (9:16)' : 'CSS3D YOUTUBE OVERLAY'}
                       </div>
                     </div>
                   ) : (
@@ -2893,6 +4516,15 @@ const ARTest = () => {
                       </option>
                     ))}
                   </select>
+                  <button
+                    type="button"
+                    onClick={() => snapVideoToLayer(videoTargetMesh)}
+                    className="w-full mt-1.5 py-1.5 px-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-sm shadow-indigo-500/20"
+                    title="Snap video layer to exact 3D position and orientation of the selected geometry/face"
+                  >
+                    <span className="material-symbols-outlined text-xs">filter_center_focus</span>
+                    Snap Video to Geometry / Face
+                  </button>
                 </div>
 
                 {/* Mirror Video Toggle */}
@@ -2911,6 +4543,189 @@ const ARTest = () => {
                     }}
                     className="w-5 h-5 accent-indigo-500 cursor-pointer"
                   />
+                </div>
+
+                {/* Video Mapping, Placement & Size Controls */}
+                <div className="pt-2 border-t border-neutral-800 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] uppercase font-bold text-indigo-400 tracking-wider flex items-center gap-1">
+                      <span className="material-symbols-outlined text-xs">tune</span>
+                      Mapping & Geometry Placement
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setVideoScale(1.0);
+                        setVideoOffsetX(0.0);
+                        setVideoOffsetY(0.0);
+                        setVideoOffsetZ(0.0);
+                        setVideoRotation(0);
+                        setVideoTextureRepeatX(1.0);
+                        setVideoTextureRepeatY(1.0);
+                        setVideoTextureOffsetX(0.0);
+                        setVideoTextureOffsetY(0.0);
+                      }}
+                      className="text-[10px] text-neutral-400 hover:text-white px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 transition-colors"
+                      title="Reset video layer to default fill"
+                    >
+                      Reset Fill
+                    </button>
+                  </div>
+
+                  {/* Video Scale Multiplier */}
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-[10px] text-neutral-400">Scale / Size Multiplier</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          max="10.0"
+                          value={videoScale}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            if (!isNaN(val)) setVideoScale(val);
+                          }}
+                          className="w-16 bg-neutral-900 border border-neutral-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                        />
+                        <span className="text-[10px] font-mono text-neutral-400">x</span>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.1"
+                      max="3.0"
+                      step="0.01"
+                      value={videoScale}
+                      onChange={(e) => setVideoScale(parseFloat(e.target.value))}
+                      className="w-full accent-indigo-500"
+                    />
+                  </div>
+
+                  {/* Position Offset X & Y */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-[10px] text-neutral-400">Offset X</span>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            step="0.005"
+                            min="-10.0"
+                            max="10.0"
+                            value={videoOffsetX}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value);
+                              if (!isNaN(val)) setVideoOffsetX(val);
+                            }}
+                            className="w-16 bg-neutral-900 border border-neutral-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                          />
+                          <span className="text-[10px] font-mono text-neutral-400">m</span>
+                        </div>
+                      </div>
+                      <input
+                        type="range"
+                        min="-1.0"
+                        max="1.0"
+                        step="0.005"
+                        value={videoOffsetX}
+                        onChange={(e) => setVideoOffsetX(parseFloat(e.target.value))}
+                        className="w-full accent-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-[10px] text-neutral-400">Offset Y</span>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            step="0.005"
+                            min="-10.0"
+                            max="10.0"
+                            value={videoOffsetY}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value);
+                              if (!isNaN(val)) setVideoOffsetY(val);
+                            }}
+                            className="w-16 bg-neutral-900 border border-neutral-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                          />
+                          <span className="text-[10px] font-mono text-neutral-400">m</span>
+                        </div>
+                      </div>
+                      <input
+                        type="range"
+                        min="-1.0"
+                        max="1.0"
+                        step="0.005"
+                        value={videoOffsetY}
+                        onChange={(e) => setVideoOffsetY(parseFloat(e.target.value))}
+                        className="w-full accent-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Surface Clearance Z & Rotation */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-[10px] text-neutral-400">Clearance (Z)</span>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            step="0.001"
+                            min="-5.0"
+                            max="5.0"
+                            value={videoOffsetZ}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value);
+                              if (!isNaN(val)) setVideoOffsetZ(val);
+                            }}
+                            className="w-16 bg-neutral-900 border border-neutral-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                          />
+                          <span className="text-[10px] font-mono text-neutral-400">m</span>
+                        </div>
+                      </div>
+                      <input
+                        type="range"
+                        min="-0.1"
+                        max="0.2"
+                        step="0.001"
+                        value={videoOffsetZ}
+                        onChange={(e) => setVideoOffsetZ(parseFloat(e.target.value))}
+                        className="w-full accent-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-[10px] text-neutral-400">Rotation</span>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            step="0.5"
+                            min="-360"
+                            max="360"
+                            value={videoRotation}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value);
+                              if (!isNaN(val)) setVideoRotation(val);
+                            }}
+                            className="w-16 bg-neutral-900 border border-neutral-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                          />
+                          <span className="text-[10px] font-mono text-neutral-400">°</span>
+                        </div>
+                      </div>
+                      <input
+                        type="range"
+                        min="-180"
+                        max="180"
+                        step="0.5"
+                        value={videoRotation}
+                        onChange={(e) => setVideoRotation(parseFloat(e.target.value))}
+                        className="w-full accent-indigo-500"
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between pt-1 border-t border-neutral-800 text-xs">
@@ -3108,11 +4923,10 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => setTrackingScope('batch')}
-                    className={`py-2 px-3 rounded text-xs font-semibold flex flex-col items-center gap-1 transition-all ${
-                      trackingScope === 'batch'
-                        ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-500/20 border border-cyan-400'
-                        : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
-                    }`}
+                    className={`py-2 px-3 rounded text-xs font-semibold flex flex-col items-center gap-1 transition-all ${trackingScope === 'batch'
+                      ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-500/20 border border-cyan-400'
+                      : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
+                      }`}
                   >
                     <span className="flex items-center gap-1">
                       <span className="material-symbols-outlined text-sm">bookmark</span>
@@ -3126,11 +4940,10 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => setTrackingScope('global')}
-                    className={`py-2 px-3 rounded text-xs font-semibold flex flex-col items-center gap-1 transition-all ${
-                      trackingScope === 'global'
-                        ? 'bg-gradient-to-r from-cyan-600 to-indigo-600 text-white shadow-lg shadow-indigo-500/20 border border-indigo-400'
-                        : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
-                    }`}
+                    className={`py-2 px-3 rounded text-xs font-semibold flex flex-col items-center gap-1 transition-all ${trackingScope === 'global'
+                      ? 'bg-gradient-to-r from-cyan-600 to-indigo-600 text-white shadow-lg shadow-indigo-500/20 border border-indigo-400'
+                      : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/60'
+                      }`}
                   >
                     <span className="flex items-center gap-1">
                       <span className="material-symbols-outlined text-sm">public</span>
@@ -3163,11 +4976,10 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => applyTrackingPreset('balanced')}
-                    className={`p-2.5 rounded-lg border text-left transition-all ${
-                      activeTrackingPreset === 'balanced'
-                        ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
-                        : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
-                    }`}
+                    className={`p-2.5 rounded-lg border text-left transition-all ${activeTrackingPreset === 'balanced'
+                      ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
+                      : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
+                      }`}
                   >
                     <div className="flex items-center justify-between font-bold text-xs">
                       <span>🎯 Balanced</span>
@@ -3181,11 +4993,10 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => applyTrackingPreset('smooth')}
-                    className={`p-2.5 rounded-lg border text-left transition-all ${
-                      activeTrackingPreset === 'smooth'
-                        ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
-                        : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
-                    }`}
+                    className={`p-2.5 rounded-lg border text-left transition-all ${activeTrackingPreset === 'smooth'
+                      ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
+                      : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
+                      }`}
                   >
                     <div className="flex items-center justify-between font-bold text-xs">
                       <span>🧘 Ultra Smooth</span>
@@ -3199,11 +5010,10 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => applyTrackingPreset('fast')}
-                    className={`p-2.5 rounded-lg border text-left transition-all ${
-                      activeTrackingPreset === 'fast'
-                        ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
-                        : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
-                    }`}
+                    className={`p-2.5 rounded-lg border text-left transition-all ${activeTrackingPreset === 'fast'
+                      ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
+                      : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
+                      }`}
                   >
                     <div className="flex items-center justify-between font-bold text-xs">
                       <span>⚡ High Speed</span>
@@ -3217,11 +5027,10 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => applyTrackingPreset('resilient')}
-                    className={`p-2.5 rounded-lg border text-left transition-all ${
-                      activeTrackingPreset === 'resilient'
-                        ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
-                        : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
-                    }`}
+                    className={`p-2.5 rounded-lg border text-left transition-all ${activeTrackingPreset === 'resilient'
+                      ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
+                      : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
+                      }`}
                   >
                     <div className="flex items-center justify-between font-bold text-xs">
                       <span>🛡️ Resilient</span>
@@ -3501,7 +5310,7 @@ const ARTest = () => {
                   : {})}
                 model-auto-center="enabled: true"
                 dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-                play-gltf-video={`src: ${activeVideoUrl || customVideoUrl || arData?.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${videoTargetMesh}; flipX: ${videoFlipX}`}
+                play-gltf-video={`src: ${activeVideoUrl || customVideoUrl || arData?.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${videoTargetMesh}; flipX: ${videoFlipX}; videoScale: ${videoScale}; videoOffsetX: ${videoOffsetX}; videoOffsetY: ${videoOffsetY}; videoOffsetZ: ${videoOffsetZ}; videoRotation: ${videoRotation}; videoTextureRepeatX: ${videoTextureRepeatX}; videoTextureRepeatY: ${videoTextureRepeatY}; videoTextureOffsetX: ${videoTextureOffsetX}; videoTextureOffsetY: ${videoTextureOffsetY}; aspectRatio: ${videoAspectRatio}`}
                 play-gltf-animation={`playing: ${mediaPlaying}`}
               >
               </a-gltf-model>

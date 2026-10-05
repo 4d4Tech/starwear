@@ -211,7 +211,7 @@ function ProductDetails() {
                   {loading
                     ? 'Retrieving 3D asset metadata from inventory...'
                     : asset?.description ||
-                      'Crafted for the Star weAR digital ecosystem. This asset includes full 3D interactive preview capabilities, camera tracking target anchors, and high-fidelity textures.'}
+                    'Crafted for the Star weAR digital ecosystem. This asset includes full 3D interactive preview capabilities, camera tracking target anchors, and high-fidelity textures.'}
                 </p>
 
                 {error && (
@@ -235,11 +235,10 @@ function ProductDetails() {
                           key={size}
                           type="button"
                           onClick={() => setSelectedSize(size)}
-                          className={`border py-2.5 font-label-caps text-xs transition-all cursor-pointer ${
-                            selectedSize === size
-                              ? 'bg-on-background text-on-primary border-on-background font-bold shadow'
-                              : 'border-outline-variant/50 hover:border-on-background text-on-surface-variant'
-                          }`}
+                          className={`border py-2.5 font-label-caps text-xs transition-all cursor-pointer ${selectedSize === size
+                            ? 'bg-on-background text-on-primary border-on-background font-bold shadow'
+                            : 'border-outline-variant/50 hover:border-on-background text-on-surface-variant'
+                            }`}
                         >
                           {size}
                         </button>
@@ -266,11 +265,11 @@ function ProductDetails() {
                         {addedToast ? (
                           <>
                             <span className="material-symbols-outlined text-emerald-400 text-[18px]">check_circle</span>
-                            <span>ADDED TO VAULT</span>
+                            <span>ADDED TO CART</span>
                           </>
                         ) : (
                           <>
-                            <span>ADD TO DIGITAL VAULT</span>
+                            <span>ADD TO CART</span>
                             <span className="material-symbols-outlined text-[18px]">arrow_right_alt</span>
                           </>
                         )}
@@ -283,7 +282,7 @@ function ProductDetails() {
                           title="Open WebAR Camera Try-on on Mobile"
                         >
                           <span className="material-symbols-outlined text-sm">view_in_ar</span>
-                          <span className="hidden sm:inline">TRY IN AR</span>
+                          <span className="hidden sm:inline">AR</span>
                         </a>
                       )}
                     </div>
@@ -327,11 +326,10 @@ function ProductDetails() {
                         key={item.id}
                         type="button"
                         onClick={() => navigate(`/product/${item.id}`)}
-                        className={`flex-shrink-0 text-left p-2.5 rounded-lg border transition-all cursor-pointer w-32 ${
-                          isSelected
-                            ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50 shadow-md'
-                            : 'bg-surface-variant/30 border-outline-variant/20 hover:border-primary/50 text-secondary hover:text-on-background'
-                        }`}
+                        className={`flex-shrink-0 text-left p-2.5 rounded-lg border transition-all cursor-pointer w-32 ${isSelected
+                          ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50 shadow-md'
+                          : 'bg-surface-variant/30 border-outline-variant/20 hover:border-primary/50 text-secondary hover:text-on-background'
+                          }`}
                       >
                         <div className="w-full aspect-square rounded bg-black/40 mb-2 flex items-center justify-center border border-white/5 overflow-hidden">
                           <span className="material-symbols-outlined text-2xl text-outline-variant group-hover:scale-110 transition-transform">

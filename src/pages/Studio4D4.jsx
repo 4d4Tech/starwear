@@ -15,7 +15,7 @@ import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRe
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '../firebase';
-import { isYouTubeUrl, extractYouTubeId } from '../utils/aframe-components';
+import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfaceFrame } from '../utils/aframe-components';
 import MeshTemplateBrowser from '../components/MeshTemplateBrowser';
 import ThreeDAIStudioModal from '../components/ThreeDAIStudioModal';
 import { getMeshTemplates, fetchTemplatesFromBucket } from '../utils/meshTemplates';
@@ -313,6 +313,32 @@ export class VideoDisplayManager {
     videoTexture.generateMipmaps = false;
 
     return { video, videoTexture };
+  }
+
+  applyTextureTransforms(mesh) {
+    if (!mesh) return;
+    const tex = mesh.userData?.videoTexture;
+    if (!tex) return;
+
+    const uScale = Number(mesh.userData?.videoScale ?? 1.0);
+    const uOffsetX = Number(mesh.userData?.videoOffsetX ?? 0.0);
+    const uOffsetY = Number(mesh.userData?.videoOffsetY ?? 0.0);
+    const uRot = Number(mesh.userData?.videoRotation ?? 0.0);
+
+    const repX = Number(mesh.userData?.videoTextureRepeatX ?? (1 / (uScale || 1)));
+    const repY = Number(mesh.userData?.videoTextureRepeatY ?? (1 / (uScale || 1)));
+    const offX = Number(mesh.userData?.videoTextureOffsetX ?? uOffsetX);
+    const offY = Number(mesh.userData?.videoTextureOffsetY ?? uOffsetY);
+
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(repX, repY);
+    tex.offset.set(offX, offY);
+    tex.center.set(0.5, 0.5);
+    tex.rotation = (uRot * Math.PI) / 180;
+    tex.matrixAutoUpdate = true;
+    if (tex.updateMatrix) tex.updateMatrix();
+    tex.needsUpdate = true;
   }
 
   removeVideoFromMesh(mesh) {
@@ -631,9 +657,28 @@ export class VideoDisplayManager {
 
     // Target Mode 2: New 16:9 Flat Video Screen
     if (targetMode === 'FLAT_DISPLAY') {
-      const planeW = 3.6;
-      const planeH = 2.025;
-      const depth = 0.12;
+      let planeW = 0.36;
+      let planeH = planeW * (9 / 16);
+      let depth = 0.015;
+      let spawnPos = new THREE.Vector3(0, 1.2, 0);
+
+      const candidateMeshes = this.app.getAllCandidateMeshes?.() || [];
+      const refMesh = candidateMeshes[0]?.mesh || null;
+      if (refMesh && refMesh.geometry) {
+        if (!refMesh.geometry.boundingBox) refMesh.geometry.computeBoundingBox();
+        if (refMesh.geometry.boundingBox) {
+          const bBox = refMesh.geometry.boundingBox;
+          const bSize = new THREE.Vector3();
+          const bCenter = new THREE.Vector3();
+          bBox.getSize(bSize);
+          bBox.getCenter(bCenter);
+          planeW = Math.min(0.42, Math.max(0.26, bSize.x * 0.40));
+          planeH = planeW * (9 / 16);
+          const localChest = new THREE.Vector3(bCenter.x, bCenter.y + (bSize.y * 0.14), bBox.max.z + 0.02);
+          localChest.applyMatrix4(refMesh.matrixWorld);
+          spawnPos.copy(localChest);
+        }
+      }
       const geometry = new THREE.BoxGeometry(planeW, planeH, depth);
 
       const screenMat = this.app.fabricMaterialManager.createFabricMaterial({
@@ -667,7 +712,7 @@ export class VideoDisplayManager {
       const mats = [bezelMat, bezelMat, bezelMat, bezelMat, screenMat, bezelMat];
       const mesh = new THREE.Mesh(geometry, mats);
       mesh.name = name || 'Flat_Video_Screen';
-      mesh.position.set(0, 2.0, 0);
+      mesh.position.copy(spawnPos);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
 
@@ -824,14 +869,15 @@ export class VideoDisplayManager {
     }
   }
 
-  // --- 2. CSS3D YOUTUBE OVERLAY INTEGRATION ---
   extractYouTubeId(urlOrId) {
     if (!urlOrId) return 'dQw4w9WgXcQ';
     const trimmed = urlOrId.trim();
     if (trimmed.length === 11 && !trimmed.includes('/') && !trimmed.includes('.')) return trimmed;
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+    const shortsMatch = trimmed.match(/\/shorts\/([a-zA-Z0-9_-]{11})/i);
+    if (shortsMatch && shortsMatch[1]) return shortsMatch[1];
+    const regExp = /^.*(youtu\.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=|live\/|shorts\/)([^#&?]*).*/i;
     const match = trimmed.match(regExp);
-    return (match && match[2].length === 11) ? match[2] : 'dQw4w9WgXcQ';
+    return (match && match[2].length === 11) ? match[2] : (trimmed.length === 11 ? trimmed : 'dQw4w9WgXcQ');
   }
 
   addCSS3DYouTubeOverlay({
@@ -878,26 +924,54 @@ export class VideoDisplayManager {
 
     // 2. Create CSS3DObject
     const cssObject = new CSS3DObject(containerDiv);
-    let baseScale = 0.005;
-    if (targetMode === 'SELECTED_MESH' && selectedMesh) {
-      let calcMesh = selectedMesh;
-      if (!calcMesh.isMesh) {
-        calcMesh.traverse?.((c) => { if (!calcMesh.isMesh && c.isMesh) calcMesh = c; });
-      }
-      if (calcMesh && calcMesh.geometry) {
-        if (!calcMesh.geometry.boundingBox) calcMesh.geometry.computeBoundingBox();
-        if (calcMesh.geometry.boundingBox) {
-          const bSize = new THREE.Vector3();
-          calcMesh.geometry.boundingBox.getSize(bSize);
-          const maxDim = Math.max(bSize.x, bSize.y);
-          if (maxDim > 0.05) {
-            baseScale = (maxDim * 0.85) / iframeW;
-          }
+    let baseScale = 0.0006;
+    let spawnPos = new THREE.Vector3(0, 1.2, 0);
+
+    const candidateMeshes = this.app.getAllCandidateMeshes?.() || [];
+    const refGarment = (targetMode === 'SELECTED_MESH' && selectedMesh)
+      ? selectedMesh
+      : (candidateMeshes[0]?.mesh || null);
+
+    let calcMesh = refGarment;
+    if (calcMesh && !calcMesh.isMesh) {
+      calcMesh.traverse?.((c) => { if (!calcMesh.isMesh && c.isMesh) calcMesh = c; });
+    }
+
+    if (calcMesh && calcMesh.geometry) {
+      if (!calcMesh.geometry.boundingBox) calcMesh.geometry.computeBoundingBox();
+      if (calcMesh.geometry.boundingBox) {
+        const bBox = calcMesh.geometry.boundingBox;
+        const bSize = new THREE.Vector3();
+        const bCenter = new THREE.Vector3();
+        bBox.getSize(bSize);
+        bBox.getCenter(bCenter);
+
+        if (targetMode === 'SELECTED_MESH') {
+          // Whichever 3D geometry is specified for the video layer defaults to fill that 3D geometry
+          const slot = typeof targetMaterialIndex === 'number' && targetMaterialIndex >= 0 ? targetMaterialIndex : 0;
+          const frame = computeGeometrySurfaceFrame(calcMesh, slot);
+          baseScale = Math.max(frame.size.x, 0.05) / iframeW;
+          const uOffsetX = calcMesh.userData?.videoOffsetX || 0;
+          const uOffsetY = calcMesh.userData?.videoOffsetY || 0;
+          const uOffsetZ = calcMesh.userData?.videoOffsetZ || 0;
+          const localScreen = frame.localCenter.clone().addScaledVector(frame.localNormal, 0.005 + uOffsetZ);
+          localScreen.addScaledVector(frame.localRight, uOffsetX);
+          localScreen.addScaledVector(frame.localUp, uOffsetY);
+          localScreen.applyMatrix4(calcMesh.matrixWorld);
+          spawnPos.copy(localScreen);
+          cssObject.quaternion.copy(frame.worldQuat);
+        } else {
+          const targetW = Math.min(0.42, Math.max(0.24, bSize.x * 0.40));
+          baseScale = targetW / iframeW;
+          const localChest = new THREE.Vector3(bCenter.x, bCenter.y + (bSize.y * 0.14), bBox.max.z + 0.015);
+          localChest.applyMatrix4(calcMesh.matrixWorld);
+          spawnPos.copy(localChest);
         }
       }
     }
+
     cssObject.scale.set(baseScale, baseScale, baseScale);
-    cssObject.position.set(0, 2.0, 0);
+    cssObject.position.copy(spawnPos);
     this.cssScene.add(cssObject);
 
     const entryId = `css3d_${Date.now()}`;
@@ -925,7 +999,16 @@ export class VideoDisplayManager {
           aspectRatio,
           frameStyle,
           videoTargetMaterialIndex: slot,
-          archetype: 'CSS3D_YOUTUBE'
+          archetype: 'CSS3D_YOUTUBE',
+          videoScale: mesh.userData?.videoScale ?? 1.0,
+          videoOffsetX: mesh.userData?.videoOffsetX ?? 0.0,
+          videoOffsetY: mesh.userData?.videoOffsetY ?? 0.0,
+          videoOffsetZ: mesh.userData?.videoOffsetZ ?? 0.0,
+          videoRotation: mesh.userData?.videoRotation ?? 0.0,
+          videoTextureRepeatX: mesh.userData?.videoTextureRepeatX ?? 1.0,
+          videoTextureRepeatY: mesh.userData?.videoTextureRepeatY ?? 1.0,
+          videoTextureOffsetX: mesh.userData?.videoTextureOffsetX ?? 0.0,
+          videoTextureOffsetY: mesh.userData?.videoTextureOffsetY ?? 0.0
         };
 
         if (Array.isArray(mesh.material)) {
@@ -1037,8 +1120,8 @@ export class VideoDisplayManager {
     // CASE B: Create WebGL Bezel / Stand Mesh to synchronize with Three.js selection & gizmos
     const worldW = iframeW * baseScale;
     const worldH = iframeH * baseScale;
-    const bezelThickness = 0.08;
-    const bezelDepth = 0.12;
+    const bezelThickness = 0.02;
+    const bezelDepth = 0.015;
 
     const bezelGeom = new THREE.BoxGeometry(worldW + bezelThickness, worldH + bezelThickness, bezelDepth);
     const bezelMat = new THREE.MeshStandardMaterial({
@@ -1052,7 +1135,7 @@ export class VideoDisplayManager {
 
     const bezelMesh = new THREE.Mesh(bezelGeom, bezelMats);
     bezelMesh.name = name || `YouTube_${videoId}`;
-    bezelMesh.position.set(0, 2.0, 0);
+    bezelMesh.position.copy(spawnPos);
 
     bezelMesh.userData = {
       isGenerated: true,
@@ -1124,22 +1207,61 @@ export class VideoDisplayManager {
       target.getWorldQuaternion(this._tempWorldQuat);
       target.getWorldScale(this._tempWorldScale);
 
-      // If target has geometry, calculate bounding box center for accurate submesh surface alignment
-      if (target.geometry) {
-        if (!target.geometry.boundingBox) target.geometry.computeBoundingBox();
-        if (target.geometry.boundingBox) {
-          const geomCenter = new THREE.Vector3();
-          target.geometry.boundingBox.getCenter(geomCenter);
-          geomCenter.applyMatrix4(target.matrixWorld);
-          this._tempWorldPos.copy(geomCenter);
+      let calcMesh = target;
+      if (!calcMesh.isMesh) {
+        calcMesh.traverse?.((c) => {
+          if (!calcMesh.isMesh && c.isMesh && c.geometry) calcMesh = c;
+        });
+      }
+
+      // If target has geometry, calculate accurate submesh/screen surface alignment
+      if (calcMesh && calcMesh.geometry) {
+        const slotIdx = typeof entry.slotIndex === 'number'
+          ? entry.slotIndex
+          : (typeof target.userData?.videoTargetMaterialIndex === 'number'
+              ? target.userData.videoTargetMaterialIndex
+              : 0);
+
+        const frame = computeGeometrySurfaceFrame(calcMesh, slotIdx);
+
+        const uOffsetX = Number(target.userData?.videoOffsetX || 0);
+        const uOffsetY = Number(target.userData?.videoOffsetY || 0);
+        const uOffsetZ = Number(target.userData?.videoOffsetZ || 0);
+
+        const localPos = frame.localCenter.clone().addScaledVector(frame.localNormal, 0.005 + uOffsetZ);
+        localPos.addScaledVector(frame.localRight, uOffsetX);
+        localPos.addScaledVector(frame.localUp, uOffsetY);
+        localPos.applyMatrix4(calcMesh.matrixWorld);
+        this._tempWorldPos.copy(localPos);
+
+        let quat = frame.worldQuat.clone();
+        const uRot = Number(target.userData?.videoRotation || 0);
+        if (uRot !== 0) {
+          const rotQuat = new THREE.Quaternion().setFromAxisAngle(
+            frame.worldNormal,
+            (uRot * Math.PI) / 180
+          );
+          quat = rotQuat.multiply(quat);
+        }
+        this._tempWorldQuat.copy(quat);
+
+        if (!entry.baseScale) {
+          entry.baseScale = Math.max(frame.size.x, 0.05) / 640;
+        }
+      } else {
+        const uRot = Number(target.userData?.videoRotation || 0);
+        if (uRot) {
+          if (!this._tempRotQuat) this._tempRotQuat = new THREE.Quaternion();
+          this._tempRotQuat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), (uRot * Math.PI) / 180);
+          this._tempWorldQuat.multiply(this._tempRotQuat);
         }
       }
 
-      const offset = new THREE.Vector3(0, 0, 0.02 * Math.abs(this._tempWorldScale.z || 1)).applyQuaternion(this._tempWorldQuat);
-      entry.cssObject.position.copy(this._tempWorldPos).add(offset);
+      entry.cssObject.position.copy(this._tempWorldPos);
       entry.cssObject.quaternion.copy(this._tempWorldQuat);
 
-      const s = entry.baseScale || 0.005;
+      const uScale = Number(target.userData?.videoScale || 1.0);
+      const s = (entry.baseScale || 0.0006) * uScale;
       entry.cssObject.scale.set(
         Math.abs(this._tempWorldScale.x || 1) * s,
         Math.abs(this._tempWorldScale.y || 1) * s,
@@ -1762,6 +1884,126 @@ export default function Studio4D4() {
           });
         }
         return slots;
+      }
+
+      snapVideoLayerToGeometry(meshUuid, slotIndex = 0) {
+        const targetMesh = this.findMeshByUuid(meshUuid) || (this.selectedObject?.isMesh ? this.selectedObject : null);
+        if (!targetMesh) {
+          this.updateDiagnostics('⚠️ Please select a target 3D mesh to snap the video layer to.');
+          return;
+        }
+
+        // Find active video layer / owner in scene
+        let videoOwner = null;
+        if (this.selectedObject?.userData?.hasVideo || this.selectedObject?.userData?.isCSS3D) {
+          videoOwner = this.selectedObject;
+        } else {
+          this.objects.forEach((obj) => {
+            if (videoOwner) return;
+            if (obj.userData?.hasVideo || obj.userData?.isCSS3D) videoOwner = obj;
+            else obj.traverse?.((c) => {
+              if (!videoOwner && (c.userData?.hasVideo || c.userData?.isCSS3D)) videoOwner = c;
+            });
+          });
+        }
+
+        const slot = typeof slotIndex === 'number' ? slotIndex : parseInt(slotIndex, 10) || 0;
+        const frame = computeGeometrySurfaceFrame(targetMesh, slot);
+
+        // Check if there is an active CSS3D YouTube overlay
+        const cssEntry = this.videoDisplayManager.css3dEntries?.[0];
+        if (cssEntry) {
+          cssEntry.targetMesh = targetMesh;
+          cssEntry.slotIndex = slot;
+          cssEntry.baseScale = Math.max(frame.size.x, 0.05) / 640;
+
+          // Reset user transform offsets on target mesh
+          targetMesh.userData.videoScale = 1.0;
+          targetMesh.userData.videoOffsetX = 0.0;
+          targetMesh.userData.videoOffsetY = 0.0;
+          targetMesh.userData.videoOffsetZ = 0.0;
+          targetMesh.userData.videoRotation = 0;
+          targetMesh.userData.hasVideo = true;
+          targetMesh.userData.isCSS3D = true;
+          targetMesh.userData.videoId = cssEntry.videoId;
+          targetMesh.userData.youtubeId = cssEntry.videoId;
+          targetMesh.userData.videoTargetMaterialIndex = slot;
+          targetMesh.userData.videoTargetMeshUuid = targetMesh.uuid;
+          targetMesh.userData.videoTargetMeshName = targetMesh.name;
+
+          let topParent = targetMesh;
+          while (topParent.parent && topParent.parent !== this.scene) {
+            topParent = topParent.parent;
+          }
+          if (topParent && topParent !== targetMesh) {
+            topParent.userData = {
+              ...topParent.userData,
+              hasVideo: true,
+              isCSS3D: true,
+              videoId: cssEntry.videoId,
+              youtubeId: cssEntry.videoId,
+              videoTargetMaterialIndex: slot,
+              videoTargetMeshUuid: targetMesh.uuid,
+              videoTargetMeshName: targetMesh.name,
+              videoScale: 1.0,
+              videoOffsetX: 0.0,
+              videoOffsetY: 0.0,
+              videoOffsetZ: 0.0,
+              videoRotation: 0
+            };
+          }
+
+          // Instantly position CSS3D overlay on surface
+          const localPos = frame.localCenter.clone().addScaledVector(frame.localNormal, 0.005);
+          localPos.applyMatrix4(targetMesh.matrixWorld);
+          cssEntry.cssObject.position.copy(localPos);
+          cssEntry.cssObject.quaternion.copy(frame.worldQuat);
+          cssEntry.cssObject.scale.set(cssEntry.baseScale, cssEntry.baseScale, cssEntry.baseScale);
+
+          if (cssEntry.bezelMesh && cssEntry.bezelMesh !== targetMesh) {
+            cssEntry.bezelMesh.position.copy(localPos);
+            cssEntry.bezelMesh.quaternion.copy(frame.worldQuat);
+          }
+
+          this.flashMeshHighlight(targetMesh);
+          this.selectObject(targetMesh);
+          this.updatePropertiesPanel();
+          this.updateDiagnostics(`Snapped YouTube Video to "${targetMesh.name || 'Mesh'}" [Face/Slot ${slot}] in exact 3D orientation`);
+          return;
+        }
+
+        // Check if there is an active WebGL video texture
+        const vTexEntry = this.videoDisplayManager.videoTextures?.[0];
+        if (vTexEntry || videoOwner) {
+          targetMesh.userData.hasVideo = true;
+          targetMesh.userData.videoTargetMaterialIndex = slot;
+          targetMesh.userData.videoTargetMeshUuid = targetMesh.uuid;
+          targetMesh.userData.videoTargetMeshName = targetMesh.name;
+          targetMesh.userData.videoScale = 1.0;
+          targetMesh.userData.videoOffsetX = 0.0;
+          targetMesh.userData.videoOffsetY = 0.0;
+          targetMesh.userData.videoOffsetZ = 0.0;
+          targetMesh.userData.videoRotation = 0;
+
+          if (vTexEntry && vTexEntry.videoTexture) {
+            const materials = Array.isArray(targetMesh.material) ? targetMesh.material : [targetMesh.material];
+            const targetMat = materials[slot] || materials[0];
+            if (targetMat) {
+              targetMat.map = vTexEntry.videoTexture;
+              targetMat.emissiveMap = vTexEntry.videoTexture;
+              if (targetMat.color) targetMat.color.setHex(0xffffff);
+              if (targetMat.emissive) targetMat.emissive.setHex(0xffffff);
+              targetMat.emissiveIntensity = 0.5;
+              targetMat.needsUpdate = true;
+            }
+          }
+
+          this.videoDisplayManager.applyTextureTransforms(targetMesh);
+          this.flashMeshHighlight(targetMesh);
+          this.selectObject(targetMesh);
+          this.updatePropertiesPanel();
+          this.updateDiagnostics(`Snapped WebGL Video to "${targetMesh.name || 'Mesh'}" [Face/Slot ${slot}]`);
+        }
       }
 
       enableFacePickMode(callback) {
@@ -2593,6 +2835,92 @@ export default function Studio4D4() {
               slotSelect.value = videoOwner.userData?.videoTargetMaterialIndex ?? 0;
             }
           }
+
+          // Populate Snap to Geometry / Face selectors
+          const snapMeshSelect = document.getElementById('video-snap-mesh-select');
+          const snapFaceSelect = document.getElementById('video-snap-face-select');
+          if (snapMeshSelect) {
+            const candidates = this.getAllCandidateMeshes();
+            snapMeshSelect.innerHTML = '';
+            candidates.forEach((c) => {
+              const opt = document.createElement('option');
+              opt.value = c.uuid;
+              opt.textContent = `${c.parentName && c.parentName !== c.name ? `[${c.parentName}] ` : ''}${c.name} (${c.materialCount} layer${c.materialCount > 1 ? 's' : ''})${c.hasVideo ? ' ★' : ''}`;
+              snapMeshSelect.appendChild(opt);
+            });
+            const currentTargetUuid = videoOwner.userData?.videoTargetMeshUuid || videoOwner.uuid;
+            if (candidates.some((c) => c.uuid === currentTargetUuid)) {
+              snapMeshSelect.value = currentTargetUuid;
+            } else if (candidates.length > 0) {
+              snapMeshSelect.value = candidates[0].uuid;
+            }
+
+            if (snapFaceSelect) {
+              const targetM = this.findMeshByUuid(snapMeshSelect.value) || videoOwner;
+              const slots = this.getMaterialSlotsForMesh(targetM);
+              snapFaceSelect.innerHTML = '';
+              slots.forEach((s) => {
+                const opt = document.createElement('option');
+                opt.value = s.index;
+                opt.textContent = `${s.name} ${s.hasVideo ? '★' : ''}`;
+                snapFaceSelect.appendChild(opt);
+              });
+              snapFaceSelect.value = videoOwner.userData?.videoTargetMaterialIndex ?? 0;
+            }
+          }
+
+          // Populate Video Placement & Sizing UI Controls
+          const scaleSlider = document.getElementById('video-scale-slider');
+          const scaleVal = document.getElementById('video-scale-val');
+          const scaleNum = document.getElementById('video-scale-num');
+          const offXSlider = document.getElementById('video-offset-x-slider');
+          const offXVal = document.getElementById('video-offset-x-val');
+          const offXNum = document.getElementById('video-offset-x-num');
+          const offYSlider = document.getElementById('video-offset-y-slider');
+          const offYVal = document.getElementById('video-offset-y-val');
+          const offYNum = document.getElementById('video-offset-y-num');
+          const offZSlider = document.getElementById('video-offset-z-slider');
+          const offZVal = document.getElementById('video-offset-z-val');
+          const offZNum = document.getElementById('video-offset-z-num');
+          const rotSlider = document.getElementById('video-rotation-slider');
+          const rotVal = document.getElementById('video-rotation-val');
+          const rotNum = document.getElementById('video-rotation-num');
+
+          const vScale = videoOwner.userData?.videoScale ?? 1.0;
+          const vOffX = videoOwner.userData?.videoOffsetX ?? 0.0;
+          const vOffY = videoOwner.userData?.videoOffsetY ?? 0.0;
+          const vOffZ = videoOwner.userData?.videoOffsetZ ?? 0.0;
+          const vRot = videoOwner.userData?.videoRotation ?? 0;
+
+          if (scaleSlider && scaleVal) {
+            scaleSlider.value = vScale;
+            scaleVal.textContent = `${Number(vScale).toFixed(2)}x`;
+          }
+          if (scaleNum) scaleNum.value = Number(vScale).toFixed(2);
+
+          if (offXSlider && offXVal) {
+            offXSlider.value = vOffX;
+            offXVal.textContent = `${Number(vOffX).toFixed(2)}m`;
+          }
+          if (offXNum) offXNum.value = Number(vOffX).toFixed(2);
+
+          if (offYSlider && offYVal) {
+            offYSlider.value = vOffY;
+            offYVal.textContent = `${Number(vOffY).toFixed(2)}m`;
+          }
+          if (offYNum) offYNum.value = Number(vOffY).toFixed(2);
+
+          if (offZSlider && offZVal) {
+            offZSlider.value = vOffZ;
+            offZVal.textContent = `${Number(vOffZ).toFixed(3)}m`;
+          }
+          if (offZNum) offZNum.value = Number(vOffZ).toFixed(3);
+
+          if (rotSlider && rotVal) {
+            rotSlider.value = vRot;
+            rotVal.textContent = `${Math.round(vRot)}°`;
+          }
+          if (rotNum) rotNum.value = Math.round(vRot);
         }
 
         if (this.selectedObject.isLight && lightProps) {
@@ -2797,6 +3125,118 @@ export default function Studio4D4() {
 
         document.getElementById('btn-remove-youtube-layer')?.addEventListener('click', () => {
           this.videoDisplayManager.removeVideoFromMesh(this.selectedObject);
+        });
+
+        const snapMeshSelect = document.getElementById('video-snap-mesh-select');
+        const snapFaceSelect = document.getElementById('video-snap-face-select');
+        snapMeshSelect?.addEventListener('change', (e) => {
+          const mUuid = e.target.value;
+          const targetM = this.findMeshByUuid(mUuid);
+          if (targetM) {
+            this.flashMeshHighlight(targetM);
+            if (snapFaceSelect) {
+              const slots = this.getMaterialSlotsForMesh(targetM);
+              snapFaceSelect.innerHTML = '';
+              slots.forEach((s) => {
+                const opt = document.createElement('option');
+                opt.value = s.index;
+                opt.textContent = `${s.name} ${s.hasVideo ? '★' : ''}`;
+                snapFaceSelect.appendChild(opt);
+              });
+              snapFaceSelect.value = 0;
+            }
+          }
+        });
+
+        document.getElementById('btn-snap-video-to-face')?.addEventListener('click', () => {
+          const meshUuid = document.getElementById('video-snap-mesh-select')?.value;
+          const slotIdx = parseInt(document.getElementById('video-snap-face-select')?.value, 10) || 0;
+          this.snapVideoLayerToGeometry(meshUuid, slotIdx);
+        });
+
+        const handleVideoTransformChange = () => {
+          const obj = this.selectedObject;
+          if (!obj) return;
+          let target = obj;
+          if (!target.userData?.hasVideo && !target.userData?.isCSS3D && target.traverse) {
+            target.traverse((child) => {
+              if (child.userData?.hasVideo || child.userData?.isCSS3D) target = child;
+            });
+          }
+
+          const sVal = parseFloat(document.getElementById('video-scale-slider')?.value || '1.0');
+          const offX = parseFloat(document.getElementById('video-offset-x-slider')?.value || '0.0');
+          const offY = parseFloat(document.getElementById('video-offset-y-slider')?.value || '0.0');
+          const offZ = parseFloat(document.getElementById('video-offset-z-slider')?.value || '0.0');
+          const rot = parseFloat(document.getElementById('video-rotation-slider')?.value || '0');
+
+          target.userData.videoScale = sVal;
+          target.userData.videoOffsetX = offX;
+          target.userData.videoOffsetY = offY;
+          target.userData.videoOffsetZ = offZ;
+          target.userData.videoRotation = rot;
+
+          let topParent = target;
+          while (topParent.parent && topParent.parent !== this.scene) {
+            topParent = topParent.parent;
+          }
+          if (topParent && topParent !== target && topParent.userData) {
+            topParent.userData.videoScale = sVal;
+            topParent.userData.videoOffsetX = offX;
+            topParent.userData.videoOffsetY = offY;
+            topParent.userData.videoOffsetZ = offZ;
+            topParent.userData.videoRotation = rot;
+          }
+
+          this.videoDisplayManager.applyTextureTransforms(target);
+        };
+
+        const syncSliderAndInput = (sliderId, inputId, labelId, formatter, fallback) => {
+          const slider = document.getElementById(sliderId);
+          const input = document.getElementById(inputId);
+          const lbl = document.getElementById(labelId);
+
+          slider?.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            if (input) input.value = val;
+            if (lbl && formatter) lbl.textContent = formatter(val);
+            handleVideoTransformChange();
+          });
+
+          const handleNumInput = (e) => {
+            let val = parseFloat(e.target.value);
+            if (isNaN(val)) val = fallback;
+            if (slider) slider.value = val;
+            if (lbl && formatter) lbl.textContent = formatter(val);
+            handleVideoTransformChange();
+          };
+
+          input?.addEventListener('input', handleNumInput);
+          input?.addEventListener('change', handleNumInput);
+        };
+
+        syncSliderAndInput('video-scale-slider', 'video-scale-num', 'video-scale-val', (v) => `${v.toFixed(2)}x`, 1.0);
+        syncSliderAndInput('video-offset-x-slider', 'video-offset-x-num', 'video-offset-x-val', (v) => `${v.toFixed(2)}m`, 0.0);
+        syncSliderAndInput('video-offset-y-slider', 'video-offset-y-num', 'video-offset-y-val', (v) => `${v.toFixed(2)}m`, 0.0);
+        syncSliderAndInput('video-offset-z-slider', 'video-offset-z-num', 'video-offset-z-val', (v) => `${v.toFixed(3)}m`, 0.0);
+        syncSliderAndInput('video-rotation-slider', 'video-rotation-num', 'video-rotation-val', (v) => `${Math.round(v)}°`, 0);
+
+        document.getElementById('btn-reset-video-transform')?.addEventListener('click', () => {
+          const obj = this.selectedObject;
+          if (!obj) return;
+          let target = obj;
+          if (!target.userData?.hasVideo && !target.userData?.isCSS3D && target.traverse) {
+            target.traverse((child) => {
+              if (child.userData?.hasVideo || child.userData?.isCSS3D) target = child;
+            });
+          }
+          target.userData.videoScale = 1.0;
+          target.userData.videoOffsetX = 0.0;
+          target.userData.videoOffsetY = 0.0;
+          target.userData.videoOffsetZ = 0.0;
+          target.userData.videoRotation = 0;
+          this.updatePropertiesPanel();
+          this.videoDisplayManager.applyTextureTransforms(target);
         });
 
         document.getElementById('btn-add-light')?.addEventListener('click', () => {
@@ -3130,6 +3570,15 @@ export default function Studio4D4() {
               clonedRig.userData.aspectRatio = obj.userData.aspectRatio || '16:9';
               clonedRig.userData.frameStyle = obj.userData.frameStyle || 'cyber_bezel';
               clonedRig.userData.videoTargetMaterialIndex = typeof obj.userData.videoTargetMaterialIndex === 'number' ? obj.userData.videoTargetMaterialIndex : 0;
+              clonedRig.userData.videoScale = obj.userData.videoScale ?? 1.0;
+              clonedRig.userData.videoOffsetX = obj.userData.videoOffsetX ?? 0.0;
+              clonedRig.userData.videoOffsetY = obj.userData.videoOffsetY ?? 0.0;
+              clonedRig.userData.videoOffsetZ = obj.userData.videoOffsetZ ?? 0.0;
+              clonedRig.userData.videoRotation = obj.userData.videoRotation ?? 0.0;
+              clonedRig.userData.videoTextureRepeatX = obj.userData.videoTextureRepeatX ?? 1.0;
+              clonedRig.userData.videoTextureRepeatY = obj.userData.videoTextureRepeatY ?? 1.0;
+              clonedRig.userData.videoTextureOffsetX = obj.userData.videoTextureOffsetX ?? 0.0;
+              clonedRig.userData.videoTextureOffsetY = obj.userData.videoTextureOffsetY ?? 0.0;
             }
             clonedRig.traverse((child) => {
               child.userData = sanitizeUserData(child.userData);
@@ -3194,7 +3643,8 @@ export default function Studio4D4() {
             videoSrc = `https://www.youtube.com/watch?v=${videoId}`;
           }
           const hasVideo = !!(obj.userData?.hasVideo || videoSrc || obj.userData?.videoTexture || isCSS3D || videoId);
-          const aspectRatio = obj.userData?.aspectRatio || '16:9';
+          const isShort = isYouTubeShortUrl(videoSrc);
+          const aspectRatio = obj.userData?.aspectRatio || (isShort ? '9:16' : '16:9');
           const frameStyle = obj.userData?.frameStyle || 'cyber_bezel';
 
           if (hasVideo && (videoSrc || videoId)) {
@@ -3211,7 +3661,16 @@ export default function Studio4D4() {
               videoId: videoId,
               youtubeId: videoId,
               aspectRatio: aspectRatio,
-              frameStyle: frameStyle
+              frameStyle: frameStyle,
+              videoScale: obj.userData?.videoScale ?? 1.0,
+              videoOffsetX: obj.userData?.videoOffsetX ?? 0.0,
+              videoOffsetY: obj.userData?.videoOffsetY ?? 0.0,
+              videoOffsetZ: obj.userData?.videoOffsetZ ?? 0.0,
+              videoRotation: obj.userData?.videoRotation ?? 0.0,
+              videoTextureRepeatX: obj.userData?.videoTextureRepeatX ?? 1.0,
+              videoTextureRepeatY: obj.userData?.videoTextureRepeatY ?? 1.0,
+              videoTextureOffsetX: obj.userData?.videoTextureOffsetX ?? 0.0,
+              videoTextureOffsetY: obj.userData?.videoTextureOffsetY ?? 0.0
             };
 
             if (Array.isArray(cloneMat)) {
@@ -3246,6 +3705,15 @@ export default function Studio4D4() {
             aspectRatio: aspectRatio,
             frameStyle: frameStyle,
             videoTargetMaterialIndex: typeof obj.userData?.videoTargetMaterialIndex === 'number' ? obj.userData.videoTargetMaterialIndex : 0,
+            videoScale: obj.userData?.videoScale ?? 1.0,
+            videoOffsetX: obj.userData?.videoOffsetX ?? 0.0,
+            videoOffsetY: obj.userData?.videoOffsetY ?? 0.0,
+            videoOffsetZ: obj.userData?.videoOffsetZ ?? 0.0,
+            videoRotation: obj.userData?.videoRotation ?? 0.0,
+            videoTextureRepeatX: obj.userData?.videoTextureRepeatX ?? 1.0,
+            videoTextureRepeatY: obj.userData?.videoTextureRepeatY ?? 1.0,
+            videoTextureOffsetX: obj.userData?.videoTextureOffsetX ?? 0.0,
+            videoTextureOffsetY: obj.userData?.videoTextureOffsetY ?? 0.0,
             archetype: (isCSS3D || videoId) ? 'CSS3D_YOUTUBE' : (obj.userData?.archetype || 'STANDARD')
           };
           return cloneMesh;
@@ -3271,6 +3739,15 @@ export default function Studio4D4() {
             safeUserData.aspectRatio = obj.userData.aspectRatio || '16:9';
             safeUserData.frameStyle = obj.userData.frameStyle || 'cyber_bezel';
             safeUserData.videoTargetMaterialIndex = typeof obj.userData.videoTargetMaterialIndex === 'number' ? obj.userData.videoTargetMaterialIndex : 0;
+            safeUserData.videoScale = obj.userData.videoScale ?? 1.0;
+            safeUserData.videoOffsetX = obj.userData.videoOffsetX ?? 0.0;
+            safeUserData.videoOffsetY = obj.userData.videoOffsetY ?? 0.0;
+            safeUserData.videoOffsetZ = obj.userData.videoOffsetZ ?? 0.0;
+            safeUserData.videoRotation = obj.userData.videoRotation ?? 0.0;
+            safeUserData.videoTextureRepeatX = obj.userData.videoTextureRepeatX ?? 1.0;
+            safeUserData.videoTextureRepeatY = obj.userData.videoTextureRepeatY ?? 1.0;
+            safeUserData.videoTextureOffsetX = obj.userData.videoTextureOffsetX ?? 0.0;
+            safeUserData.videoTextureOffsetY = obj.userData.videoTextureOffsetY ?? 0.0;
             if (obj.userData.videoTargetMeshName) safeUserData.videoTargetMeshName = obj.userData.videoTargetMeshName;
             if (obj.userData.videoTargetMeshUuid) safeUserData.videoTargetMeshUuid = obj.userData.videoTargetMeshUuid;
           }
@@ -3436,7 +3913,12 @@ export default function Studio4D4() {
         if (this.renderer.domElement && this.renderer.domElement.parentNode) {
           this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);
         }
-        this.renderer.dispose();
+        if (this.renderer) {
+          if (typeof this.renderer.forceContextLoss === 'function') {
+            this.renderer.forceContextLoss();
+          }
+          this.renderer.dispose();
+        }
       }
     }
 
@@ -4145,6 +4627,210 @@ export default function Studio4D4() {
                 Remove YouTube Layer
               </button>
             </div>
+
+            {/* Snap Video Layer to Geometry / Face */}
+            <div className="p-2.5 bg-slate-950/80 border border-indigo-500/30 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] uppercase font-bold text-indigo-400 tracking-wider flex items-center gap-1">
+                  <span className="material-symbols-outlined text-xs">filter_center_focus</span>
+                  Snap to Geometry / Face
+                </span>
+                <span className="text-[9px] bg-indigo-900/60 text-indigo-300 font-mono px-1.5 py-0.5 rounded border border-indigo-500/30">
+                  Surface Align
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-400 leading-tight">
+                Snap the video layer to appear in the exact 3D position and orientation of the chosen geometry and face layer.
+              </p>
+              <div className="space-y-1.5">
+                <div>
+                  <label htmlFor="video-snap-mesh-select" className="text-[10px] uppercase font-bold text-slate-400">
+                    Target 3D Mesh
+                  </label>
+                  <select
+                    id="video-snap-mesh-select"
+                    className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono mt-0.5"
+                  >
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="video-snap-face-select" className="text-[10px] uppercase font-bold text-slate-400">
+                    Face / Material Layer
+                  </label>
+                  <select
+                    id="video-snap-face-select"
+                    className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono mt-0.5"
+                  >
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  id="btn-snap-video-to-face"
+                  className="w-full mt-1 py-1.5 px-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-sm shadow-indigo-500/20"
+                >
+                  <span className="material-symbols-outlined text-xs">filter_center_focus</span>
+                  Snap Video to Selected Face
+                </button>
+              </div>
+            </div>
+
+            {/* Video Layer Mapping, Size & Placement Controls */}
+            <div className="pt-2.5 border-t border-slate-800 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] uppercase font-bold text-indigo-400 tracking-wider flex items-center gap-1">
+                  <span className="material-symbols-outlined text-xs">tune</span>
+                  Geometry Mapping & Size
+                </span>
+                <button
+                  type="button"
+                  id="btn-reset-video-transform"
+                  className="text-[10px] text-slate-400 hover:text-white px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 transition-colors"
+                  title="Reset to default geometry fill"
+                >
+                  Reset Fill
+                </button>
+              </div>
+
+              {/* Video Scale Multiplier */}
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-[10px] text-slate-400">Scale / Size Multiplier</span>
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      id="video-scale-num"
+                      step="0.01"
+                      min="0.01"
+                      max="10.0"
+                      defaultValue="1.0"
+                      className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                    />
+                    <span className="text-[10px] font-mono text-slate-400">x</span>
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  id="video-scale-slider"
+                  min="0.1"
+                  max="3.0"
+                  step="0.01"
+                  defaultValue="1.0"
+                  className="w-full accent-indigo-500"
+                />
+              </div>
+
+              {/* Position Offset X & Y */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-[10px] text-slate-400">Offset X</span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        id="video-offset-x-num"
+                        step="0.005"
+                        min="-10.0"
+                        max="10.0"
+                        defaultValue="0.0"
+                        className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                      />
+                      <span className="text-[10px] font-mono text-slate-400">m</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    id="video-offset-x-slider"
+                    min="-1.0"
+                    max="1.0"
+                    step="0.005"
+                    defaultValue="0.0"
+                    className="w-full accent-indigo-500"
+                  />
+                </div>
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-[10px] text-slate-400">Offset Y</span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        id="video-offset-y-num"
+                        step="0.005"
+                        min="-10.0"
+                        max="10.0"
+                        defaultValue="0.0"
+                        className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                      />
+                      <span className="text-[10px] font-mono text-slate-400">m</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    id="video-offset-y-slider"
+                    min="-1.0"
+                    max="1.0"
+                    step="0.005"
+                    defaultValue="0.0"
+                    className="w-full accent-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Surface Clearance Z & Rotation */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-[10px] text-slate-400">Clearance (Z)</span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        id="video-offset-z-num"
+                        step="0.001"
+                        min="-5.0"
+                        max="5.0"
+                        defaultValue="0.0"
+                        className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                      />
+                      <span className="text-[10px] font-mono text-slate-400">m</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    id="video-offset-z-slider"
+                    min="-0.1"
+                    max="0.2"
+                    step="0.001"
+                    defaultValue="0.0"
+                    className="w-full accent-indigo-500"
+                  />
+                </div>
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-[10px] text-slate-400">Layer Rotation</span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        id="video-rotation-num"
+                        step="0.5"
+                        min="-360"
+                        max="360"
+                        defaultValue="0"
+                        className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                      />
+                      <span className="text-[10px] font-mono text-slate-400">°</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    id="video-rotation-slider"
+                    min="-180"
+                    max="180"
+                    step="0.5"
+                    defaultValue="0"
+                    className="w-full accent-indigo-500"
+                  />
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Humanoid Armature & Character Animation */}
@@ -4555,11 +5241,12 @@ export default function Studio4D4() {
 
                 // Auto-route YouTube URLs to addCSS3DYouTubeOverlay
                 if (typeof sourceUrlOrFile === 'string' && isYouTubeUrl(sourceUrlOrFile)) {
+                  const isShort = isYouTubeShortUrl(sourceUrlOrFile);
                   appRef.current.videoDisplayManager.addCSS3DYouTubeOverlay({
                     urlOrId: sourceUrlOrFile,
-                    aspectRatio: '16:9',
+                    aspectRatio: isShort ? '9:16' : (youtubeAspect || '16:9'),
                     frameStyle: 'cyber_bezel',
-                    name: clipName || 'YouTube_3D_Screen',
+                    name: clipName || (isShort ? 'YouTube_Short_3D_Screen' : 'YouTube_3D_Screen'),
                     targetMode: videoTargetMode,
                     selectedMesh: targetMesh,
                     targetMaterialIndex: videoTargetMaterialIndex
@@ -5022,30 +5709,55 @@ export default function Studio4D4() {
                     </label>
                     <input
                       type="text"
-                      placeholder="https://www.youtube.com/watch?v=... or Video ID"
+                      placeholder="https://www.youtube.com/shorts/... or https://www.youtube.com/watch?v=..."
                       value={youtubeUrlInput}
-                      onChange={(e) => setYoutubeUrlInput(e.target.value)}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setYoutubeUrlInput(val);
+                        if (isYouTubeShortUrl(val)) {
+                          setYoutubeAspect('9:16');
+                        }
+                      }}
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 font-mono"
                     />
                     <div className="flex flex-wrap gap-1.5 mt-2">
                       <span className="text-[10px] text-slate-500 self-center">Presets:</span>
                       <button
                         type="button"
-                        onClick={() => setYoutubeUrlInput('https://www.youtube.com/watch?v=jfKfPfyJRdk')}
+                        onClick={() => {
+                          setYoutubeUrlInput('https://www.youtube.com/shorts/5wWp4oTzUHQ');
+                          setYoutubeAspect('9:16');
+                        }}
+                        className="text-[10px] bg-red-950/60 hover:bg-red-900/80 text-red-200 px-2 py-0.5 rounded border border-red-800/80 cursor-pointer font-medium"
+                      >
+                        📱 Shorts (9:16)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setYoutubeUrlInput('https://www.youtube.com/watch?v=jfKfPfyJRdk');
+                          setYoutubeAspect('16:9');
+                        }}
                         className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 cursor-pointer"
                       >
                         ☕ Lofi Radio
                       </button>
                       <button
                         type="button"
-                        onClick={() => setYoutubeUrlInput('https://www.youtube.com/watch?v=ysz5S6PUM-U')}
+                        onClick={() => {
+                          setYoutubeUrlInput('https://www.youtube.com/watch?v=ysz5S6PUM-U');
+                          setYoutubeAspect('16:9');
+                        }}
                         className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 cursor-pointer"
                       >
                         🌿 4K Nature
                       </button>
                       <button
                         type="button"
-                        onClick={() => setYoutubeUrlInput('https://www.youtube.com/watch?v=dQw4w9WgXcQ')}
+                        onClick={() => {
+                          setYoutubeUrlInput('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+                          setYoutubeAspect('16:9');
+                        }}
                         className="text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded border border-slate-700 cursor-pointer"
                       >
                         🎵 Music Video

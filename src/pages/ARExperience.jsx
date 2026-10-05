@@ -4,7 +4,7 @@ import 'aframe';
 import 'mind-ar/dist/mindar-image-aframe.prod.js';
 import * as THREE from 'three';
 import BuyNowButton from '../components/BuyNowButton';
-import '../utils/aframe-components';
+import { isYouTubeShortUrl } from '../utils/aframe-components';
 import { db, storage } from '../firebase';
 import { doc, getDoc, getDocFromServer } from 'firebase/firestore';
 import { ref, getDownloadURL } from 'firebase/storage';
@@ -427,6 +427,13 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
               if (overrides) {
                 const ovr = overrides[node.name] || overrides[node.uuid];
                 if (ovr) {
+                  if (ovr.deleted || ovr.visible === false) {
+                    node.visible = false;
+                    if (ovr.deleted && node.parent) {
+                      node.parent.remove(node);
+                    }
+                    return;
+                  }
                   if (ovr.position) node.position.set(ovr.position.x, ovr.position.y, ovr.position.z);
                   if (ovr.rotation) {
                     node.rotation.set(
@@ -454,6 +461,49 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                       if (ovr.material.wireframe !== undefined) m.wireframe = !!ovr.material.wireframe;
                       m.needsUpdate = true;
                     });
+                    const THREE_LIB = (typeof AFRAME !== 'undefined' && AFRAME.THREE) ? AFRAME.THREE : THREE;
+                    const applyTexTransform = (tex) => {
+                      if (!tex) return;
+                      tex.wrapS = THREE_LIB.RepeatWrapping;
+                      tex.wrapT = THREE_LIB.RepeatWrapping;
+                      if (tex.center) tex.center.set(0.5, 0.5);
+                      const repX = ovr.material.textureRepeatX !== undefined && ovr.material.textureRepeatX !== null ? Number(ovr.material.textureRepeatX) : 1.0;
+                      const repY = ovr.material.textureRepeatY !== undefined && ovr.material.textureRepeatY !== null ? Number(ovr.material.textureRepeatY) : 1.0;
+                      const flipX = Boolean(ovr.material.textureFlipX);
+                      const flipY = Boolean(ovr.material.textureFlipY);
+                      const offX = ovr.material.textureOffsetX !== undefined && ovr.material.textureOffsetX !== null ? Number(ovr.material.textureOffsetX) : 0.0;
+                      const offY = ovr.material.textureOffsetY !== undefined && ovr.material.textureOffsetY !== null ? Number(ovr.material.textureOffsetY) : 0.0;
+                      const rotDeg = ovr.material.textureRotation !== undefined && ovr.material.textureRotation !== null ? Number(ovr.material.textureRotation) : 0.0;
+
+                      if (tex.repeat) tex.repeat.set(flipX ? -repX : repX, flipY ? -repY : repY);
+                      if (tex.offset) tex.offset.set(offX, offY);
+                      tex.rotation = (rotDeg * Math.PI) / 180;
+                      tex.matrixAutoUpdate = true;
+                      if (typeof tex.updateMatrix === 'function') tex.updateMatrix();
+                      tex.needsUpdate = true;
+                    };
+
+                    if (ovr.material.textureUrl) {
+                      const loader = new THREE_LIB.TextureLoader();
+                      loader.load(ovr.material.textureUrl, (tex) => {
+                        if (THREE_LIB.SRGBColorSpace !== undefined) {
+                          tex.colorSpace = THREE_LIB.SRGBColorSpace;
+                        }
+                        tex.flipY = false;
+                        applyTexTransform(tex);
+                        mats.forEach((m) => {
+                          m.map = tex;
+                          m.needsUpdate = true;
+                        });
+                      });
+                    } else {
+                      mats.forEach((m) => {
+                        ['map', 'emissiveMap', 'roughnessMap', 'metalnessMap'].forEach((slot) => {
+                          if (m[slot]) applyTexTransform(m[slot]);
+                        });
+                        m.needsUpdate = true;
+                      });
+                    }
                   }
                 }
               }
@@ -651,9 +701,9 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
   const modelScale = cfg.modelScale ?? 0.4;
   const modelRotSpeed = cfg.modelRotSpeed ?? 10000;
-  const modelRotX = cfg.modelRotX ?? 0;
-  const modelRotY = cfg.modelRotY ?? 0;
-  const modelRotZ = cfg.modelRotZ ?? 0;
+  const modelRotX = cfg.modelRotX !== undefined ? cfg.modelRotX : (cfg.modelRotation ? Number(cfg.modelRotation.split(' ')[0]) || 0 : 90);
+  const modelRotY = cfg.modelRotY !== undefined ? cfg.modelRotY : (cfg.modelRotation ? Number(cfg.modelRotation.split(' ')[1]) || 0 : 0);
+  const modelRotZ = cfg.modelRotZ !== undefined ? cfg.modelRotZ : (cfg.modelRotation ? Number(cfg.modelRotation.split(' ')[2]) || 0 : 0);
   const modelPosX = cfg.modelPosX !== undefined ? cfg.modelPosX : (cfg.modelPosition ? Number(cfg.modelPosition.split(' ')[0]) || 0 : 0);
   const modelPosY = cfg.modelPosY !== undefined ? cfg.modelPosY : (cfg.modelPosition ? Number(cfg.modelPosition.split(' ')[1]) || 0 : 0);
   const modelPosZ = cfg.modelPosZ !== undefined ? cfg.modelPosZ : (cfg.modelPosition ? Number(cfg.modelPosition.split(' ')[2]) || 0 : 0);
@@ -681,6 +731,10 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const uiLoading = trackingCfg.uiLoading || 'no';
   const uiScanning = trackingCfg.uiScanning || 'no';
   const uiError = trackingCfg.uiError || 'yes';
+
+  const videoCfg = arData?.config || {};
+  const videoAspect = videoCfg.aspectRatio || videoCfg.videoAspectRatio || (isYouTubeShortUrl(videoCfg.videoUrl || arData?.videoUrl) ? '9:16' : '16:9');
+  const playGltfVideoAttr = `src: ${videoCfg.videoUrl || arData?.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${videoCfg.videoTargetMesh || 'auto'}; flipX: ${videoCfg.videoFlipX || false}; videoScale: ${videoCfg.videoScale ?? 1.0}; videoOffsetX: ${videoCfg.videoOffsetX ?? 0.0}; videoOffsetY: ${videoCfg.videoOffsetY ?? 0.0}; videoOffsetZ: ${videoCfg.videoOffsetZ ?? 0.0}; videoRotation: ${videoCfg.videoRotation ?? 0.0}; videoTextureRepeatX: ${videoCfg.videoTextureRepeatX ?? 1.0}; videoTextureRepeatY: ${videoCfg.videoTextureRepeatY ?? 1.0}; videoTextureOffsetX: ${videoCfg.videoTextureOffsetX ?? 0.0}; videoTextureOffsetY: ${videoCfg.videoTextureOffsetY ?? 0.0}; aspectRatio: ${videoAspect}`;
 
   return (
     <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden select-none bg-transparent">
@@ -836,7 +890,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                 : {})}
               model-auto-center="enabled: true"
               dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-              play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${arData.config?.videoTargetMesh || 'auto'}; flipX: ${arData.config?.videoFlipX || false}`}
+              play-gltf-video={playGltfVideoAttr}
               play-gltf-animation={`playing: ${mediaPlaying}`}
             ></a-gltf-model>
           </a-entity>
@@ -859,7 +913,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                   : {})}
                 model-auto-center="enabled: true"
                 dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-                play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${arData.config?.videoTargetMesh || 'auto'}; flipX: ${arData.config?.videoFlipX || false}`}
+                play-gltf-video={playGltfVideoAttr}
                 play-gltf-animation={`playing: ${mediaPlaying}`}
               ></a-gltf-model>
             </a-entity>
@@ -912,7 +966,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                 : {})}
               model-auto-center="enabled: true"
               dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-              play-gltf-video={`src: ${arData.config?.videoUrl || arData.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${arData.config?.videoTargetMesh || 'auto'}; flipX: ${arData.config?.videoFlipX || false}`}
+              play-gltf-video={playGltfVideoAttr}
               play-gltf-animation={`playing: ${mediaPlaying}`}
             ></a-gltf-model>
           </a-entity>

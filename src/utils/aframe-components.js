@@ -15,14 +15,315 @@ export const isYouTubeUrl = (urlOrId) => {
   return /^(https?:\/\/)?(www\.|m\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)\/.+/i.test(trimmed);
 };
 
+export const isYouTubeShortUrl = (urlOrId) => {
+  if (!urlOrId || typeof urlOrId !== 'string') return false;
+  const trimmed = urlOrId.trim();
+  return /youtube\.com\/shorts\/([a-zA-Z0-9_-]+)/i.test(trimmed) || /youtu\.be\/shorts\/([a-zA-Z0-9_-]+)/i.test(trimmed);
+};
+
 export const extractYouTubeId = (urlOrId) => {
   if (!urlOrId || typeof urlOrId !== 'string') return '';
   const trimmed = urlOrId.trim();
   if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) return trimmed;
-  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const shortsMatch = trimmed.match(/\/shorts\/([a-zA-Z0-9_-]{11})/i);
+  if (shortsMatch && shortsMatch[1]) return shortsMatch[1];
+  const regExp = /^.*(youtu\.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=|live\/|shorts\/)([^#&?]*).*/i;
   const match = trimmed.match(regExp);
   return (match && match[2].length === 11) ? match[2] : (trimmed.length === 11 ? trimmed : '');
 };
+
+// =========================================================================
+// 3D GEOMETRY & SURFACE FRAME COMPUTATION HELPER
+// Computes exact surface position, orientation (normal/tangent frame),
+// and dimensions for any mesh or specific material/face group in 3D space.
+// =========================================================================
+export function computeGeometrySurfaceFrame(mesh, slotIndex = 0) {
+  const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE) ? window.AFRAME.THREE : THREE;
+
+  if (!mesh) {
+    return {
+      localCenter: new THREE_LIB.Vector3(0, 0, 0),
+      localNormal: new THREE_LIB.Vector3(0, 0, 1),
+      localRight: new THREE_LIB.Vector3(1, 0, 0),
+      localUp: new THREE_LIB.Vector3(0, 1, 0),
+      localQuat: new THREE_LIB.Quaternion(),
+      worldCenter: new THREE_LIB.Vector3(0, 0, 0),
+      worldNormal: new THREE_LIB.Vector3(0, 0, 1),
+      worldQuat: new THREE_LIB.Quaternion(),
+      size: new THREE_LIB.Vector3(0.5, 0.5, 0.1)
+    };
+  }
+
+  let calcMesh = mesh;
+  if (!calcMesh.isMesh && calcMesh.traverse) {
+    calcMesh.traverse((child) => {
+      if (!calcMesh.isMesh && child.isMesh && child.geometry) {
+        calcMesh = child;
+      }
+    });
+  }
+
+  if (!calcMesh.geometry) {
+    const worldCenter = new THREE_LIB.Vector3();
+    const worldQuat = new THREE_LIB.Quaternion();
+    calcMesh.getWorldPosition(worldCenter);
+    calcMesh.getWorldQuaternion(worldQuat);
+    return {
+      localCenter: new THREE_LIB.Vector3(0, 0, 0),
+      localNormal: new THREE_LIB.Vector3(0, 0, 1),
+      localRight: new THREE_LIB.Vector3(1, 0, 0),
+      localUp: new THREE_LIB.Vector3(0, 1, 0),
+      localQuat: new THREE_LIB.Quaternion(),
+      worldCenter,
+      worldNormal: new THREE_LIB.Vector3(0, 0, 1).transformDirection(calcMesh.matrixWorld).normalize(),
+      worldQuat,
+      size: new THREE_LIB.Vector3(0.5, 0.5, 0.1)
+    };
+  }
+
+  const geom = calcMesh.geometry;
+  if (!geom.boundingBox) geom.computeBoundingBox();
+  const bBox = geom.boundingBox || new THREE_LIB.Box3();
+  const bSize = new THREE_LIB.Vector3();
+  const bCenter = new THREE_LIB.Vector3();
+  bBox.getSize(bSize);
+  bBox.getCenter(bCenter);
+
+  const posAttr = geom.attributes.position;
+  const normAttr = geom.attributes.normal;
+  const indexAttr = geom.index;
+
+  let start = 0;
+  let count = posAttr ? posAttr.count : 0;
+
+  if (geom.groups && geom.groups.length > 0 && typeof slotIndex === 'number' && slotIndex >= 0) {
+    const matchedGroup = geom.groups.find((g) => g.materialIndex === slotIndex);
+    if (matchedGroup) {
+      start = matchedGroup.start;
+      count = matchedGroup.count;
+    }
+  }
+
+  const faceCenter = new THREE_LIB.Vector3(0, 0, 0);
+  const avgNormal = new THREE_LIB.Vector3(0, 0, 0);
+  let vertexCount = 0;
+
+  if (posAttr && normAttr && count > 0) {
+    if (indexAttr) {
+      const end = Math.min(start + count, indexAttr.count);
+      for (let i = start; i < end; i++) {
+        const idx = indexAttr.getX(i);
+        faceCenter.x += posAttr.getX(idx);
+        faceCenter.y += posAttr.getY(idx);
+        faceCenter.z += posAttr.getZ(idx);
+        avgNormal.x += normAttr.getX(idx);
+        avgNormal.y += normAttr.getY(idx);
+        avgNormal.z += normAttr.getZ(idx);
+        vertexCount++;
+      }
+    } else {
+      const end = Math.min(start + count, posAttr.count);
+      for (let idx = start; idx < end; idx++) {
+        faceCenter.x += posAttr.getX(idx);
+        faceCenter.y += posAttr.getY(idx);
+        faceCenter.z += posAttr.getZ(idx);
+        avgNormal.x += normAttr.getX(idx);
+        avgNormal.y += normAttr.getY(idx);
+        avgNormal.z += normAttr.getZ(idx);
+        vertexCount++;
+      }
+    }
+  }
+
+  if (vertexCount > 0) {
+    faceCenter.divideScalar(vertexCount);
+  } else {
+    faceCenter.copy(bCenter);
+  }
+
+  if (avgNormal.lengthSq() > 0.0001) {
+    avgNormal.normalize();
+  } else {
+    avgNormal.set(0, 0, 1);
+  }
+
+  const localQuat = new THREE_LIB.Quaternion();
+  if (avgNormal.z < -0.9999) {
+    localQuat.setFromAxisAngle(new THREE_LIB.Vector3(0, 1, 0), Math.PI);
+  } else {
+    localQuat.setFromUnitVectors(new THREE_LIB.Vector3(0, 0, 1), avgNormal);
+  }
+
+  const localRight = new THREE_LIB.Vector3(1, 0, 0).applyQuaternion(localQuat);
+  const localUp = new THREE_LIB.Vector3(0, 1, 0).applyQuaternion(localQuat);
+
+  const worldCenter = faceCenter.clone().applyMatrix4(calcMesh.matrixWorld);
+  const worldQuat = calcMesh.getWorldQuaternion(new THREE_LIB.Quaternion()).multiply(localQuat);
+  const worldNormal = avgNormal.clone().transformDirection(calcMesh.matrixWorld).normalize();
+
+  return {
+    localCenter: faceCenter,
+    localNormal: avgNormal,
+    localRight,
+    localUp,
+    localQuat,
+    worldCenter,
+    worldQuat,
+    worldNormal,
+    size: bSize
+  };
+}
+
+// =========================================================================
+// SCENE VIDEO LAYER CACHE & COMPREHENSIVE PURGE HELPER (MODULE LEVEL)
+// =========================================================================
+export const videoElementCache = new Map();
+
+export function purgeAllSceneVideoLayers(sceneEl) {
+  // 1. Clear videoElementCache
+  videoElementCache.forEach((vid) => {
+    try {
+      vid.pause();
+      vid.removeAttribute('src');
+      vid.load();
+      vid.remove();
+    } catch {}
+  });
+  videoElementCache.clear();
+
+  // 2. Remove hidden box and active video elements from DOM
+  if (typeof document !== 'undefined') {
+    const box = document.getElementById('aframe-video-hidden-box');
+    if (box) {
+      box.querySelectorAll('video').forEach((v) => {
+        try {
+          v.pause();
+          v.removeAttribute('src');
+          v.load();
+        } catch {}
+      });
+      box.remove();
+    }
+
+    const artestVid = document.getElementById('artest-active-video-element');
+    if (artestVid) {
+      try {
+        artestVid.pause();
+        artestVid.removeAttribute('src');
+        artestVid.load();
+      } catch {}
+      artestVid.remove();
+    }
+
+    // Any other video elements in the DOM created for WebGL textures
+    document.querySelectorAll('video').forEach((v) => {
+      if (v.id.includes('video') || v.parentElement?.id === 'aframe-video-hidden-box' || v.classList.contains('video-player') || v.classList.contains('video-texture-source')) {
+        try {
+          v.pause();
+          v.removeAttribute('src');
+          v.load();
+          v.remove();
+        } catch {}
+      }
+    });
+  }
+
+  // 3. Remove all CSS3D YouTube overlays
+  const scene = sceneEl || (typeof document !== 'undefined' ? document.querySelector('a-scene') : null);
+  if (scene) {
+    if (scene._css3dScene) {
+      const toRemove = [];
+      scene._css3dScene.traverse((child) => {
+        if (child.isCSS3DObject) toRemove.push(child);
+      });
+      toRemove.forEach((c) => {
+        try {
+          if (c.element && c.element.parentElement) {
+            c.element.parentElement.remove();
+          }
+          scene._css3dScene.remove(c);
+        } catch {}
+      });
+    }
+    if (typeof document !== 'undefined') {
+      const cssOverlay = document.getElementById('aframe-css3d-canvas-overlay');
+      if (cssOverlay) {
+        cssOverlay.querySelectorAll('iframe').forEach((ifr) => ifr.remove());
+        cssOverlay.querySelectorAll('.aframe-youtube-sound-toggle').forEach((btn) => btn.remove());
+      }
+    }
+
+    // 4. Strip all video textures and video metadata from all objects in scene.object3D
+    if (scene.object3D) {
+      scene.object3D.traverse((node) => {
+        if (node.userData) {
+          delete node.userData.videoUrl;
+          delete node.userData.videoSrc;
+          delete node.userData.video;
+          delete node.userData.videoId;
+          delete node.userData.youtubeId;
+          delete node.userData.hasVideo;
+          delete node.userData.isVideoLayer;
+        }
+        if (node.isMesh && node.material) {
+          const mats = Array.isArray(node.material) ? node.material : [node.material];
+          mats.forEach((mat) => {
+            if (mat.userData) {
+              delete mat.userData.videoUrl;
+              delete mat.userData.videoSrc;
+              delete mat.userData.video;
+              delete mat.userData.videoId;
+              delete mat.userData.youtubeId;
+              delete mat.userData.hasVideo;
+              delete mat.userData.isVideoLayer;
+            }
+            const maps = ['map', 'emissiveMap', 'alphaMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'bumpMap', 'normalMap', 'displacementMap', 'lightMap'];
+            maps.forEach((mapName) => {
+              if (mat[mapName]) {
+                const tex = mat[mapName];
+                if (tex.isVideoTexture || (tex.image && (tex.image.tagName === 'VIDEO' || tex.image instanceof HTMLVideoElement)) || (tex.source?.data && (tex.source.data.tagName === 'VIDEO' || tex.source.data instanceof HTMLVideoElement))) {
+                  try { tex.dispose(); } catch {}
+                  mat[mapName] = null;
+                  mat.needsUpdate = true;
+                }
+              }
+            });
+          });
+        }
+      });
+    }
+
+    // 5. Clean play-gltf-video component on any entity in scene
+    const entities = scene.querySelectorAll('[play-gltf-video]');
+    entities.forEach((el) => {
+      const comp = el.components?.['play-gltf-video'];
+      if (comp) {
+        if (comp.videos) {
+          comp.videos.forEach((v) => {
+            try { v.pause(); v.removeAttribute('src'); v.load(); v.remove(); } catch {}
+          });
+          comp.videos = [];
+        }
+        if (comp.videoTextures) {
+          comp.videoTextures.forEach((t) => {
+            try { t.dispose(); } catch {}
+          });
+          comp.videoTextures = [];
+        }
+        if (comp.cssObject && scene._css3dScene) {
+          try { scene._css3dScene.remove(comp.cssObject); } catch {}
+          comp.cssObject = null;
+        }
+        if (comp.youtubeIframe && comp.youtubeIframe.parentElement) {
+          try { comp.youtubeIframe.parentElement.remove(); } catch {}
+          comp.youtubeIframe = null;
+        }
+        comp.data.src = '';
+      }
+      el.setAttribute('play-gltf-video', 'src: ;');
+    });
+  }
+}
 
 const AFRAME = typeof window !== 'undefined' ? window.AFRAME : undefined;
 
@@ -189,8 +490,6 @@ if (typeof AFRAME !== 'undefined') {
                 if (data.opacity !== undefined && data.opacity < 1.0) {
                   mat.opacity = data.opacity;
                   mat.transparent = true;
-                } else if (mat.opacity === 1.0 && !mat.alphaMap && !mat.map?.format?.toString().includes('alpha')) {
-                  // Keep default transparency setting
                 }
 
                 mat.needsUpdate = true;
@@ -229,7 +528,21 @@ if (typeof AFRAME !== 'undefined') {
         if (!mesh) return;
 
         const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
-        const box = new THREE_LIB.Box3().setFromObject(mesh);
+        const box = new THREE_LIB.Box3();
+        let hasMeshes = false;
+        mesh.traverse((child) => {
+          if (child.isMesh && child.geometry) {
+            const name = (child.name || '').toLowerCase();
+            const isScreen = /screen|video|display|cinema|tv|bezel/i.test(name) || child.userData?.archetype === 'VIDEO_SCREEN' || child.userData?.archetype === 'CSS3D_YOUTUBE';
+            if (!isScreen) {
+              box.expandByObject(child);
+              hasMeshes = true;
+            }
+          }
+        });
+        if (!hasMeshes || box.isEmpty()) {
+          box.setFromObject(mesh);
+        }
         if (box.isEmpty()) return;
 
         const size = new THREE_LIB.Vector3();
@@ -246,8 +559,23 @@ if (typeof AFRAME !== 'undefined') {
           }
         }
 
-        // Recompute center after scale normalization and align pivot
-        const newBox = new THREE_LIB.Box3().setFromObject(mesh);
+        // Recompute center after scale normalization and align pivot (ignoring screens)
+        const newBox = new THREE_LIB.Box3();
+        let hasNewMeshes = false;
+        mesh.traverse((child) => {
+          if (child.isMesh && child.geometry) {
+            const name = (child.name || '').toLowerCase();
+            const isScreen = /screen|video|display|cinema|tv|bezel/i.test(name) || child.userData?.archetype === 'VIDEO_SCREEN' || child.userData?.archetype === 'CSS3D_YOUTUBE';
+            if (!isScreen) {
+              newBox.expandByObject(child);
+              hasNewMeshes = true;
+            }
+          }
+        });
+        if (!hasNewMeshes || newBox.isEmpty()) {
+          newBox.setFromObject(mesh);
+        }
+
         const center = new THREE_LIB.Vector3();
         newBox.getCenter(center);
 
@@ -270,8 +598,6 @@ if (typeof AFRAME !== 'undefined') {
   // DOM attached, user gesture unlocking), and forces WebGL texture memory sync on every render frame.
   // =========================================================================
   if (!AFRAME.components['play-gltf-video']) {
-    const videoElementCache = new Map();
-
     const unlockAllVideos = () => {
       videoElementCache.forEach((video) => {
         if (video) {
@@ -378,7 +704,17 @@ if (typeof AFRAME !== 'undefined') {
         playing: { type: 'boolean', default: true },
         muted: { type: 'boolean', default: false },
         targetMesh: { type: 'string', default: 'auto' },
-        flipX: { type: 'boolean', default: false }
+        flipX: { type: 'boolean', default: false },
+        videoScale: { type: 'number', default: 1.0 },
+        videoOffsetX: { type: 'number', default: 0.0 },
+        videoOffsetY: { type: 'number', default: 0.0 },
+        videoOffsetZ: { type: 'number', default: 0.0 },
+        videoRotation: { type: 'number', default: 0.0 },
+        videoTextureRepeatX: { type: 'number', default: 1.0 },
+        videoTextureRepeatY: { type: 'number', default: 1.0 },
+        videoTextureOffsetX: { type: 'number', default: 0.0 },
+        videoTextureOffsetY: { type: 'number', default: 0.0 },
+        aspectRatio: { type: 'string', default: '16:9' }
       },
       init: function () {
         this.videos = [];
@@ -495,8 +831,20 @@ if (typeof AFRAME !== 'undefined') {
         }
       },
       update: function (oldData) {
-        if (!oldData || oldData.src !== this.data.src || oldData.targetMesh !== this.data.targetMesh || oldData.flipX !== this.data.flipX) {
+        if (!oldData || oldData.src !== this.data.src || oldData.targetMesh !== this.data.targetMesh || oldData.flipX !== this.data.flipX || oldData.aspectRatio !== this.data.aspectRatio) {
           this.applyVideo();
+        } else if (
+          oldData && (
+            oldData.videoTextureRepeatX !== this.data.videoTextureRepeatX ||
+            oldData.videoTextureRepeatY !== this.data.videoTextureRepeatY ||
+            oldData.videoTextureOffsetX !== this.data.videoTextureOffsetX ||
+            oldData.videoTextureOffsetY !== this.data.videoTextureOffsetY ||
+            oldData.videoRotation !== this.data.videoRotation
+          )
+        ) {
+          if (this.videoTextures) {
+            this.videoTextures.forEach((tex) => this.applyTextureFlip(tex, this.data.flipX));
+          }
         }
         if (oldData && oldData.muted !== this.data.muted) {
           this.setMuted(this.data.muted);
@@ -526,15 +874,19 @@ if (typeof AFRAME !== 'undefined') {
       applyTextureFlip: function (tex, isFlipX) {
         if (!tex) return;
         const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
-        if (isFlipX) {
-          tex.wrapS = THREE_LIB.RepeatWrapping;
-          tex.repeat.set(-1, 1);
-          tex.offset.set(1, 0);
-        } else {
-          tex.wrapS = THREE_LIB.ClampToEdgeWrapping;
-          tex.repeat.set(1, 1);
-          tex.offset.set(0, 0);
-        }
+        const flip = isFlipX !== undefined ? isFlipX : this.data.flipX;
+        const repX = (this.data.videoTextureRepeatX || 1.0) * (flip ? -1 : 1);
+        const repY = this.data.videoTextureRepeatY || 1.0;
+        const offX = (this.data.videoTextureOffsetX || 0.0) + (flip ? 1.0 : 0.0);
+        const offY = this.data.videoTextureOffsetY || 0.0;
+        const rot = ((this.data.videoRotation || 0.0) * Math.PI) / 180;
+
+        tex.wrapS = THREE_LIB.RepeatWrapping;
+        tex.wrapT = THREE_LIB.RepeatWrapping;
+        tex.repeat.set(repX, repY);
+        tex.offset.set(offX, offY);
+        tex.center.set(0.5, 0.5);
+        tex.rotation = rot;
         tex.matrixAutoUpdate = true;
         if (tex.updateMatrix) tex.updateMatrix();
         tex.needsUpdate = true;
@@ -675,22 +1027,47 @@ if (typeof AFRAME !== 'undefined') {
 
         // 5. Create CSS3DObject
         const cssObject = new CSS3DObject(containerDiv);
-        let baseScale = 0.003125;
-        if (this.cssTargetNode && this.cssTargetNode.geometry) {
-          if (!this.cssTargetNode.geometry.boundingBox) this.cssTargetNode.geometry.computeBoundingBox();
-          if (this.cssTargetNode.geometry.boundingBox) {
-            const bSize = new THREE_LIB.Vector3();
-            this.cssTargetNode.geometry.boundingBox.getSize(bSize);
-            const maxDim = Math.max(bSize.x, bSize.y);
-            if (maxDim > 0.05) {
-              baseScale = (maxDim * 0.85) / iframeW;
-            }
-          }
-        }
+        const slotIdx = typeof this.cssTargetNode?.userData?.videoTargetMaterialIndex === 'number'
+          ? this.cssTargetNode.userData.videoTargetMaterialIndex
+          : 0;
+        const frame = computeGeometrySurfaceFrame(this.cssTargetNode, slotIdx);
+        const targetW = Math.max(frame.size.x, 0.05);
+        const baseScale = targetW / iframeW;
+
         cssObject.scale.set(baseScale, baseScale, baseScale);
+        const spawnPos = frame.worldCenter.clone().addScaledVector(frame.worldNormal, 0.005);
+        cssObject.position.copy(spawnPos);
+        cssObject.quaternion.copy(frame.worldQuat);
+
         cssScene.add(cssObject);
         this.cssObject = cssObject;
         this.baseScale = baseScale;
+
+        // Wire targetFound and targetLost tracking sync listeners
+        if (!this._onTargetFound) {
+          this._onTargetFound = () => {
+            this.isTargetLost = false;
+            if (this.cssObject) {
+              this.cssObject.visible = true;
+              if (this.cssObject.element) this.cssObject.element.style.display = 'block';
+            }
+          };
+          this._onTargetLost = () => {
+            this.isTargetLost = true;
+            if (this.cssObject) {
+              this.cssObject.visible = false;
+              if (this.cssObject.element) this.cssObject.element.style.display = 'none';
+            }
+          };
+          sceneEl.addEventListener('targetFound', this._onTargetFound);
+          sceneEl.addEventListener('targetLost', this._onTargetLost);
+          this.el.addEventListener('targetFound', this._onTargetFound);
+          this.el.addEventListener('targetLost', this._onTargetLost);
+          if (this.el.parentElement) {
+            this.el.parentElement.addEventListener('targetFound', this._onTargetFound);
+            this.el.parentElement.addEventListener('targetLost', this._onTargetLost);
+          }
+        }
 
         // 6. Style backing WebGL screen mesh so it acts as bezel
         if (this.cssTargetNode && this.cssTargetNode.material) {
@@ -720,8 +1097,55 @@ if (typeof AFRAME !== 'undefined') {
         if (!obj) return;
 
         const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
+
+        // Clean up previously active videos and textures on this component
+        if (this.videos && this.videos.length > 0) {
+          this.videos.forEach((v) => {
+            try {
+              v.pause();
+              v.removeAttribute('src');
+              v.load();
+              v.remove();
+            } catch {}
+          });
+        }
+        if (this.videoTextures && this.videoTextures.length > 0) {
+          this.videoTextures.forEach((t) => {
+            try { t.dispose(); } catch {}
+          });
+        }
         this.videos = [];
         this.videoTextures = [];
+
+        // If src is explicitly empty, tear down any video overlays / textures completely
+        if (!this.data.src || this.data.src.trim() === '') {
+          if (this.cssObject && this.el.sceneEl?._css3dScene) {
+            try { this.el.sceneEl._css3dScene.remove(this.cssObject); } catch {}
+            this.cssObject = null;
+          }
+          if (this.youtubeIframe && this.youtubeIframe.parentElement) {
+            try { this.youtubeIframe.parentElement.remove(); } catch {}
+            this.youtubeIframe = null;
+          }
+          obj.traverse((node) => {
+            if (node.isMesh && node.material) {
+              const materials = Array.isArray(node.material) ? node.material : [node.material];
+              materials.forEach((mat) => {
+                if (mat.map && (mat.map.isVideoTexture || mat.map.image instanceof HTMLVideoElement)) {
+                  try { mat.map.dispose(); } catch {}
+                  mat.map = null;
+                  mat.needsUpdate = true;
+                }
+                if (mat.emissiveMap && (mat.emissiveMap.isVideoTexture || mat.emissiveMap.image instanceof HTMLVideoElement)) {
+                  try { mat.emissiveMap.dispose(); } catch {}
+                  mat.emissiveMap = null;
+                  mat.needsUpdate = true;
+                }
+              });
+            }
+          });
+          return;
+        }
 
         const targetParam = (this.data.targetMesh || 'auto').trim().toLowerCase();
         const screenKeywords = ['video', 'screen', 'display', 'cinema', 'videomat', 'screenmat'];
@@ -757,17 +1181,20 @@ if (typeof AFRAME !== 'undefined') {
         });
 
         let finalTargetMeshes = matchedMeshes;
-        if (finalTargetMeshes.length === 0) {
-          finalTargetMeshes = autoScreenMeshes;
+        if (finalTargetMeshes.length === 0 && targetParam === 'auto') {
+          finalTargetMeshes = autoScreenMeshes.length > 0 ? [autoScreenMeshes[0]] : [];
         }
 
         // Check for YouTube video source (via component src, or embedded model userData)
         let ytId = '';
-        let ytTargetNode = finalTargetMeshes[0] || obj;
-        let ytAspect = '16:9';
+        let ytTargetNode = finalTargetMeshes[0] || (targetParam === 'all' ? obj : null);
+        let ytAspect = this.data.aspectRatio || '16:9';
 
         if (this.data.src && isYouTubeUrl(this.data.src)) {
           ytId = extractYouTubeId(this.data.src);
+          if (isYouTubeShortUrl(this.data.src) && (!this.data.aspectRatio || this.data.aspectRatio === '16:9')) {
+            ytAspect = '9:16';
+          }
         }
 
         // 1. Check root group/model obj.userData
@@ -779,9 +1206,11 @@ if (typeof AFRAME !== 'undefined') {
           } else if (rootData.videoUrl && isYouTubeUrl(rootData.videoUrl)) {
             ytId = extractYouTubeId(rootData.videoUrl);
             if (rootData.aspectRatio) ytAspect = rootData.aspectRatio;
+            else if (isYouTubeShortUrl(rootData.videoUrl)) ytAspect = '9:16';
           } else if (rootData.videoSrc && isYouTubeUrl(rootData.videoSrc)) {
             ytId = extractYouTubeId(rootData.videoSrc);
             if (rootData.aspectRatio) ytAspect = rootData.aspectRatio;
+            else if (isYouTubeShortUrl(rootData.videoSrc)) ytAspect = '9:16';
           }
 
           if (ytId && (rootData.videoTargetMeshName || rootData.videoTargetMeshUuid)) {
@@ -808,10 +1237,12 @@ if (typeof AFRAME !== 'undefined') {
               ytId = extractYouTubeId(uData.videoUrl);
               ytTargetNode = node.isMesh ? node : (node.children?.find((c) => c.isMesh) || node);
               if (uData.aspectRatio) ytAspect = uData.aspectRatio;
+              else if (isYouTubeShortUrl(uData.videoUrl)) ytAspect = '9:16';
             } else if (uData.videoSrc && isYouTubeUrl(uData.videoSrc)) {
               ytId = extractYouTubeId(uData.videoSrc);
               ytTargetNode = node.isMesh ? node : (node.children?.find((c) => c.isMesh) || node);
               if (uData.aspectRatio) ytAspect = uData.aspectRatio;
+              else if (isYouTubeShortUrl(uData.videoSrc)) ytAspect = '9:16';
             } else if (node.isMesh && node.material) {
               const mats = Array.isArray(node.material) ? node.material : [node.material];
               for (const m of mats) {
@@ -825,11 +1256,13 @@ if (typeof AFRAME !== 'undefined') {
                   ytId = extractYouTubeId(mData.videoUrl);
                   ytTargetNode = node;
                   if (mData.aspectRatio) ytAspect = mData.aspectRatio;
+                  else if (isYouTubeShortUrl(mData.videoUrl)) ytAspect = '9:16';
                   break;
                 } else if (mData.videoSrc && isYouTubeUrl(mData.videoSrc)) {
                   ytId = extractYouTubeId(mData.videoSrc);
                   ytTargetNode = node;
                   if (mData.aspectRatio) ytAspect = mData.aspectRatio;
+                  else if (isYouTubeShortUrl(mData.videoSrc)) ytAspect = '9:16';
                   break;
                 }
               }
@@ -837,11 +1270,11 @@ if (typeof AFRAME !== 'undefined') {
           });
         }
 
-        if (ytId && ytTargetNode === obj && finalTargetMeshes.length > 0) {
+        if (ytId && !ytTargetNode && finalTargetMeshes.length > 0) {
           ytTargetNode = finalTargetMeshes[0];
         }
 
-        if (ytId) {
+        if (ytId && ytTargetNode) {
           this.applyCSS3DYouTube(ytId, ytTargetNode, ytAspect);
           return;
         } else if (this.cssObject && this.el.sceneEl?._css3dScene) {
@@ -868,6 +1301,23 @@ if (typeof AFRAME !== 'undefined') {
             this.videos.push(video);
             this.videoTextures.push(videoTexture);
 
+            // Ensure non-target meshes have any video texture stripped
+            allMeshes.forEach((node) => {
+              if (!finalTargetMeshes.includes(node)) {
+                const materials = Array.isArray(node.material) ? node.material : [node.material];
+                materials.forEach((mat) => {
+                  if (mat.map && (mat.map.isVideoTexture || mat.map.image instanceof HTMLVideoElement)) {
+                    mat.map = null;
+                    mat.needsUpdate = true;
+                  }
+                  if (mat.emissiveMap && (mat.emissiveMap.isVideoTexture || mat.emissiveMap.image instanceof HTMLVideoElement)) {
+                    mat.emissiveMap = null;
+                    mat.needsUpdate = true;
+                  }
+                });
+              }
+            });
+
             finalTargetMeshes.forEach((node) => {
               const materials = Array.isArray(node.material) ? node.material : [node.material];
               const targetSlot = typeof node.userData?.videoTargetMaterialIndex === 'number'
@@ -882,6 +1332,9 @@ if (typeof AFRAME !== 'undefined') {
                 if (isTarget) {
                   mat.map = videoTexture;
                   mat.emissiveMap = videoTexture;
+                  if (mat.color && typeof mat.color.set === 'function') {
+                    mat.color.set(0xffffff);
+                  }
                   if (mat.emissive && typeof mat.emissive.set === 'function') {
                     mat.emissive.set(0xffffff);
                   }
@@ -893,150 +1346,179 @@ if (typeof AFRAME !== 'undefined') {
           }
         }
 
-        // 2. Discover embedded video textures, node.userData video URLs, and texture video URIs
-        obj.traverse((node) => {
-          if (node.isMesh && node.material) {
-            const materials = Array.isArray(node.material) ? node.material : [node.material];
-            
-            // Check if node or material has a videoUrl in userData (e.g. from Studio 4D*4 export)
-            const nodeVideoUrl = node.userData?.videoUrl || node.userData?.videoSrc || node.userData?.video ||
-              materials.find((m) => m?.userData?.videoUrl)?.userData?.videoUrl || '';
+        // 2. Discover embedded video textures, node.userData video URLs, and texture video URIs (only if no explicit src)
+        if (!this.data.src || this.data.src.trim() === '') {
+          obj.traverse((node) => {
+            if (node.isMesh && node.material) {
+              const materials = Array.isArray(node.material) ? node.material : [node.material];
+              
+              // Check if node or material has a videoUrl in userData (e.g. from Studio 4D*4 export)
+              const nodeVideoUrl = node.userData?.videoUrl || node.userData?.videoSrc || node.userData?.video ||
+                materials.find((m) => m?.userData?.videoUrl)?.userData?.videoUrl || '';
 
-            if (nodeVideoUrl && (!this.data.src || this.data.src.trim() === '')) {
-              const video = createOrActivateVideoElement(nodeVideoUrl);
-              if (video) {
-                const vTex = new THREE_LIB.VideoTexture(video);
-                if (THREE_LIB.SRGBColorSpace !== undefined) {
-                  vTex.colorSpace = THREE_LIB.SRGBColorSpace;
-                }
-                vTex.minFilter = THREE_LIB.LinearFilter;
-                vTex.magFilter = THREE_LIB.LinearFilter;
-                vTex.generateMipmaps = false;
-                vTex.flipY = false;
-                this.applyTextureFlip(vTex, isFlip);
+              if (nodeVideoUrl) {
+                const video = createOrActivateVideoElement(nodeVideoUrl);
+                if (video) {
+                  const vTex = new THREE_LIB.VideoTexture(video);
+                  if (THREE_LIB.SRGBColorSpace !== undefined) {
+                    vTex.colorSpace = THREE_LIB.SRGBColorSpace;
+                  }
+                  vTex.minFilter = THREE_LIB.LinearFilter;
+                  vTex.magFilter = THREE_LIB.LinearFilter;
+                  vTex.generateMipmaps = false;
+                  vTex.flipY = false;
+                  this.applyTextureFlip(vTex, isFlip);
 
-                const targetSlot = typeof node.userData?.videoTargetMaterialIndex === 'number'
-                  ? node.userData.videoTargetMaterialIndex
-                  : null;
+                  const targetSlot = typeof node.userData?.videoTargetMaterialIndex === 'number'
+                    ? node.userData.videoTargetMaterialIndex
+                    : null;
 
-                materials.forEach((mat, idx) => {
-                  const isTarget = targetSlot !== null
-                    ? idx === targetSlot
-                    : (mat?.userData?.hasVideo || mat?.userData?.isVideoLayer || materials.length === 1 || (node.userData?.archetype === 'VIDEO_SCREEN' && idx === 4));
+                  materials.forEach((mat, idx) => {
+                    const isTarget = targetSlot !== null
+                      ? idx === targetSlot
+                      : (mat?.userData?.hasVideo || mat?.userData?.isVideoLayer || materials.length === 1 || (node.userData?.archetype === 'VIDEO_SCREEN' && idx === 4));
 
-                  if (isTarget) {
-                    mat.map = vTex;
-                    mat.emissiveMap = vTex;
-                    if (mat.emissive && typeof mat.emissive.set === 'function') {
-                      mat.emissive.set(0xffffff);
+                    if (isTarget) {
+                      mat.map = vTex;
+                      mat.emissiveMap = vTex;
+                      if (mat.color && typeof mat.color.set === 'function') {
+                        mat.color.set(0xffffff);
+                      }
+                      if (mat.emissive && typeof mat.emissive.set === 'function') {
+                        mat.emissive.set(0xffffff);
+                      }
+                      mat.emissiveIntensity = 0.4;
+                      mat.needsUpdate = true;
                     }
-                    mat.emissiveIntensity = 0.4;
-                    mat.needsUpdate = true;
+                  });
+
+                  if (!this.videos.includes(video)) this.videos.push(video);
+                  if (!this.videoTextures.includes(vTex)) this.videoTextures.push(vTex);
+                }
+              }
+
+              materials.forEach((mat) => {
+                const maps = [
+                  'map',
+                  'emissiveMap',
+                  'alphaMap',
+                  'roughnessMap',
+                  'metalnessMap',
+                  'aoMap',
+                  'bumpMap',
+                  'normalMap',
+                  'displacementMap'
+                ];
+                maps.forEach((mapName) => {
+                  if (mat[mapName]) {
+                    const tex = mat[mapName];
+                    let video = null;
+                    let vTex = null;
+
+                    // Case A: Texture is already a VideoTexture or image is a video tag
+                    if (tex.image && (tex.image.tagName === 'VIDEO' || tex.image instanceof HTMLVideoElement)) {
+                      video = createOrActivateVideoElement(tex.image);
+                      vTex = tex;
+                    } else if (tex.source && tex.source.data && (tex.source.data.tagName === 'VIDEO' || tex.source.data instanceof HTMLVideoElement)) {
+                      video = createOrActivateVideoElement(tex.source.data);
+                      vTex = tex;
+                    } else if (mat.userData && mat.userData.video) {
+                      video = createOrActivateVideoElement(mat.userData.video);
+                      vTex = tex;
+                    } else if (tex.isVideoTexture && tex.image) {
+                      video = createOrActivateVideoElement(tex.image);
+                      vTex = tex;
+                    }
+                    // Case B: Texture image URL is a video file (.mp4, .webm, .mov, etc.)
+                    else if (tex.image && typeof tex.image.src === 'string' && /\.(mp4|webm|mov|ogg)($|\?)/i.test(tex.image.src)) {
+                      video = createOrActivateVideoElement(tex.image.src);
+                      vTex = new THREE_LIB.VideoTexture(video);
+                      if (THREE_LIB.SRGBColorSpace !== undefined) {
+                        vTex.colorSpace = THREE_LIB.SRGBColorSpace;
+                      }
+                      vTex.minFilter = THREE_LIB.LinearFilter;
+                      vTex.magFilter = THREE_LIB.LinearFilter;
+                      vTex.generateMipmaps = false;
+                      vTex.flipY = false;
+                      mat[mapName] = vTex;
+                      mat.needsUpdate = true;
+                    }
+
+                    if (video && vTex) {
+                      this.applyTextureFlip(vTex, isFlip);
+                      if (!this.videos.includes(video)) {
+                        this.videos.push(video);
+                      }
+                      if (!this.videoTextures.includes(vTex)) {
+                        this.videoTextures.push(vTex);
+                      }
+                      if (this.data.playing) {
+                        video.play().catch(() => {});
+                      }
+                    }
                   }
                 });
-
-                if (!this.videos.includes(video)) this.videos.push(video);
-                if (!this.videoTextures.includes(vTex)) this.videoTextures.push(vTex);
-              }
-            }
-
-            materials.forEach((mat) => {
-              const maps = [
-                'map',
-                'emissiveMap',
-                'alphaMap',
-                'roughnessMap',
-                'metalnessMap',
-                'aoMap',
-                'bumpMap',
-                'normalMap',
-                'displacementMap'
-              ];
-              maps.forEach((mapName) => {
-                if (mat[mapName]) {
-                  const tex = mat[mapName];
-                  let video = null;
-                  let vTex = null;
-
-                  // Case A: Texture is already a VideoTexture or image is a video tag
-                  if (tex.image && (tex.image.tagName === 'VIDEO' || tex.image instanceof HTMLVideoElement)) {
-                    video = createOrActivateVideoElement(tex.image);
-                    vTex = tex;
-                  } else if (tex.source && tex.source.data && (tex.source.data.tagName === 'VIDEO' || tex.source.data instanceof HTMLVideoElement)) {
-                    video = createOrActivateVideoElement(tex.source.data);
-                    vTex = tex;
-                  } else if (mat.userData && mat.userData.video) {
-                    video = createOrActivateVideoElement(mat.userData.video);
-                    vTex = tex;
-                  } else if (tex.isVideoTexture && tex.image) {
-                    video = createOrActivateVideoElement(tex.image);
-                    vTex = tex;
-                  }
-                  // Case B: Texture image URL is a video file (.mp4, .webm, .mov, etc.)
-                  else if (tex.image && typeof tex.image.src === 'string' && /\.(mp4|webm|mov|ogg)($|\?)/i.test(tex.image.src)) {
-                    video = createOrActivateVideoElement(tex.image.src);
-                    vTex = new THREE_LIB.VideoTexture(video);
-                    if (THREE_LIB.SRGBColorSpace !== undefined) {
-                      vTex.colorSpace = THREE_LIB.SRGBColorSpace;
-                    }
-                    vTex.minFilter = THREE_LIB.LinearFilter;
-                    vTex.magFilter = THREE_LIB.LinearFilter;
-                    vTex.generateMipmaps = false;
-                    vTex.flipY = false;
-                    mat[mapName] = vTex;
-                    mat.needsUpdate = true;
-                  }
-
-                  if (video && vTex) {
-                    this.applyTextureFlip(vTex, isFlip);
-                    if (!this.videos.includes(video)) {
-                      this.videos.push(video);
-                    }
-                    if (!this.videoTextures.includes(vTex)) {
-                      this.videoTextures.push(vTex);
-                    }
-                    if (this.data.playing) {
-                      video.play().catch(() => {});
-                    }
-                  }
-                }
               });
-            });
-          }
-        });
+            }
+          });
+        }
       },
       tick: function () {
         // 1. Synchronize CSS3D YouTube overlay with target 3D screen mesh
         if (this.cssObject && this.cssTargetNode) {
           const sceneEl = this.el.sceneEl;
           const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
+
           if (!this._tempWorldPos) {
             this._tempWorldPos = new THREE_LIB.Vector3();
             this._tempWorldQuat = new THREE_LIB.Quaternion();
             this._tempWorldScale = new THREE_LIB.Vector3();
           }
 
-          this.cssTargetNode.getWorldPosition(this._tempWorldPos);
-          this.cssTargetNode.getWorldQuaternion(this._tempWorldQuat);
-          this.cssTargetNode.getWorldScale(this._tempWorldScale);
-
-          // If target has geometry, calculate bounding box center for accurate submesh surface alignment
-          if (this.cssTargetNode.geometry) {
-            if (!this.cssTargetNode.geometry.boundingBox) this.cssTargetNode.geometry.computeBoundingBox();
-            if (this.cssTargetNode.geometry.boundingBox) {
-              const geomCenter = new THREE_LIB.Vector3();
-              this.cssTargetNode.geometry.boundingBox.getCenter(geomCenter);
-              geomCenter.applyMatrix4(this.cssTargetNode.matrixWorld);
-              this._tempWorldPos.copy(geomCenter);
-            }
+          let target = this.cssTargetNode;
+          if (!target.isMesh) {
+            target.traverse?.((c) => {
+              if (!target.isMesh && c.isMesh && c.geometry) target = c;
+            });
           }
 
-          // Push slightly forward along target's local Z axis to eliminate z-fighting with the screen bezel
-          const offset = new THREE_LIB.Vector3(0, 0, 0.02 * Math.abs(this._tempWorldScale.z || 1)).applyQuaternion(this._tempWorldQuat);
-          this.cssObject.position.copy(this._tempWorldPos).add(offset);
-          this.cssObject.quaternion.copy(this._tempWorldQuat);
+          const slotIdx = typeof target.userData?.videoTargetMaterialIndex === 'number'
+            ? target.userData.videoTargetMaterialIndex
+            : 0;
+          const frame = computeGeometrySurfaceFrame(target, slotIdx);
 
-          const baseScale = this.baseScale || 0.003125;
+          // User adjustment controls
+          const uOffsetX = this.data.videoOffsetX !== undefined ? this.data.videoOffsetX : (target.userData?.videoOffsetX || 0);
+          const uOffsetY = this.data.videoOffsetY !== undefined ? this.data.videoOffsetY : (target.userData?.videoOffsetY || 0);
+          const uOffsetZ = this.data.videoOffsetZ !== undefined ? this.data.videoOffsetZ : (target.userData?.videoOffsetZ || 0);
+
+          // Position in exact 3D space: face center + normal clearance + in-plane offsets (tangent & bitangent)
+          const localPos = frame.localCenter.clone().addScaledVector(frame.localNormal, 0.005 + uOffsetZ);
+          localPos.addScaledVector(frame.localRight, uOffsetX);
+          localPos.addScaledVector(frame.localUp, uOffsetY);
+          localPos.applyMatrix4(target.matrixWorld);
+          this.cssObject.position.copy(localPos);
+
+          // Exact 3D orientation matching face surface normal and rotation
+          let quat = frame.worldQuat.clone();
+          const uRot = this.data.videoRotation !== undefined ? this.data.videoRotation : (target.userData?.videoRotation || 0);
+          if (uRot !== 0) {
+            const rotQuat = new THREE_LIB.Quaternion().setFromAxisAngle(
+              frame.worldNormal,
+              (uRot * Math.PI) / 180
+            );
+            quat = rotQuat.multiply(quat);
+          }
+          this.cssObject.quaternion.copy(quat);
+
+          target.getWorldScale(this._tempWorldScale);
+
+          // User scale multiplier
+          const uScale = (this.data.videoScale !== undefined && this.data.videoScale > 0)
+            ? this.data.videoScale
+            : (target.userData?.videoScale || 1.0);
+          const baseScale = (this.baseScale || (Math.max(frame.size.x, 0.05) / 640)) * uScale;
+
           this.cssObject.scale.set(
             baseScale * Math.abs(this._tempWorldScale.x || 1),
             baseScale * Math.abs(this._tempWorldScale.y || 1),
@@ -1044,6 +1526,11 @@ if (typeof AFRAME !== 'undefined') {
           );
 
           if (sceneEl && sceneEl._css3dRenderer && sceneEl._css3dScene && sceneEl.camera) {
+            // Force world matrix and inverse updates on A-Frame camera so CSS3DRenderer projections match WebGL identically
+            sceneEl.camera.updateWorldMatrix(true, false);
+            if (sceneEl.camera.matrixWorldInverse) {
+              sceneEl.camera.matrixWorldInverse.copy(sceneEl.camera.matrixWorld).invert();
+            }
             sceneEl._css3dRenderer.render(sceneEl._css3dScene, sceneEl.camera);
           }
         }
@@ -1077,9 +1564,21 @@ if (typeof AFRAME !== 'undefined') {
           if (this.onSetMute) {
             sceneEl.removeEventListener('set-video-mute', this.onSetMute);
           }
+          if (this._onTargetFound && this._onTargetLost) {
+            sceneEl.removeEventListener('targetFound', this._onTargetFound);
+            sceneEl.removeEventListener('targetLost', this._onTargetLost);
+          }
           if (this.cssObject && sceneEl._css3dScene) {
             sceneEl._css3dScene.remove(this.cssObject);
             this.cssObject = null;
+          }
+        }
+        if (this._onTargetFound && this._onTargetLost) {
+          this.el.removeEventListener('targetFound', this._onTargetFound);
+          this.el.removeEventListener('targetLost', this._onTargetLost);
+          if (this.el.parentElement) {
+            this.el.parentElement.removeEventListener('targetFound', this._onTargetFound);
+            this.el.parentElement.removeEventListener('targetLost', this._onTargetLost);
           }
         }
         if (this.youtubeIframe && this.youtubeIframe.parentElement) {
