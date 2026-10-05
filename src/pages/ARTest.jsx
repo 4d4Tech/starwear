@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import 'aframe';
 import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import BuyNowButton from '../components/BuyNowButton';
 import { db, storage, functions, analytics } from '../firebase';
 import { doc, getDoc, getDocFromServer, setDoc, collection, getDocs } from 'firebase/firestore';
@@ -632,6 +633,118 @@ const ARTest = () => {
     return () => window.removeEventListener('starwear-video-mute-status', handleMuteStatus);
   }, []);
 
+  // OrbitControls & Camera References (Controlled like ProductViewer)
+  const controlsRef = useRef(null);
+  const cameraRef = useRef(null);
+  const defaultCamPosRef = useRef(new THREE.Vector3(0, 0.3, 2.5));
+  const defaultTargetRef = useRef(new THREE.Vector3(0, 0, 0));
+  const lastFramedModelKeyRef = useRef('');
+  const [cameraAutoRotate, setCameraAutoRotate] = useState(false);
+
+  // Helper to fetch active OrbitControls instance
+  const getOrbitControls = useCallback(() => {
+    if (controlsRef.current) return controlsRef.current;
+    if (typeof window !== 'undefined' && window.__arOrbitControls) {
+      controlsRef.current = window.__arOrbitControls;
+      return window.__arOrbitControls;
+    }
+    const cameraEl = document.getElementById('scene-camera');
+    if (cameraEl && cameraEl.orbitControls) {
+      controlsRef.current = cameraEl.orbitControls;
+      return cameraEl.orbitControls;
+    }
+    if (cameraEl && cameraEl.components && cameraEl.components['orbit-camera-controls']?.controls) {
+      controlsRef.current = cameraEl.components['orbit-camera-controls'].controls;
+      return controlsRef.current;
+    }
+    return null;
+  }, []);
+
+  const getThreeCamera = useCallback(() => {
+    if (cameraRef.current) return cameraRef.current;
+    if (typeof window !== 'undefined' && window.__arOrbitCamera) {
+      cameraRef.current = window.__arOrbitCamera;
+      return window.__arOrbitCamera;
+    }
+    const sceneEl = document.querySelector('a-scene');
+    const cam = sceneEl?.camera || document.getElementById('scene-camera')?.getObject3D('camera');
+    if (cam) cameraRef.current = cam;
+    return cam;
+  }, []);
+
+  const toggleCameraAutoRotate = () => {
+    setCameraAutoRotate((prev) => {
+      const next = !prev;
+      const controls = getOrbitControls();
+      if (controls) {
+        controls.autoRotate = next;
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const controls = getOrbitControls();
+    if (controls) {
+      controls.autoRotate = cameraAutoRotate;
+    }
+  }, [cameraAutoRotate, getOrbitControls]);
+
+  // Camera Smooth Transition Animation Helper (matching Studio4D4 viewport feel)
+  const cameraTransitionIdRef = useRef(null);
+
+  const transitionCamera = useCallback((toPos, toTarget, duration = 350) => {
+    if (cameraTransitionIdRef.current) {
+      cancelAnimationFrame(cameraTransitionIdRef.current);
+      cameraTransitionIdRef.current = null;
+    }
+
+    const camera = getThreeCamera();
+    const controls = getOrbitControls();
+    if (!camera) return;
+
+    if (!controls) {
+      camera.position.copy(toPos);
+      if (toTarget) camera.lookAt(toTarget);
+      camera.updateMatrixWorld();
+      return;
+    }
+
+    const startPos = camera.position.clone();
+    const startTarget = controls.target.clone();
+    const targetEnd = toTarget ? toTarget.clone() : startTarget.clone();
+    const startTime = performance.now();
+
+    const animateTransition = (currentTime) => {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1.0);
+      const ease = progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+      camera.position.lerpVectors(startPos, toPos, ease);
+      controls.target.lerpVectors(startTarget, targetEnd, ease);
+      camera.lookAt(controls.target);
+      controls.update();
+
+      if (progress < 1.0) {
+        cameraTransitionIdRef.current = requestAnimationFrame(animateTransition);
+      } else {
+        cameraTransitionIdRef.current = null;
+      }
+    };
+
+    cameraTransitionIdRef.current = requestAnimationFrame(animateTransition);
+  }, [getThreeCamera, getOrbitControls]);
+
+  useEffect(() => {
+    return () => {
+      if (cameraTransitionIdRef.current) {
+        cancelAnimationFrame(cameraTransitionIdRef.current);
+      }
+    };
+  }, []);
+
   // Video Layer & Local Asset Testing States
   const [videoMode, setVideoMode] = useState('webgl'); // 'webgl' | 'youtube'
   const [videoAspectRatio, setVideoAspectRatio] = useState('16:9'); // '16:9' | '9:16' | '21:9'
@@ -945,6 +1058,39 @@ const ARTest = () => {
       if (typeof applyFlipXToScene === 'function') {
         applyFlipXToScene(videoFlipX);
       }
+
+      // Compute bounding box and auto-frame camera distance (matching Studio4D4 studio angle)
+      if (model3D) {
+        const box = new THREE.Box3().setFromObject(model3D);
+        if (!box.isEmpty()) {
+          const size = box.getSize(new THREE.Vector3());
+          const maxDim = Math.max(size.x, size.y, size.z) || 1;
+          const fov = 45 * (Math.PI / 180);
+          let cameraDistance = Math.abs(maxDim / 2 / Math.tan(fov / 2)) * 1.5;
+          cameraDistance = Math.max(cameraDistance, 1.5);
+
+          // Studio4D4 camera perspective: elevated at ~18-20° above horizon
+          const initialCamPos = new THREE.Vector3(0, maxDim * 0.35, cameraDistance);
+          defaultCamPosRef.current.copy(initialCamPos);
+          defaultTargetRef.current.set(0, 0, 0);
+
+          const currentModelKey = localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || 'active-model';
+          if (lastFramedModelKeyRef.current !== currentModelKey) {
+            const controls = getOrbitControls();
+            const camera = getThreeCamera();
+            if (camera) {
+              camera.position.copy(initialCamPos);
+              camera.lookAt(0, 0, 0);
+              camera.updateMatrixWorld();
+              if (controls) {
+                controls.target.set(0, 0, 0);
+                controls.update();
+              }
+              lastFramedModelKeyRef.current = currentModelKey;
+            }
+          }
+        }
+      }
     };
 
     modelEl.addEventListener('model-loaded', handleLoaded);
@@ -955,13 +1101,17 @@ const ARTest = () => {
     return () => {
       modelEl.removeEventListener('model-loaded', handleLoaded);
     };
-  }, [localGlbUrl, arData, scanMeshes, videoFlipX]);
+  }, [localGlbUrl, arData, scanMeshes, videoFlipX, getOrbitControls, getThreeCamera]);
 
   // Click-to-Select 3D Mesh in Scene Viewer (Raycasting)
   useEffect(() => {
     let pointerDownPos = null;
 
     const handlePointerDown = (e) => {
+      if (cameraTransitionIdRef.current) {
+        cancelAnimationFrame(cameraTransitionIdRef.current);
+        cameraTransitionIdRef.current = null;
+      }
       if (e.button !== undefined && e.button !== 0) return;
       pointerDownPos = { x: e.clientX, y: e.clientY };
     };
@@ -1366,70 +1516,56 @@ const ARTest = () => {
     }
   };
 
-  // Direct Perspective View Angles Switcher (Front, Back, Left, Right, Top, Bottom)
-  const setCameraView = (viewName) => {
-    const sceneEl = document.querySelector('a-scene');
-    const cameraEl = document.getElementById('scene-camera') || (sceneEl && sceneEl.camera && sceneEl.camera.el);
-    if (!cameraEl) return;
+  // Direct Perspective View Angles Switcher (Perspective, Front, Back, Left, Right, Top, Bottom)
+  // Matching Studio4D4 viewport perspective and planar views with smooth transition
+  const setCameraView = useCallback((viewName) => {
+    const camera = getThreeCamera();
+    const controls = getOrbitControls();
+    if (!camera || !controls) return;
 
-    let posX = 0, posY = 0, posZ = 2.5;
-    let pitchDeg = 0, yawDeg = 0;
+    const target = controls.target ? controls.target.clone() : new THREE.Vector3(0, 0, 0);
+    const currentDist = camera.position.distanceTo(target);
+    const dist = Math.max(0.5, currentDist > 0.1 ? currentDist : defaultCamPosRef.current.length());
+
+    const newPos = new THREE.Vector3();
 
     switch (viewName) {
+      case 'perspective':
+      case 'reset':
+        target.copy(defaultTargetRef.current);
+        newPos.copy(defaultCamPosRef.current);
+        break;
       case 'front':
-        posX = 0; posY = 0; posZ = 2.5;
-        pitchDeg = 0; yawDeg = 0;
+        newPos.set(target.x, target.y, target.z + dist);
         break;
       case 'back':
-        posX = 0; posY = 0; posZ = -2.5;
-        pitchDeg = 0; yawDeg = 180;
+        newPos.set(target.x, target.y, target.z - dist);
         break;
       case 'left':
-        posX = -2.5; posY = 0; posZ = 0;
-        pitchDeg = 0; yawDeg = -90;
+        newPos.set(target.x - dist, target.y, target.z);
         break;
       case 'right':
-        posX = 2.5; posY = 0; posZ = 0;
-        pitchDeg = 0; yawDeg = 90;
+        newPos.set(target.x + dist, target.y, target.z);
         break;
       case 'top':
-        posX = 0; posY = 2.5; posZ = 0.0001;
-        pitchDeg = -89.9; yawDeg = 0;
+        newPos.set(target.x, target.y + dist, target.z + 0.0001);
         break;
       case 'bottom':
-        posX = 0; posY = -2.5; posZ = 0.0001;
-        pitchDeg = 89.9; yawDeg = 0;
+        newPos.set(target.x, target.y - dist, target.z + 0.0001);
         break;
-      case 'reset':
       default:
-        posX = 0; posY = 0; posZ = 2.5;
-        pitchDeg = 0; yawDeg = 0;
+        target.copy(defaultTargetRef.current);
+        newPos.copy(defaultCamPosRef.current);
         break;
     }
 
-    cameraEl.setAttribute('position', `${posX} ${posY} ${posZ}`);
-    if (cameraEl.object3D) {
-      cameraEl.object3D.position.set(posX, posY, posZ);
-    }
-
-    // Reset internal pitch & yaw of look-controls
-    const lookControls = cameraEl.components && cameraEl.components['look-controls'];
-    if (lookControls) {
-      if (lookControls.pitchObject) {
-        lookControls.pitchObject.rotation.x = THREE.MathUtils.degToRad(pitchDeg);
-      }
-      if (lookControls.yawObject) {
-        lookControls.yawObject.rotation.y = THREE.MathUtils.degToRad(yawDeg);
-      }
-    }
-  };
+    // Smoothly transition camera to new perspective, matching Studio4D4 feel
+    transitionCamera(newPos, target, 350);
+  }, [getThreeCamera, getOrbitControls, transitionCamera]);
 
   // Reposition camera in front of a specific 3D mesh object (frontal view)
+  // and bind OrbitControls target directly to that mesh's worldCenter (matching Studio4D4)
   const focusCameraOnMesh = useCallback((uuid, meshName) => {
-    const sceneEl = document.querySelector('a-scene');
-    const cameraEl = document.getElementById('scene-camera') || (sceneEl && sceneEl.camera && sceneEl.camera.el);
-    if (!cameraEl) return;
-
     const modelEl = document.getElementById('ar-model');
     const model3D = modelEl?.getObject3D('mesh');
     if (!model3D) return;
@@ -1467,41 +1603,28 @@ const ARTest = () => {
     // Camera position placed along outward normal vector from object's center
     const cameraPos = worldCenter.clone().addScaledVector(normal, dist);
 
-    // Direction vector from camera to object center (-normal)
-    const viewDir = new THREE.Vector3().subVectors(worldCenter, cameraPos).normalize();
-
-    // Compute pitch (vertical angle) and yaw (horizontal angle) for A-Frame look-controls
-    const pitchRad = Math.asin(Math.max(-1, Math.min(1, viewDir.y)));
-    const pitchDeg = (pitchRad * 180) / Math.PI;
-
-    const yawRad = Math.atan2(-viewDir.x, -viewDir.z);
-    const yawDeg = (yawRad * 180) / Math.PI;
-
-    // Apply new position to camera
-    cameraEl.setAttribute('position', `${cameraPos.x.toFixed(4)} ${cameraPos.y.toFixed(4)} ${cameraPos.z.toFixed(4)}`);
-    if (cameraEl.object3D) {
-      cameraEl.object3D.position.copy(cameraPos);
-    }
-
-    // Update look-controls internal pitch & yaw objects to maintain exact orientation
-    const lookControls = cameraEl.components && cameraEl.components['look-controls'];
-    if (lookControls) {
-      if (lookControls.pitchObject) {
-        lookControls.pitchObject.rotation.x = THREE.MathUtils.degToRad(pitchDeg);
-      }
-      if (lookControls.yawObject) {
-        lookControls.yawObject.rotation.y = THREE.MathUtils.degToRad(yawDeg);
-      }
-    }
-
-    if (sceneEl.camera) {
-      sceneEl.camera.position.copy(cameraPos);
-      sceneEl.camera.updateMatrixWorld();
-    }
+    // Smoothly transition camera and bind target to mesh worldCenter
+    transitionCamera(cameraPos, worldCenter, 350);
 
     // Select the mesh so the user sees it highlighted and auto-spin pauses
     setSelectedMeshUuid(uuid);
-  }, []);
+  }, [transitionCamera]);
+
+  // Studio4D4 Keyboard Shortcut: 'F' key to Frame / Focus Selected Mesh (or Reset View if none selected)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+      if (e.key.toLowerCase() === 'f') {
+        if (selectedMeshUuid) {
+          focusCameraOnMesh(selectedMeshUuid);
+        } else {
+          setCameraView('reset');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedMeshUuid, focusCameraOnMesh, setCameraView]);
 
   // Handlers to update either individual mesh or root model transform/materials
   const handleRotationChange = (axis, deg) => {
@@ -2170,6 +2293,7 @@ const ARTest = () => {
       const file = e.target.files[0];
       setSelectedGlbFile(file);
       const url = URL.createObjectURL(file);
+      lastFramedModelKeyRef.current = '';
       setLocalGlbUrl(url);
       setLocalGlbName(file.name);
       setSelectedMeshUuid(null);
@@ -2393,6 +2517,7 @@ const ARTest = () => {
     setSelectedVideoFile(null);
     setSelectedGlbFile(null);
     setSelectedMeshUuid(null);
+    lastFramedModelKeyRef.current = '';
 
     try {
       const response = await fetch(`https://loomrouter-5qjmmwdvcq-uc.a.run.app/s/${batchId.trim()}?t=${Date.now()}`, {
@@ -5272,7 +5397,12 @@ const ARTest = () => {
       {/* ========================================================================= */}
       {/* 3D WEBGL VIEWER CANVAS                                                    */}
       {/* ========================================================================= */}
-      <div id="ar-scene-container" className="flex-1 relative bg-neutral-900 overflow-hidden cursor-crosshair">
+      <div
+        id="ar-scene-container"
+        className="flex-1 relative bg-neutral-900 overflow-hidden cursor-grab active:cursor-grabbing"
+        style={{ touchAction: 'none' }}
+        onContextMenu={(e) => e.preventDefault()}
+      >
         {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) ? (
           <a-scene
             key={localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath}
@@ -5285,9 +5415,14 @@ const ARTest = () => {
             fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
             style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
           >
-            <a-camera id="scene-camera" position="0 0 2.5" look-controls="enabled: true" wasd-controls="enabled: false">
+            <a-entity
+              id="scene-camera"
+              camera="active: true; fov: 45; near: 0.01; far: 1000"
+              position="0 0 0"
+              orbit-camera-controls={`enableDamping: true; dampingFactor: 0.08; screenSpacePanning: true; autoRotate: ${cameraAutoRotate}; autoRotateSpeed: 1.2; minDistance: 0.2; maxDistance: 100; enableRotate: true; enablePan: true; enableZoom: true; rotateSpeed: 1.0; zoomSpeed: 1.0; panSpeed: 1.0`}
+            >
               <a-light type="directional" color="#ffffff" intensity="1.2" position="0 0 1"></a-light>
-            </a-camera>
+            </a-entity>
 
             {/* Dynamic Lighting Rig */}
             <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
@@ -5330,16 +5465,24 @@ const ARTest = () => {
           )
         )}
 
-        {/* Interactive Camera View Angle Presets Toolbar */}
+        {/* Interactive Camera View Angle Presets Toolbar (Studio4D4 Style) */}
         {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-black/85 backdrop-blur-md border border-neutral-700/80 rounded-2xl p-1.5 flex items-center gap-1 shadow-2xl">
-            <span className="text-[10px] uppercase font-bold text-neutral-400 px-2 flex items-center gap-1">
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-xl p-1 flex items-center gap-1 shadow-2xl">
+            <span className="text-[10px] uppercase font-bold text-slate-400 px-2 flex items-center gap-1 font-mono">
               <span className="material-symbols-outlined text-sm text-indigo-400">videocam</span> Views
             </span>
             <button
               type="button"
+              onClick={() => setCameraView('perspective')}
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
+              title="Studio 3/4 Perspective View"
+            >
+              Perspective
+            </button>
+            <button
+              type="button"
               onClick={() => setCameraView('front')}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800/90 hover:bg-indigo-600 text-neutral-200 hover:text-white transition-all shadow-sm"
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
               title="Direct Front-Facing View"
             >
               Front
@@ -5347,7 +5490,7 @@ const ARTest = () => {
             <button
               type="button"
               onClick={() => setCameraView('back')}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800/90 hover:bg-indigo-600 text-neutral-200 hover:text-white transition-all shadow-sm"
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
               title="Back View"
             >
               Back
@@ -5355,7 +5498,7 @@ const ARTest = () => {
             <button
               type="button"
               onClick={() => setCameraView('left')}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800/90 hover:bg-indigo-600 text-neutral-200 hover:text-white transition-all shadow-sm"
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
               title="Left View"
             >
               Left
@@ -5363,7 +5506,7 @@ const ARTest = () => {
             <button
               type="button"
               onClick={() => setCameraView('right')}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800/90 hover:bg-indigo-600 text-neutral-200 hover:text-white transition-all shadow-sm"
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
               title="Right View"
             >
               Right
@@ -5371,7 +5514,7 @@ const ARTest = () => {
             <button
               type="button"
               onClick={() => setCameraView('top')}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800/90 hover:bg-indigo-600 text-neutral-200 hover:text-white transition-all shadow-sm"
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
               title="Top-Down View"
             >
               Top
@@ -5379,17 +5522,17 @@ const ARTest = () => {
             <button
               type="button"
               onClick={() => setCameraView('bottom')}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-neutral-800/90 hover:bg-indigo-600 text-neutral-200 hover:text-white transition-all shadow-sm"
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
               title="Bottom-Up View"
             >
               Bottom
             </button>
-            <div className="w-[1px] h-4 bg-neutral-700 mx-0.5"></div>
+            <div className="w-[1px] h-4 bg-slate-700 mx-0.5"></div>
             <button
               type="button"
               onClick={() => setCameraView('reset')}
               className="px-2 py-1 text-xs font-semibold rounded-lg bg-indigo-950/70 hover:bg-indigo-900 border border-indigo-500/40 text-indigo-200 hover:text-white transition-all flex items-center gap-1"
-              title="Reset View to Center"
+              title="Reset View to Studio Perspective (F)"
             >
               <span className="material-symbols-outlined text-xs">restart_alt</span>
             </button>
@@ -5490,6 +5633,80 @@ const ARTest = () => {
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Bottom Floating Interactive Control Pill (matching ProductViewer) */}
+        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 bg-black/85 backdrop-blur-lg px-3 py-1.5 rounded-full border border-white/15 shadow-2xl">
+            <button
+              type="button"
+              onClick={toggleCameraAutoRotate}
+              className={`px-3 py-1.5 rounded-full text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                cameraAutoRotate
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                  : 'text-neutral-400 hover:text-white hover:bg-white/10'
+              }`}
+              title="Toggle 360 Auto-Rotation"
+            >
+              <span className={`material-symbols-outlined text-sm ${cameraAutoRotate ? 'animate-spin' : ''}`} style={{ animationDuration: '6s' }}>
+                sync
+              </span>
+              <span>{cameraAutoRotate ? 'Rotating' : 'Paused'}</span>
+            </button>
+
+            <div className="w-px h-4 bg-white/20"></div>
+
+            <button
+              type="button"
+              onClick={() => setCameraView('reset')}
+              className="px-2.5 py-1.5 rounded-full text-[11px] font-mono text-neutral-300 hover:text-white hover:bg-white/10 flex items-center gap-1 transition-all cursor-pointer"
+              title="Reset Front Center Framing"
+            >
+              <span className="material-symbols-outlined text-sm">center_focus_strong</span>
+              <span>Reset</span>
+            </button>
+
+            <div className="w-px h-4 bg-white/20"></div>
+
+            <button
+              type="button"
+              onClick={() => setMatWireframe((prev) => !prev)}
+              className={`px-2.5 py-1.5 rounded-full text-[11px] font-mono flex items-center gap-1 transition-all cursor-pointer ${
+                matWireframe
+                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
+                  : 'text-neutral-400 hover:text-white hover:bg-white/10'
+              }`}
+              title="Toggle Wireframe Mesh"
+            >
+              <span className="material-symbols-outlined text-sm">grid_view</span>
+              <span>Wireframe</span>
+            </button>
+
+            {batchId && (
+              <>
+                <div className="w-px h-4 bg-white/20"></div>
+                <a
+                  href={`/ar/${batchId}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 rounded-full text-[11px] font-mono font-bold bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-500 hover:to-indigo-500 text-white flex items-center gap-1 shadow-md transition-all cursor-pointer"
+                  title="Launch Live WebAR Camera on Mobile"
+                >
+                  <span className="material-symbols-outlined text-sm">view_in_ar</span>
+                  <span>Try In AR</span>
+                </a>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Subtle Bottom Drag Hint */}
+        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
+          <div className="absolute bottom-16 left-1/2 -translate-x-1/2 pointer-events-none opacity-40 hover:opacity-100 transition-opacity z-30">
+            <span className="text-[10px] font-mono tracking-widest text-neutral-400 uppercase bg-black/60 px-3 py-1 rounded-full backdrop-blur-sm border border-white/5">
+              🖱️ Left-Drag: Rotate • Right-Drag: Pan • Scroll: Zoom
+            </span>
           </div>
         )}
 

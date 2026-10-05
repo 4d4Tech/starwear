@@ -2,6 +2,7 @@ import 'aframe';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 // =========================================================================
 // YOUTUBE PARSING & DETECTION HELPERS (CORS SAFE)
@@ -328,6 +329,159 @@ export function purgeAllSceneVideoLayers(sceneEl) {
 const AFRAME = typeof window !== 'undefined' ? window.AFRAME : undefined;
 
 if (typeof AFRAME !== 'undefined') {
+  // =========================================================================
+  // ORBIT CAMERA CONTROLS COMPONENT (ROTATION, PAN, ZOOM, DAMPING)
+  // Replicates the exact Three.js OrbitControls experience from ProductViewer
+  // =========================================================================
+  if (!AFRAME.components['orbit-camera-controls']) {
+    AFRAME.registerComponent('orbit-camera-controls', {
+      schema: {
+        enableDamping: { type: 'boolean', default: true },
+        dampingFactor: { type: 'number', default: 0.08 },
+        screenSpacePanning: { type: 'boolean', default: true },
+        minDistance: { type: 'number', default: 0.2 },
+        maxDistance: { type: 'number', default: 100 },
+        autoRotate: { type: 'boolean', default: false },
+        autoRotateSpeed: { type: 'number', default: 1.2 },
+        enableRotate: { type: 'boolean', default: true },
+        enablePan: { type: 'boolean', default: true },
+        enableZoom: { type: 'boolean', default: true },
+        rotateSpeed: { type: 'number', default: 1.0 },
+        zoomSpeed: { type: 'number', default: 1.0 },
+        panSpeed: { type: 'number', default: 1.0 }
+      },
+
+      init: function () {
+        this.controls = null;
+
+        const setup = () => {
+          if (this.controls) return;
+          const sceneEl = this.el.sceneEl;
+          if (!sceneEl) return;
+
+          const canvas = sceneEl.canvas;
+          const camera = this.el.getObject3D('camera') || sceneEl.camera;
+          if (!canvas || !camera) {
+            setTimeout(setup, 50);
+            return;
+          }
+
+          // Ensure entity root stays at origin (0,0,0) so camera is purely in world space (matching Studio4D4)
+          if (this.el.object3D) {
+            this.el.object3D.position.set(0, 0, 0);
+            this.el.object3D.rotation.set(0, 0, 0);
+            this.el.object3D.scale.set(1, 1, 1);
+          }
+
+          // Studio4D4: Prevent native gesture interference
+          canvas.style.touchAction = 'none';
+
+          if (camera.position.lengthSq() < 0.001) {
+            camera.position.set(0, 1.2, 3.5);
+          }
+
+          const controls = new OrbitControls(camera, canvas);
+          controls.enableDamping = this.data.enableDamping;
+          controls.dampingFactor = this.data.dampingFactor;
+          controls.screenSpacePanning = this.data.screenSpacePanning;
+          controls.autoRotate = this.data.autoRotate;
+          controls.autoRotateSpeed = this.data.autoRotateSpeed;
+          controls.minDistance = this.data.minDistance;
+          controls.maxDistance = this.data.maxDistance;
+          controls.enableRotate = this.data.enableRotate;
+          controls.enablePan = this.data.enablePan;
+          controls.enableZoom = this.data.enableZoom;
+          controls.rotateSpeed = this.data.rotateSpeed;
+          controls.zoomSpeed = this.data.zoomSpeed;
+          controls.panSpeed = this.data.panSpeed;
+          controls.target.set(0, 0, 0);
+          controls.update();
+
+          this.controls = controls;
+          this.el.orbitControls = controls;
+
+          if (typeof window !== 'undefined') {
+            window.__arOrbitControls = controls;
+            window.__arOrbitCamera = camera;
+          }
+        };
+
+        const sceneEl = this.el.sceneEl;
+        if (sceneEl.hasLoaded && sceneEl.canvas) {
+          setup();
+        } else {
+          sceneEl.addEventListener('loaded', setup);
+          sceneEl.addEventListener('render-target-loaded', setup);
+          sceneEl.addEventListener('camera-set-active', setup);
+        }
+      },
+
+      update: function () {
+        if (!this.controls) return;
+        if (this.data.autoRotate !== undefined) {
+          this.controls.autoRotate = this.data.autoRotate;
+        }
+        if (this.data.autoRotateSpeed !== undefined) {
+          this.controls.autoRotateSpeed = this.data.autoRotateSpeed;
+        }
+        if (this.data.enableDamping !== undefined) {
+          this.controls.enableDamping = this.data.enableDamping;
+        }
+        if (this.data.dampingFactor !== undefined) {
+          this.controls.dampingFactor = this.data.dampingFactor;
+        }
+        if (this.data.screenSpacePanning !== undefined) {
+          this.controls.screenSpacePanning = this.data.screenSpacePanning;
+        }
+        if (this.data.minDistance !== undefined) {
+          this.controls.minDistance = this.data.minDistance;
+        }
+        if (this.data.maxDistance !== undefined) {
+          this.controls.maxDistance = this.data.maxDistance;
+        }
+        if (this.data.enableRotate !== undefined) {
+          this.controls.enableRotate = this.data.enableRotate;
+        }
+        if (this.data.enablePan !== undefined) {
+          this.controls.enablePan = this.data.enablePan;
+        }
+        if (this.data.enableZoom !== undefined) {
+          this.controls.enableZoom = this.data.enableZoom;
+        }
+        if (this.data.rotateSpeed !== undefined) {
+          this.controls.rotateSpeed = this.data.rotateSpeed;
+        }
+        if (this.data.zoomSpeed !== undefined) {
+          this.controls.zoomSpeed = this.data.zoomSpeed;
+        }
+        if (this.data.panSpeed !== undefined) {
+          this.controls.panSpeed = this.data.panSpeed;
+        }
+      },
+
+      tick: function () {
+        if (this.controls) {
+          if (this.el.object3D && this.el.object3D.position.lengthSq() > 0.0001) {
+            this.el.object3D.position.set(0, 0, 0);
+          }
+          this.controls.update();
+        }
+      },
+
+      remove: function () {
+        if (this.controls) {
+          this.controls.dispose();
+          this.controls = null;
+        }
+        this.el.orbitControls = null;
+        if (typeof window !== 'undefined' && window.__arOrbitControls === this.controls) {
+          window.__arOrbitControls = null;
+          window.__arOrbitCamera = null;
+        }
+      }
+    });
+  }
+
   // =========================================================================
   // 1. SCENE-ENVIRONMENT COMPONENT
   // Sets up procedural Image-Based Lighting (IBL) via PMREMGenerator & RoomEnvironment,
