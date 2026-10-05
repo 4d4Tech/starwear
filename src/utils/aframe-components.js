@@ -336,6 +336,7 @@ if (typeof AFRAME !== 'undefined') {
   if (!AFRAME.components['orbit-camera-controls']) {
     AFRAME.registerComponent('orbit-camera-controls', {
       schema: {
+        enabled: { type: 'boolean', default: true },
         enableDamping: { type: 'boolean', default: true },
         dampingFactor: { type: 'number', default: 0.08 },
         screenSpacePanning: { type: 'boolean', default: true },
@@ -376,11 +377,13 @@ if (typeof AFRAME !== 'undefined') {
           // Studio4D4: Prevent native gesture interference
           canvas.style.touchAction = 'none';
 
-          if (camera.position.lengthSq() < 0.001) {
+          const isEnabled = this.data.enabled !== undefined ? this.data.enabled : true;
+          if (isEnabled && camera.position.lengthSq() < 0.001) {
             camera.position.set(0, 1.2, 3.5);
           }
 
           const controls = new OrbitControls(camera, canvas);
+          controls.enabled = isEnabled;
           controls.enableDamping = this.data.enableDamping;
           controls.dampingFactor = this.data.dampingFactor;
           controls.screenSpacePanning = this.data.screenSpacePanning;
@@ -395,7 +398,9 @@ if (typeof AFRAME !== 'undefined') {
           controls.zoomSpeed = this.data.zoomSpeed;
           controls.panSpeed = this.data.panSpeed;
           controls.target.set(0, 0, 0);
-          controls.update();
+          if (isEnabled) {
+            controls.update();
+          }
 
           this.controls = controls;
           this.el.orbitControls = controls;
@@ -418,6 +423,19 @@ if (typeof AFRAME !== 'undefined') {
 
       update: function () {
         if (!this.controls) return;
+        if (this.data.enabled !== undefined) {
+          const wasEnabled = this.controls.enabled;
+          this.controls.enabled = this.data.enabled;
+          if (!wasEnabled && this.data.enabled) {
+            const camera = this.el.getObject3D('camera') || this.el.sceneEl?.camera;
+            if (camera && camera.position.lengthSq() < 0.001) {
+              camera.position.set(0, 1.2, 3.5);
+              camera.lookAt(0, 0, 0);
+            }
+            this.controls.target.set(0, 0, 0);
+            this.controls.update();
+          }
+        }
         if (this.data.autoRotate !== undefined) {
           this.controls.autoRotate = this.data.autoRotate;
         }
@@ -460,7 +478,7 @@ if (typeof AFRAME !== 'undefined') {
       },
 
       tick: function () {
-        if (this.controls) {
+        if (this.controls && this.controls.enabled) {
           if (this.el.object3D && this.el.object3D.position.lengthSq() > 0.0001) {
             this.el.object3D.position.set(0, 0, 0);
           }

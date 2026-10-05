@@ -43,6 +43,157 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const sceneRef = useRef(null);
 
+  // Studio4D4 Style OrbitControls & Camera References
+  const controlsRef = useRef(null);
+  const cameraRef = useRef(null);
+  const defaultCamPosRef = useRef(new THREE.Vector3(0, 0.4, 2.5));
+  const defaultTargetRef = useRef(new THREE.Vector3(0, 0, 0));
+  const [cameraAutoRotate, setCameraAutoRotate] = useState(false);
+  const cameraTransitionIdRef = useRef(null);
+
+  const getOrbitControls = useCallback(() => {
+    if (controlsRef.current) return controlsRef.current;
+    if (typeof window !== 'undefined' && window.__arOrbitControls) {
+      controlsRef.current = window.__arOrbitControls;
+      return window.__arOrbitControls;
+    }
+    const cameraEl = document.getElementById('experience-camera');
+    if (cameraEl && cameraEl.orbitControls) {
+      controlsRef.current = cameraEl.orbitControls;
+      return cameraEl.orbitControls;
+    }
+    if (cameraEl && cameraEl.components && cameraEl.components['orbit-camera-controls']?.controls) {
+      controlsRef.current = cameraEl.components['orbit-camera-controls'].controls;
+      return controlsRef.current;
+    }
+    return null;
+  }, []);
+
+  const getThreeCamera = useCallback(() => {
+    if (cameraRef.current) return cameraRef.current;
+    if (typeof window !== 'undefined' && window.__arOrbitCamera) {
+      cameraRef.current = window.__arOrbitCamera;
+      return window.__arOrbitCamera;
+    }
+    const sceneEl = sceneRef.current || document.querySelector('a-scene');
+    const cam = sceneEl?.camera || document.getElementById('experience-camera')?.getObject3D('camera');
+    if (cam) cameraRef.current = cam;
+    return cam;
+  }, []);
+
+  const toggleCameraAutoRotate = () => {
+    setCameraAutoRotate((prev) => {
+      const next = !prev;
+      const controls = getOrbitControls();
+      if (controls) {
+        controls.autoRotate = next;
+      }
+      return next;
+    });
+  };
+
+  const transitionCamera = useCallback((toPos, toTarget, duration = 350) => {
+    if (cameraTransitionIdRef.current) {
+      cancelAnimationFrame(cameraTransitionIdRef.current);
+      cameraTransitionIdRef.current = null;
+    }
+
+    const camera = getThreeCamera();
+    const controls = getOrbitControls();
+    if (!camera) return;
+
+    if (!controls) {
+      camera.position.copy(toPos);
+      if (toTarget) camera.lookAt(toTarget);
+      camera.updateMatrixWorld();
+      return;
+    }
+
+    const startPos = camera.position.clone();
+    const startTarget = controls.target ? controls.target.clone() : new THREE.Vector3(0, 0, 0);
+    const targetEnd = toTarget ? toTarget.clone() : startTarget.clone();
+    const startTime = performance.now();
+
+    const animateTransition = (currentTime) => {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1.0);
+      const ease = progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+      camera.position.lerpVectors(startPos, toPos, ease);
+      controls.target.lerpVectors(startTarget, targetEnd, ease);
+      camera.lookAt(controls.target);
+      controls.update();
+
+      if (progress < 1.0) {
+        cameraTransitionIdRef.current = requestAnimationFrame(animateTransition);
+      } else {
+        cameraTransitionIdRef.current = null;
+      }
+    };
+
+    cameraTransitionIdRef.current = requestAnimationFrame(animateTransition);
+  }, [getThreeCamera, getOrbitControls]);
+
+  const setCameraView = useCallback((viewName) => {
+    const camera = getThreeCamera();
+    const controls = getOrbitControls();
+    if (!camera || !controls) return;
+
+    const target = controls.target ? controls.target.clone() : new THREE.Vector3(0, 0, 0);
+    const currentDist = camera.position.distanceTo(target);
+    const dist = Math.max(0.5, currentDist > 0.1 ? currentDist : defaultCamPosRef.current.length());
+
+    const newPos = new THREE.Vector3();
+
+    switch (viewName) {
+      case 'perspective':
+      case 'reset':
+        target.copy(defaultTargetRef.current);
+        newPos.copy(defaultCamPosRef.current);
+        break;
+      case 'front':
+        newPos.set(target.x, target.y, target.z + dist);
+        break;
+      case 'back':
+        newPos.set(target.x, target.y, target.z - dist);
+        break;
+      case 'left':
+        newPos.set(target.x - dist, target.y, target.z);
+        break;
+      case 'right':
+        newPos.set(target.x + dist, target.y, target.z);
+        break;
+      case 'top':
+        newPos.set(target.x, target.y + dist, target.z + 0.0001);
+        break;
+      case 'bottom':
+        newPos.set(target.x, target.y - dist, target.z + 0.0001);
+        break;
+      default:
+        target.copy(defaultTargetRef.current);
+        newPos.copy(defaultCamPosRef.current);
+        break;
+    }
+
+    transitionCamera(newPos, target, 350);
+  }, [getThreeCamera, getOrbitControls, transitionCamera]);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+      if (e.key === 'f' || e.key === 'F') {
+        if (!cameraEnabled) {
+          e.preventDefault();
+          setCameraView('reset');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [cameraEnabled, setCameraView]);
+
   const logToScreen = (tag, data) => {
     const payload = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
     const timestamp = new Date().toLocaleTimeString();
@@ -248,18 +399,96 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     };
   }, [batchId]);
 
-  // 2. Manage Transparent Viewport for AR Camera Feed
+  // 2. Manage Viewport Background, Camera Feed Video & OrbitControls
   useEffect(() => {
+    const sceneEl = sceneRef.current;
+
     if (cameraEnabled) {
       document.body.style.backgroundColor = 'transparent';
       const root = document.getElementById('root');
       if (root) root.style.backgroundColor = 'transparent';
+      if (sceneEl) sceneEl.style.backgroundColor = 'transparent';
+
+      // 1. Unhide camera feed video and re-enable video stream tracks
+      const videos = document.querySelectorAll('video');
+      videos.forEach((v) => {
+        if (v.srcObject && typeof v.srcObject.getTracks === 'function') {
+          v.style.display = 'block';
+          v.srcObject.getTracks().forEach((track) => {
+            track.enabled = true;
+          });
+          v.play().catch(() => {});
+        }
+      });
+
+      // 2. Resume MindAR tracking loop
+      if (sceneEl?.systems && sceneEl.systems['mindar-image-system']) {
+        const mindarSystem = sceneEl.systems['mindar-image-system'];
+        if (mindarSystem.video && mindarSystem.controller) {
+          mindarSystem.unpause();
+        } else if (typeof mindarSystem.start === 'function') {
+          mindarSystem.start();
+        }
+      }
+
+      // 3. Disable OrbitControls and reset camera to origin looking forward
+      const controls = getOrbitControls();
+      if (controls) {
+        controls.enabled = false;
+      }
+      const camera = getThreeCamera();
+      if (camera) {
+        camera.position.set(0, 0, 0);
+        camera.rotation.set(0, 0, 0);
+        camera.updateMatrixWorld();
+      }
     } else {
       document.body.style.backgroundColor = '#0b0f19';
       const root = document.getElementById('root');
       if (root) root.style.backgroundColor = '#0b0f19';
+      if (sceneEl) sceneEl.style.backgroundColor = '#0b0f19';
 
-      // Clean up ONLY the camera feed stream video tag when switched to preview mode
+      // 1. Hide camera feed video and disable media tracks without stopping/destroying them
+      const videos = document.querySelectorAll('video');
+      videos.forEach((v) => {
+        if (v.srcObject && typeof v.srcObject.getTracks === 'function') {
+          v.style.display = 'none';
+          v.srcObject.getTracks().forEach((track) => {
+            track.enabled = false;
+          });
+          v.pause();
+        }
+      });
+
+      // 2. Pause MindAR tracking loop
+      if (sceneEl?.systems && sceneEl.systems['mindar-image-system']) {
+        const mindarSystem = sceneEl.systems['mindar-image-system'];
+        if (mindarSystem.video && mindarSystem.controller) {
+          mindarSystem.pause(false);
+        }
+      }
+
+      // 3. Enable OrbitControls and frame camera to Studio4D4 perspective
+      const controls = getOrbitControls();
+      const camera = getThreeCamera();
+      if (controls) {
+        controls.enabled = true;
+        controls.target.set(0, 0, 0);
+      }
+      if (camera) {
+        camera.position.copy(defaultCamPosRef.current);
+        camera.lookAt(0, 0, 0);
+        camera.updateMatrixWorld();
+      }
+      if (controls) {
+        controls.update();
+      }
+    }
+  }, [cameraEnabled, getOrbitControls, getThreeCamera]);
+
+  // Clean up media streams and animations only on total component unmount
+  useEffect(() => {
+    return () => {
       const videos = document.querySelectorAll('video');
       videos.forEach((v) => {
         if (v.srcObject && typeof v.srcObject.getTracks === 'function') {
@@ -268,8 +497,11 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           v.remove();
         }
       });
-    }
-  }, [cameraEnabled]);
+      if (cameraTransitionIdRef.current) {
+        cancelAnimationFrame(cameraTransitionIdRef.current);
+      }
+    };
+  }, []);
 
   // Live Mirror Video Layer / Mesh Texture Inversion (Flip X) for WebAR
   const applyFlipXToMesh = (model3D, isFlipped, targetParam = 'auto') => {
@@ -355,6 +587,24 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     const onArReady = () => {
       logToScreen('MINDAR_READY', 'MindAR computer vision tracker started.');
       setTrackingStatus('SCANNING');
+      if (!cameraEnabled) {
+        const videos = document.querySelectorAll('video');
+        videos.forEach((v) => {
+          if (v.srcObject && typeof v.srcObject.getTracks === 'function') {
+            v.style.display = 'none';
+            v.srcObject.getTracks().forEach((track) => {
+              track.enabled = false;
+            });
+            v.pause();
+          }
+        });
+        if (sceneEl?.systems && sceneEl.systems['mindar-image-system']) {
+          const mindarSystem = sceneEl.systems['mindar-image-system'];
+          if (mindarSystem.video && mindarSystem.controller) {
+            mindarSystem.pause(false);
+          }
+        }
+      }
     };
 
     const onArError = (e) => {
@@ -382,7 +632,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
       const isFlipX = !!(arData?.config?.videoFlipX);
       const targetMesh = arData?.config?.videoTargetMesh || 'auto';
 
-      ['ar-model', 'ar-model-forced'].forEach((id) => {
+      ['ar-model', 'preview-model', 'ar-model-forced'].forEach((id) => {
         const modelEl = document.getElementById(id);
         if (modelEl) {
           const mesh = modelEl.getObject3D('mesh');
@@ -409,7 +659,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
       const isFlipX = !!(arData?.config?.videoFlipX);
       const targetMesh = arData?.config?.videoTargetMesh || 'auto';
-      ['ar-model', 'ar-model-forced'].forEach((id) => {
+      ['ar-model', 'preview-model', 'ar-model-forced'].forEach((id) => {
         const el = document.getElementById(id);
         if (el) {
           const mesh = el.getObject3D('mesh');
@@ -417,11 +667,12 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         }
       });
 
-      const modelEl = document.getElementById('ar-model');
-      if (modelEl) {
-        const mesh = modelEl.getObject3D('mesh');
-        if (mesh) {
-          const overrides = arData?.config?.meshOverrides;
+      ['ar-model', 'preview-model', 'ar-model-forced'].forEach((id) => {
+        const modelEl = document.getElementById(id);
+        if (modelEl) {
+          const mesh = modelEl.getObject3D('mesh');
+          if (mesh) {
+            const overrides = arData?.config?.meshOverrides;
           mesh.traverse((node) => {
             if (node.isMesh) {
               if (overrides) {
@@ -517,76 +768,105 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           });
         }
       }
-    };
+    });
 
-    const onModelError = (e) => {
-      logToScreen('GLTF_ERROR', e.detail || 'Error loading 3D asset.');
-    };
-
-    sceneEl.addEventListener('arReady', onArReady);
-    sceneEl.addEventListener('arError', onArError);
-    sceneEl.addEventListener('targetFound', onTargetFound);
-    sceneEl.addEventListener('targetLost', onTargetLost);
-
-    const modelEl = document.getElementById('ar-model');
-    if (modelEl) {
-      modelEl.addEventListener('model-loaded', onModelLoad);
-      modelEl.addEventListener('model-error', onModelError);
-      if (modelEl.getObject3D('mesh')) {
-        onModelLoad();
-      }
-    }
-
-    const forcedModelEl = document.getElementById('ar-model-forced');
-    if (forcedModelEl) {
-      forcedModelEl.addEventListener('model-loaded', onModelLoad);
-      forcedModelEl.addEventListener('model-error', onModelError);
-      if (forcedModelEl.getObject3D('mesh')) {
-        onModelLoad();
-      }
-    }
-
-    const targetEl = document.getElementById('target-entity');
-    if (targetEl) {
-      targetEl.addEventListener('targetFound', onTargetFound);
-      targetEl.addEventListener('targetLost', onTargetLost);
-    }
-
-    return () => {
-      if (sceneEl) {
-        sceneEl.removeEventListener('arReady', onArReady);
-        sceneEl.removeEventListener('arError', onArError);
-        sceneEl.removeEventListener('targetFound', onTargetFound);
-        sceneEl.removeEventListener('targetLost', onTargetLost);
-      }
-      if (modelEl) {
-        modelEl.removeEventListener('model-loaded', onModelLoad);
-        modelEl.removeEventListener('model-error', onModelError);
-      }
-      if (forcedModelEl) {
-        forcedModelEl.removeEventListener('model-loaded', onModelLoad);
-        forcedModelEl.removeEventListener('model-error', onModelError);
-      }
-      if (targetEl) {
-        targetEl.removeEventListener('targetFound', onTargetFound);
-        targetEl.removeEventListener('targetLost', onTargetLost);
-      }
-    };
-  }, [arData]);
-
-  // Reactive Effect to ensure flipX is applied if arData config loads after model is in memory
-  useEffect(() => {
-    if (!arData?.config) return;
-    const isFlipX = !!(arData.config.videoFlipX);
-    const targetMesh = arData.config.videoTargetMesh || 'auto';
-    ['ar-model', 'ar-model-forced'].forEach((id) => {
+    // Compute bounding box and auto-frame camera distance (matching Studio4D4 studio angle)
+    ['preview-model', 'ar-model'].forEach((id) => {
       const el = document.getElementById(id);
-      if (el) {
-        const mesh = el.getObject3D('mesh');
-        if (mesh) applyFlipXToMesh(mesh, isFlipX, targetMesh);
+      const model3D = el?.getObject3D('mesh');
+      if (model3D && defaultCamPosRef.current.length() <= 2.6) {
+        const box = new THREE.Box3().setFromObject(model3D);
+        if (!box.isEmpty()) {
+          const size = box.getSize(new THREE.Vector3());
+          const maxDim = Math.max(size.x, size.y, size.z) || 1;
+          const fov = 45 * (Math.PI / 180);
+          let cameraDistance = Math.abs(maxDim / 2 / Math.tan(fov / 2)) * 1.5;
+          cameraDistance = Math.max(cameraDistance, 1.5);
+
+          // Studio4D4 camera perspective: elevated at ~18-20° above horizon
+          const initialCamPos = new THREE.Vector3(0, maxDim * 0.35, cameraDistance);
+          defaultCamPosRef.current.copy(initialCamPos);
+          defaultTargetRef.current.set(0, 0, 0);
+
+          if (!cameraEnabled) {
+            const controls = getOrbitControls();
+            const camera = getThreeCamera();
+            if (camera) {
+              camera.position.copy(initialCamPos);
+              camera.lookAt(0, 0, 0);
+              camera.updateMatrixWorld();
+            }
+            if (controls) {
+              controls.target.set(0, 0, 0);
+              controls.update();
+            }
+          }
+        }
       }
     });
-  }, [arData]);
+  };
+
+  const onModelError = (e) => {
+    logToScreen('GLTF_ERROR', e.detail || 'Error loading 3D asset.');
+  };
+
+  sceneEl.addEventListener('arReady', onArReady);
+  sceneEl.addEventListener('arError', onArError);
+  sceneEl.addEventListener('targetFound', onTargetFound);
+  sceneEl.addEventListener('targetLost', onTargetLost);
+
+  const modelIds = ['ar-model', 'preview-model', 'ar-model-forced'];
+  modelIds.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.addEventListener('model-loaded', onModelLoad);
+      el.addEventListener('model-error', onModelError);
+      if (el.getObject3D('mesh')) {
+        onModelLoad();
+      }
+    }
+  });
+
+  const targetEl = document.getElementById('target-entity');
+  if (targetEl) {
+    targetEl.addEventListener('targetFound', onTargetFound);
+    targetEl.addEventListener('targetLost', onTargetLost);
+  }
+
+  return () => {
+    if (sceneEl) {
+      sceneEl.removeEventListener('arReady', onArReady);
+      sceneEl.removeEventListener('arError', onArError);
+      sceneEl.removeEventListener('targetFound', onTargetFound);
+      sceneEl.removeEventListener('targetLost', onTargetLost);
+    }
+    modelIds.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.removeEventListener('model-loaded', onModelLoad);
+        el.removeEventListener('model-error', onModelError);
+      }
+    });
+    if (targetEl) {
+      targetEl.removeEventListener('targetFound', onTargetFound);
+      targetEl.removeEventListener('targetLost', onTargetLost);
+    }
+  };
+}, [arData, cameraEnabled, getOrbitControls, getThreeCamera]);
+
+// Reactive Effect to ensure flipX is applied if arData config loads after model is in memory
+useEffect(() => {
+  if (!arData?.config) return;
+  const isFlipX = !!(arData.config.videoFlipX);
+  const targetMesh = arData.config.videoTargetMesh || 'auto';
+  ['ar-model', 'preview-model', 'ar-model-forced'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) {
+      const mesh = el.getObject3D('mesh');
+      if (mesh) applyFlipXToMesh(mesh, isFlipX, targetMesh);
+    }
+  });
+}, [arData]);
 
   // Media Toggle Helper
   const toggleMedia = () => {
@@ -836,45 +1116,48 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         </div>
       </div>
 
-      {/* Primary Rendering Engine */}
-      {cameraEnabled ? (
-        /* ========================================================================= */
-        /* MODE A: LIVE WEBAR CAMERA TRACKING (MindAR + A-Frame)                    */
-        /* ========================================================================= */
-        <a-scene
-          ref={sceneRef}
-          mindar-image={`imageTargetSrc: ${arData.mindPath}; autoStart: true; uiLoading: ${uiLoading}; uiScanning: ${uiScanning}; uiError: ${uiError}; filterMinCF: ${filterMinCF}; filterBeta: ${filterBeta}; missTolerance: ${missTolerance}; warmupTolerance: ${warmupTolerance}; maxTrack: ${maxTrack}; showStats: ${showStats};`}
-          color-space="sRGB"
-          renderer="colorManagement: true; physicallyCorrectLights: true; alpha: true; antialias: true;"
-          vr-mode-ui="enabled: false"
-          device-orientation-permission-ui="enabled: false"
-          loading-screen="enabled: false"
-          scene-environment="exposure: 1.0"
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            backgroundColor: 'transparent'
-          }}
+      {/* Primary Rendering Engine (Single Unified Persistent Scene) */}
+      <a-scene
+        ref={sceneRef}
+        mindar-image={`imageTargetSrc: ${arData.mindPath}; autoStart: true; uiLoading: ${uiLoading}; uiScanning: ${uiScanning}; uiError: ${uiError}; filterMinCF: ${filterMinCF}; filterBeta: ${filterBeta}; missTolerance: ${missTolerance}; warmupTolerance: ${warmupTolerance}; maxTrack: ${maxTrack}; showStats: ${showStats};`}
+        color-space="sRGB"
+        renderer="colorManagement: true; physicallyCorrectLights: true; alpha: true; antialias: true;"
+        vr-mode-ui="enabled: false"
+        device-orientation-permission-ui="enabled: false"
+        loading-screen="enabled: false"
+        scene-environment="exposure: 1.0"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          backgroundColor: cameraEnabled ? 'transparent' : '#0b0f19'
+        }}
+      >
+        <a-assets timeout="10000">
+          <a-asset-item id="metaModel" src={arData.gltfPath} crossOrigin="anonymous"></a-asset-item>
+        </a-assets>
+
+        {/* Camera with Studio4D4 OrbitControls in 3D Mode & MindAR Forward Anchor in AR Mode */}
+        <a-camera
+          id="experience-camera"
+          position="0 0 0"
+          look-controls="enabled: false"
+          wasd-controls="enabled: false"
+          orbit-camera-controls={`enabled: ${!cameraEnabled}; enableDamping: true; dampingFactor: 0.08; screenSpacePanning: true; autoRotate: ${cameraAutoRotate && !cameraEnabled}; autoRotateSpeed: 1.2; minDistance: 0.2; maxDistance: 100; enableRotate: ${!cameraEnabled}; enablePan: ${!cameraEnabled}; enableZoom: ${!cameraEnabled}; rotateSpeed: 1.0; zoomSpeed: 1.0; panSpeed: 1.0`}
         >
-          <a-assets timeout="10000">
-            <a-asset-item id="metaModel" src={arData.gltfPath} crossOrigin="anonymous"></a-asset-item>
-          </a-assets>
+          <a-light type="directional" color="#ffffff" intensity="1.2" position="0 0 1"></a-light>
+        </a-camera>
 
-          {/* Camera with Forward-Facing Illumination Headlight */}
-          <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false">
-            <a-light type="directional" color="#ffffff" intensity="1.2" position="0 0 1"></a-light>
-          </a-camera>
+        {/* Multi-Source Studio Lighting Rig */}
+        <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
+        <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
+        <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
 
-          {/* Multi-Source Studio Lighting Rig */}
-          <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
-          <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
-          <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
-
-          {/* MindAR Target Anchor: Configurable Target Index */}
-          <a-entity id="target-entity" mindar-image-target={`targetIndex: ${targetIndex}`}>
+        {/* MindAR Target Anchor: Active in Live AR Camera Mode */}
+        <a-entity id="target-entity" mindar-image-target={`targetIndex: ${targetIndex}`}>
+          {cameraEnabled && (
             <a-gltf-model
               id="ar-model"
               src={arData.gltfPath}
@@ -893,66 +1176,14 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
               play-gltf-video={playGltfVideoAttr}
               play-gltf-animation={`playing: ${mediaPlaying}`}
             ></a-gltf-model>
-          </a-entity>
-
-          {/* Force Test Render Anchor (Bypasses marker requirement for testing) */}
-          {forceShowModel && (
-            <a-entity position="0 0 -2">
-              <a-gltf-model
-                id="ar-model-forced"
-                src={arData.gltfPath}
-                position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
-                scale={`${modelScale} ${modelScale} ${modelScale}`}
-                rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
-                {...(modelRotSpeed > 0
-                  ? {
-                      animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${
-                        modelRotY + 360
-                      } ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;`
-                    }
-                  : {})}
-                model-auto-center="enabled: true"
-                dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-                play-gltf-video={playGltfVideoAttr}
-                play-gltf-animation={`playing: ${mediaPlaying}`}
-              ></a-gltf-model>
-            </a-entity>
           )}
-        </a-scene>
-      ) : (
-        /* ========================================================================= */
-        /* MODE B: 3D ORBIT PREVIEW MODE (Studio/Fallback Mode)                     */
-        /* ========================================================================= */
-        <a-scene
-          ref={sceneRef}
-          color-space="sRGB"
-          renderer="colorManagement: true; physicallyCorrectLights: true; antialias: true;"
-          vr-mode-ui="enabled: false"
-          device-orientation-permission-ui="enabled: false"
-          loading-screen="enabled: false"
-          scene-environment="exposure: 1.0"
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            backgroundColor: '#0b0f19'
-          }}
-        >
-          <a-camera position="0 0 2.5" look-controls="enabled: true" wasd-controls="enabled: false">
-            <a-light type="directional" color="#ffffff" intensity="1.2" position="0 0 1"></a-light>
-          </a-camera>
+        </a-entity>
 
-          {/* Studio Lighting */}
-          <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
-          <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
-          <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
-
-          {/* Center 3D Model Anchor */}
-          <a-entity position="0 0 0">
+        {/* Center 3D Model Anchor: Active in 3D Preview Mode (Studio4D4 OrbitControls) */}
+        {!cameraEnabled && (
+          <a-entity id="preview-anchor" position="0 0 0">
             <a-gltf-model
-              id="ar-model"
+              id="preview-model"
               src={arData.gltfPath}
               position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
               scale={`${modelScale} ${modelScale} ${modelScale}`}
@@ -970,7 +1201,105 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
               play-gltf-animation={`playing: ${mediaPlaying}`}
             ></a-gltf-model>
           </a-entity>
-        </a-scene>
+        )}
+
+        {/* Force Test Render Anchor (Bypasses marker requirement for testing) */}
+        {forceShowModel && cameraEnabled && (
+          <a-entity position="0 0 -2">
+            <a-gltf-model
+              id="ar-model-forced"
+              src={arData.gltfPath}
+              position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
+              scale={`${modelScale} ${modelScale} ${modelScale}`}
+              rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
+              {...(modelRotSpeed > 0
+                ? {
+                    animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${
+                      modelRotY + 360
+                    } ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;`
+                  }
+                : {})}
+              model-auto-center="enabled: true"
+              dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
+              play-gltf-video={playGltfVideoAttr}
+              play-gltf-animation={`playing: ${mediaPlaying}`}
+            ></a-gltf-model>
+          </a-entity>
+        )}
+      </a-scene>
+
+      {/* Interactive Camera View Angle Presets Toolbar (Studio4D4 Style - Active in 3D Mode) */}
+      {!cameraEnabled && (
+        <div className="absolute top-20 sm:top-5 left-1/2 -translate-x-1/2 z-40 bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-xl p-1 flex items-center gap-1 shadow-2xl max-w-[95vw] overflow-x-auto">
+          <span className="text-[10px] uppercase font-bold text-slate-400 px-2 flex items-center gap-1 font-mono shrink-0">
+            <span className="material-symbols-outlined text-sm text-indigo-400">videocam</span> Views
+          </span>
+          <button
+            type="button"
+            onClick={() => setCameraView('perspective')}
+            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+            title="Studio 3/4 Perspective View"
+          >
+            Perspective
+          </button>
+          <button
+            type="button"
+            onClick={() => setCameraView('front')}
+            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+            title="Direct Front-Facing View"
+          >
+            Front
+          </button>
+          <button
+            type="button"
+            onClick={() => setCameraView('back')}
+            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+            title="Back View"
+          >
+            Back
+          </button>
+          <button
+            type="button"
+            onClick={() => setCameraView('left')}
+            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+            title="Left View"
+          >
+            Left
+          </button>
+          <button
+            type="button"
+            onClick={() => setCameraView('right')}
+            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+            title="Right View"
+          >
+            Right
+          </button>
+          <button
+            type="button"
+            onClick={() => setCameraView('top')}
+            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+            title="Top-Down View"
+          >
+            Top
+          </button>
+          <button
+            type="button"
+            onClick={() => setCameraView('bottom')}
+            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+            title="Bottom-Up View"
+          >
+            Bottom
+          </button>
+          <div className="w-[1px] h-4 bg-slate-700 mx-0.5 shrink-0"></div>
+          <button
+            type="button"
+            onClick={() => setCameraView('reset')}
+            className="px-2 py-1 text-xs font-semibold rounded-lg bg-indigo-950/70 hover:bg-indigo-900 border border-indigo-500/40 text-indigo-200 hover:text-white transition-all flex items-center gap-1 shrink-0"
+            title="Reset View to Studio Perspective (F)"
+          >
+            <span className="material-symbols-outlined text-xs">restart_alt</span>
+          </button>
+        </div>
       )}
 
       {/* Target Marker Viewfinder HUD (Active when camera is scanning) */}
@@ -995,12 +1324,37 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         </div>
       )}
 
-      {/* 3D Preview Mode Guidance Toast */}
+      {/* 3D Preview Mode Quick Action Pill (Studio4D4 Style: Auto-Rotate & Reset Framing) */}
       {!cameraEnabled && (
-        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
-          <div className="px-4 py-2 bg-slate-900/90 text-indigo-300 text-xs font-mono rounded-full border border-indigo-500/30 backdrop-blur-md shadow-xl flex items-center gap-2">
-            <span className="material-symbols-outlined text-sm text-indigo-400">touch_app</span>
-            Drag to Rotate & Inspect 3D Model
+        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 pointer-events-auto">
+          <div className="px-3 py-1.5 bg-slate-900/90 backdrop-blur-md rounded-full border border-slate-700/80 shadow-2xl flex items-center gap-2">
+            <button
+              type="button"
+              onClick={toggleCameraAutoRotate}
+              className={`px-2.5 py-1 rounded-full text-xs font-mono flex items-center gap-1.5 transition-all cursor-pointer ${
+                cameraAutoRotate
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-neutral-300 hover:text-white hover:bg-white/10'
+              }`}
+              title="Toggle 360 Auto-Rotation"
+            >
+              <span className={`material-symbols-outlined text-sm ${cameraAutoRotate ? 'animate-spin' : ''}`} style={{ animationDuration: '6s' }}>
+                sync
+              </span>
+              <span>{cameraAutoRotate ? 'Rotating' : 'Auto Rotate'}</span>
+            </button>
+
+            <div className="w-px h-4 bg-white/20"></div>
+
+            <button
+              type="button"
+              onClick={() => setCameraView('reset')}
+              className="px-2.5 py-1 rounded-full text-xs font-mono text-neutral-300 hover:text-white hover:bg-white/10 flex items-center gap-1.5 transition-all cursor-pointer"
+              title="Reset to Studio Perspective (F)"
+            >
+              <span className="material-symbols-outlined text-sm">center_focus_strong</span>
+              <span>Reset (F)</span>
+            </button>
           </div>
         </div>
       )}
