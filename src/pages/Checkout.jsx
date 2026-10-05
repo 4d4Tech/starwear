@@ -14,15 +14,29 @@ import {
   startDirectPayPalCheckout,
   executeInstantSandboxPurchase
 } from '../services/paypalService';
+import {
+  startDirectStripeCheckout,
+  executeInstantStripeSandboxPurchase
+} from '../services/stripeService';
 import { CURATED_COLLECTION } from './Shop';
+import { usePaymentEnvironment } from '../context/PaymentEnvironmentContext';
 
 export default function Checkout() {
   const { cartItems, getCartTotal, clearCart } = useCart();
+  const { isSandboxMode, activeGateway, isPayPalEnabled, isStripeEnabled } = usePaymentEnvironment();
+  const [selectedMethod, setSelectedMethod] = useState(() => {
+    return activeGateway === 'stripe' ? 'stripe' : 'paypal';
+  });
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const activeOrderDocIdRef = useRef(null);
+
+  useEffect(() => {
+    if (activeGateway === 'stripe') setSelectedMethod('stripe');
+    else if (activeGateway === 'paypal') setSelectedMethod('paypal');
+  }, [activeGateway]);
 
   // Check for direct product query (e.g. /checkout?productId=... or ?id=...)
   const directProductId = searchParams.get('productId') || searchParams.get('id') || searchParams.get('product') || searchParams.get('batchId');
@@ -218,7 +232,68 @@ export default function Checkout() {
     }
   };
 
-  // Send PayPal Sandbox Purchase directly for a single product with its exact price
+  // Direct Stripe Checkout Session redirect
+  const handleStripeCheckout = async () => {
+    setIsProcessing(true);
+    setErrorMessage('');
+    try {
+      const itemsPayload = activeItems.map((item) => ({
+        id: item.id || '',
+        name: item.name || 'Digital Garment',
+        price: Number(item.price) || 0,
+        quantity: item.quantity || 1,
+        image: item.image || '',
+        size: item.size || 'M'
+      }));
+
+      await startDirectStripeCheckout({
+        items: itemsPayload,
+        total: subtotal,
+        metadata: {
+          source: directProduct ? 'direct_product_checkout' : 'cart_checkout',
+          itemCount: activeItems.length
+        }
+      });
+    } catch (err) {
+      console.error('Stripe Checkout error:', err);
+      setErrorMessage(err.message || 'Stripe Checkout encountered an issue.');
+      setIsProcessing(false);
+    }
+  };
+
+  // Instant 1-Click Stripe Sandbox Test
+  const handleInstantStripeSandbox = async (singleItem = null) => {
+    setIsProcessing(true);
+    setErrorMessage('');
+    const targetItems = singleItem ? [singleItem] : activeItems;
+    const targetTotal = singleItem
+      ? (Number(singleItem.price) || 99.00) * (singleItem.quantity || 1)
+      : subtotal;
+
+    try {
+      if (!singleItem) clearCart();
+      await executeInstantStripeSandboxPurchase({
+        items: targetItems.map((item) => ({
+          id: item.id || '',
+          name: item.name || 'Digital Garment',
+          price: Number(item.price) || 99.00,
+          quantity: item.quantity || 1,
+          image: item.image || ''
+        })),
+        total: targetTotal,
+        metadata: {
+          source: singleItem ? 'single_product_sandbox_btn' : 'checkout_sandbox_btn',
+          itemCount: targetItems.length
+        }
+      });
+    } catch (err) {
+      console.error('Instant Stripe sandbox failed:', err);
+      setErrorMessage(err.message || 'Instant Stripe sandbox purchase failed.');
+      setIsProcessing(false);
+    }
+  };
+
+  // Send Sandbox Purchase directly for a single product with its exact price
   const handlePurchaseSingleProduct = async (product) => {
     setIsProcessing(true);
     setErrorMessage('');
@@ -227,20 +302,37 @@ export default function Checkout() {
     const itemTotal = itemPrice * itemQty;
 
     try {
-      await startDirectPayPalCheckout({
-        items: [{
-          id: product.id || '',
-          name: product.name || 'Digital Garment',
-          price: itemPrice,
-          quantity: itemQty,
-          image: product.image || ''
-        }],
-        total: itemTotal,
-        metadata: {
-          singleItemCheckout: true,
-          productId: product.id
-        }
-      });
+      if (activeGateway === 'stripe' || selectedMethod === 'stripe') {
+        await startDirectStripeCheckout({
+          items: [{
+            id: product.id || '',
+            name: product.name || 'Digital Garment',
+            price: itemPrice,
+            quantity: itemQty,
+            image: product.image || ''
+          }],
+          total: itemTotal,
+          metadata: {
+            singleItemCheckout: true,
+            productId: product.id
+          }
+        });
+      } else {
+        await startDirectPayPalCheckout({
+          items: [{
+            id: product.id || '',
+            name: product.name || 'Digital Garment',
+            price: itemPrice,
+            quantity: itemQty,
+            image: product.image || ''
+          }],
+          total: itemTotal,
+          metadata: {
+            singleItemCheckout: true,
+            productId: product.id
+          }
+        });
+      }
     } catch (err) {
       console.error('Single product sandbox checkout failed:', err);
       setErrorMessage(err.message || 'Error initializing sandbox checkout for this product.');
@@ -250,6 +342,10 @@ export default function Checkout() {
 
   // Instant 1-Click Sandbox Test Purchase (for all active items or a single item)
   const handleInstantSandboxPurchase = async (singleItem = null) => {
+    if (activeGateway === 'stripe' || selectedMethod === 'stripe') {
+      return handleInstantStripeSandbox(singleItem);
+    }
+
     setIsProcessing(true);
     setErrorMessage('');
     const targetItems = singleItem ? [singleItem] : activeItems;
@@ -258,6 +354,7 @@ export default function Checkout() {
       : subtotal;
 
     try {
+      if (!singleItem) clearCart();
       await executeInstantSandboxPurchase({
         items: targetItems.map((item) => ({
           id: item.id || '',
@@ -329,24 +426,68 @@ export default function Checkout() {
                 {/* Gateway Header Badge */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-outline-variant/20 gap-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-blue-600/10 flex items-center justify-center text-blue-600 font-bold text-lg">
-                      <span className="material-symbols-outlined text-2xl">account_balance_wallet</span>
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-lg ${
+                      activeGateway === 'stripe'
+                        ? 'bg-indigo-600/10 text-indigo-500'
+                        : activeGateway === 'both'
+                        ? 'bg-purple-600/10 text-purple-400'
+                        : 'bg-blue-600/10 text-blue-600'
+                    }`}>
+                      <span className="material-symbols-outlined text-2xl">
+                        {activeGateway === 'stripe'
+                          ? 'credit_card'
+                          : activeGateway === 'both'
+                          ? 'hub'
+                          : 'account_balance_wallet'}
+                      </span>
                     </div>
                     <div>
-                      <h3 className="font-bold text-on-background text-base flex items-center gap-2">
-                        PayPal Sandbox Checkout
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-mono font-semibold">
-                          SANDBOX ACTIVE
-                        </span>
-                      </h3>
-                      <p className="text-xs text-secondary">
-                        Pay with PayPal sandbox account, test card, or 1-click test purchase
-                      </p>
+                      {isSandboxMode ? (
+                        <>
+                          <h3 className="font-bold text-on-background text-base flex items-center gap-2">
+                            {activeGateway === 'stripe'
+                              ? 'Stripe Sandbox Checkout'
+                              : activeGateway === 'both'
+                              ? 'Multi-Gateway Sandbox'
+                              : 'PayPal Sandbox Checkout'}
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-mono font-semibold border border-amber-500/30">
+                              SANDBOX ACTIVE
+                            </span>
+                          </h3>
+                          <p className="text-xs text-secondary">
+                            {activeGateway === 'stripe'
+                              ? 'Pay with Stripe test card, simulated session, or 1-click test'
+                              : activeGateway === 'both'
+                              ? 'Select PayPal or Stripe to run simulated sandbox purchases'
+                              : 'Pay with PayPal sandbox account, test card, or 1-click test purchase'}
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <h3 className="font-bold text-on-background text-base flex items-center gap-2">
+                            {activeGateway === 'stripe'
+                              ? 'Credit Card Checkout'
+                              : activeGateway === 'both'
+                              ? 'Secure Multi-Gateway'
+                              : 'Express Checkout'}
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-mono font-semibold border border-emerald-500/30">
+                              LIVE SECURE
+                            </span>
+                          </h3>
+                          <p className="text-xs text-secondary">
+                            {activeGateway === 'stripe'
+                              ? 'Complete your order with credit/debit card powered by Stripe'
+                              : activeGateway === 'both'
+                              ? 'Select either PayPal or Credit Card (Stripe) to complete your order'
+                              : 'Complete your order securely with PayPal, debit or credit card'}
+                          </p>
+                        </>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 text-xs text-secondary font-mono">
                     <span className="material-symbols-outlined text-sm text-emerald-600">verified_user</span>
-                    <span>256-bit SSL Sandbox</span>
+                    <span>256-bit SSL Encryption</span>
                   </div>
                 </div>
 
@@ -365,74 +506,182 @@ export default function Checkout() {
                 {isProcessing && (
                   <div className="p-4 bg-indigo-50 border border-indigo-200 text-indigo-700 text-sm rounded-xl flex items-center gap-3 animate-pulse">
                     <span className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></span>
-                    <span>Processing sandbox purchase with PayPal network...</span>
+                    <span>Processing order with payment network...</span>
                   </div>
                 )}
 
-                {/* Direct Sandbox Purchase Button (Primary) */}
-                <div className="space-y-3 pt-1">
-                  <button
-                    type="button"
-                    onClick={handleDirectPayPalRedirect}
-                    disabled={activeItems.length === 0 || isProcessing}
-                    className="w-full py-4 px-6 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-label-caps text-xs sm:text-sm font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-[0.98] disabled:opacity-50"
-                    title={`Send a Sandbox purchase for the total order of $${subtotal.toFixed(2)}`}
-                  >
-                    <span className="material-symbols-outlined text-xl">shopping_cart_checkout</span>
-                    <span>SEND SANDBOX PURCHASE • ${subtotal.toFixed(2)} USD</span>
-                  </button>
+                {/* Multi-Gateway Selector Tabs (When Admin has set Gateway to 'both') */}
+                {activeGateway === 'both' && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-mono text-secondary uppercase tracking-wider block">
+                      Choose Payment Method:
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedMethod('paypal')}
+                        className={`py-3 px-4 rounded-xl border flex items-center justify-center gap-2 font-mono text-xs font-bold transition-all cursor-pointer ${
+                          selectedMethod === 'paypal'
+                            ? 'bg-blue-950/20 border-blue-500 text-blue-400 ring-1 ring-blue-500/40 shadow-sm'
+                            : 'bg-surface-variant/30 border-outline-variant/30 text-secondary hover:text-on-background'
+                        }`}
+                      >
+                        <span className="material-symbols-outlined text-base">account_balance_wallet</span>
+                        <span>PayPal</span>
+                      </button>
 
-                  <div className="flex items-center justify-between text-xs font-mono text-secondary px-1">
-                    <span>Quick developer testing?</span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedMethod('stripe')}
+                        className={`py-3 px-4 rounded-xl border flex items-center justify-center gap-2 font-mono text-xs font-bold transition-all cursor-pointer ${
+                          selectedMethod === 'stripe'
+                            ? 'bg-indigo-950/20 border-indigo-500 text-indigo-400 ring-1 ring-indigo-500/40 shadow-sm'
+                            : 'bg-surface-variant/30 border-outline-variant/30 text-secondary hover:text-on-background'
+                        }`}
+                      >
+                        <span className="material-symbols-outlined text-base">credit_card</span>
+                        <span>Credit Card (Stripe)</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* ============================================================== */}
+                {/* STRIPE CHECKOUT SECTION                                        */}
+                {/* ============================================================== */}
+                {((activeGateway === 'both' && selectedMethod === 'stripe') || activeGateway === 'stripe') && (
+                  <div className="space-y-4">
+                    {/* Direct Stripe Sandbox Purchase Button (Admins only in Sandbox Mode) */}
+                    {isSandboxMode && (
+                      <div className="space-y-3 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleInstantStripeSandbox(null)}
+                          disabled={activeItems.length === 0 || isProcessing}
+                          className="w-full py-4 px-6 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-label-caps text-xs sm:text-sm font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-[0.98] disabled:opacity-50"
+                          title={`Send a Stripe Sandbox purchase for the total order of $${subtotal.toFixed(2)}`}
+                        >
+                          <span className="material-symbols-outlined text-xl">shopping_cart_checkout</span>
+                          <span>SEND STRIPE SANDBOX PURCHASE • ${subtotal.toFixed(2)} USD</span>
+                        </button>
+
+                        <div className="flex items-center justify-between text-xs font-mono text-secondary px-1">
+                          <span>Quick Stripe test?</span>
+                          <button
+                            type="button"
+                            onClick={() => handleInstantStripeSandbox(null)}
+                            disabled={activeItems.length === 0 || isProcessing}
+                            className="text-amber-600 hover:text-amber-500 underline font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Instantly marks order paid in Firestore via Stripe test session"
+                          >
+                            <span className="material-symbols-outlined text-xs">bolt</span>
+                            <span>Instant 1-Click Stripe Test (${subtotal.toFixed(2)})</span>
+                          </button>
+                        </div>
+
+                        {/* Divider */}
+                        <div className="relative flex py-2 items-center">
+                          <div className="flex-grow border-t border-outline-variant/20"></div>
+                          <span className="flex-shrink mx-4 text-xs font-mono text-secondary uppercase tracking-widest">
+                            Or Use Stripe Checkout Session
+                          </span>
+                          <div className="flex-grow border-t border-outline-variant/20"></div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Primary Stripe Pay Button */}
                     <button
                       type="button"
-                      onClick={() => handleInstantSandboxPurchase(null)}
+                      onClick={handleStripeCheckout}
                       disabled={activeItems.length === 0 || isProcessing}
-                      className="text-amber-600 hover:text-amber-500 underline font-semibold flex items-center gap-1 cursor-pointer transition-colors"
-                      title="Instantly marks order paid in Firestore without entering sandbox login"
+                      className="w-full py-4 px-6 bg-[#635bff] hover:bg-[#534be0] text-white font-label-caps text-xs sm:text-sm font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-[0.98] disabled:opacity-50"
                     >
-                      <span className="material-symbols-outlined text-xs">bolt</span>
-                      <span>Instant 1-Click Sandbox Test (${subtotal.toFixed(2)})</span>
+                      <span className="material-symbols-outlined text-xl">credit_card</span>
+                      <span>PAY WITH CARD (STRIPE) • ${subtotal.toFixed(2)} USD</span>
                     </button>
-                  </div>
-                </div>
-
-                {/* Divider */}
-                <div className="relative flex py-2 items-center">
-                  <div className="flex-grow border-t border-outline-variant/20"></div>
-                  <span className="flex-shrink mx-4 text-xs font-mono text-secondary uppercase tracking-widest">
-                    Or Use PayPal Smart Buttons
-                  </span>
-                  <div className="flex-grow border-t border-outline-variant/20"></div>
-                </div>
-
-                {/* PayPal Smart Buttons Container */}
-                <div>
-                  <PayPalScriptProvider options={getPayPalScriptOptions()}>
-                    <div className="relative z-10 min-h-[150px]">
-                      <PayPalButtons
-                        style={{
-                          layout: 'vertical',
-                          color: 'gold',
-                          shape: 'rect',
-                          label: 'paypal',
-                          height: 48
-                        }}
-                        disabled={activeItems.length === 0 || isProcessing}
-                        createOrder={handleCreateOrder}
-                        onApprove={handleApprove}
-                        onError={(err) => {
-                          console.error('PayPal Button Error:', err);
-                          setErrorMessage('PayPal gateway encountered a temporary error. Try again or use the Sandbox Purchase button above.');
-                          setIsProcessing(false);
-                        }}
-                        onCancel={() => {
-                          setIsProcessing(false);
-                        }}
-                      />
+                    <div className="flex items-center justify-center gap-2 text-[11px] font-mono text-secondary">
+                      <span className="material-symbols-outlined text-sm text-indigo-400">lock</span>
+                      <span>Secured by Stripe. Accepts Visa, Mastercard, AMEX & Apple Pay.</span>
                     </div>
-                  </PayPalScriptProvider>
-                </div>
+                  </div>
+                )}
+
+                {/* ============================================================== */}
+                {/* PAYPAL CHECKOUT SECTION                                        */}
+                {/* ============================================================== */}
+                {((activeGateway === 'both' && selectedMethod === 'paypal') || activeGateway === 'paypal') && (
+                  <div>
+                    {/* Direct Sandbox Purchase Button (Rendered ONLY in Sandbox mode for Admins) */}
+                    {isSandboxMode && (
+                      <>
+                        <div className="space-y-3 pt-1">
+                          <button
+                            type="button"
+                            onClick={handleDirectPayPalRedirect}
+                            disabled={activeItems.length === 0 || isProcessing}
+                            className="w-full py-4 px-6 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-label-caps text-xs sm:text-sm font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-[0.98] disabled:opacity-50"
+                            title={`Send a Sandbox purchase for the total order of $${subtotal.toFixed(2)}`}
+                          >
+                            <span className="material-symbols-outlined text-xl">shopping_cart_checkout</span>
+                            <span>SEND PAYPAL SANDBOX PURCHASE • ${subtotal.toFixed(2)} USD</span>
+                          </button>
+
+                          <div className="flex items-center justify-between text-xs font-mono text-secondary px-1">
+                            <span>Quick developer testing?</span>
+                            <button
+                              type="button"
+                              onClick={() => handleInstantSandboxPurchase(null)}
+                              disabled={activeItems.length === 0 || isProcessing}
+                              className="text-amber-600 hover:text-amber-500 underline font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                              title="Instantly marks order paid in Firestore without entering sandbox login"
+                            >
+                              <span className="material-symbols-outlined text-xs">bolt</span>
+                              <span>Instant 1-Click Sandbox Test (${subtotal.toFixed(2)})</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Divider */}
+                        <div className="relative flex py-2 items-center">
+                          <div className="flex-grow border-t border-outline-variant/20"></div>
+                          <span className="flex-shrink mx-4 text-xs font-mono text-secondary uppercase tracking-widest">
+                            Or Use PayPal Smart Buttons
+                          </span>
+                          <div className="flex-grow border-t border-outline-variant/20"></div>
+                        </div>
+                      </>
+                    )}
+
+                    {/* PayPal Smart Buttons Container */}
+                    <div>
+                      <PayPalScriptProvider options={getPayPalScriptOptions()}>
+                        <div className="relative z-10 min-h-[150px]">
+                          <PayPalButtons
+                            style={{
+                              layout: 'vertical',
+                              color: 'gold',
+                              shape: 'rect',
+                              label: 'paypal',
+                              height: 48
+                            }}
+                            disabled={activeItems.length === 0 || isProcessing}
+                            createOrder={handleCreateOrder}
+                            onApprove={handleApprove}
+                            onError={(err) => {
+                              console.error('PayPal Button Error:', err);
+                              setErrorMessage('PayPal gateway encountered a temporary error. Try again or use the Sandbox Purchase button above.');
+                              setIsProcessing(false);
+                            }}
+                            onCancel={() => {
+                              setIsProcessing(false);
+                            }}
+                          />
+                        </div>
+                      </PayPalScriptProvider>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="bg-surface-container-lowest border border-outline-variant/20 p-8 rounded-2xl text-center space-y-4">
@@ -521,31 +770,35 @@ export default function Checkout() {
                         </div>
                       </div>
 
-                      {/* Button on each product to send a sandbox purchase through with the correct price */}
-                      <button
-                        type="button"
-                        onClick={() => handlePurchaseSingleProduct(item)}
-                        disabled={isProcessing}
-                        className="w-full py-2 px-3 bg-amber-500/10 hover:bg-amber-500/20 active:scale-95 text-amber-600 dark:text-amber-400 border border-amber-500/30 rounded-lg text-[11px] font-mono font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
-                        title={`Send a PayPal Sandbox purchase through for ${item.name} at its price of $${itemTotal.toFixed(2)}`}
-                      >
-                        <span className="material-symbols-outlined text-sm">shopping_cart_checkout</span>
-                        <span>SANDBOX PURCHASE THIS ITEM • ${itemTotal.toFixed(2)}</span>
-                      </button>
+                      {/* Button on each product to send a sandbox purchase through with the correct price (Rendered ONLY in Sandbox mode for Admins) */}
+                      {isSandboxMode && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handlePurchaseSingleProduct(item)}
+                            disabled={isProcessing}
+                            className="w-full py-2 px-3 bg-amber-500/10 hover:bg-amber-500/20 active:scale-95 text-amber-600 dark:text-amber-400 border border-amber-500/30 rounded-lg text-[11px] font-mono font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                            title={`Send a PayPal Sandbox purchase through for ${item.name} at its price of $${itemTotal.toFixed(2)}`}
+                          >
+                            <span className="material-symbols-outlined text-sm">shopping_cart_checkout</span>
+                            <span>SANDBOX PURCHASE THIS ITEM • ${itemTotal.toFixed(2)}</span>
+                          </button>
 
-                      <div className="flex items-center justify-between text-[10px] font-mono text-secondary pt-0.5 px-0.5">
-                        <span>Instant Sandbox test:</span>
-                        <button
-                          type="button"
-                          onClick={() => handleInstantSandboxPurchase(item)}
-                          disabled={isProcessing}
-                          className="text-amber-600 hover:text-amber-500 underline font-semibold flex items-center gap-0.5 cursor-pointer"
-                          title={`Instantly test purchase for ${item.name} ($${itemTotal.toFixed(2)})`}
-                        >
-                          <span className="material-symbols-outlined text-xs">bolt</span>
-                          <span>1-Click Test (${itemTotal.toFixed(2)})</span>
-                        </button>
-                      </div>
+                          <div className="flex items-center justify-between text-[10px] font-mono text-secondary pt-0.5 px-0.5">
+                            <span>Instant Sandbox test:</span>
+                            <button
+                              type="button"
+                              onClick={() => handleInstantSandboxPurchase(item)}
+                              disabled={isProcessing}
+                              className="text-amber-600 hover:text-amber-500 underline font-semibold flex items-center gap-0.5 cursor-pointer"
+                              title={`Instantly test purchase for ${item.name} ($${itemTotal.toFixed(2)})`}
+                            >
+                              <span className="material-symbols-outlined text-xs">bolt</span>
+                              <span>1-Click Test (${itemTotal.toFixed(2)})</span>
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   );
                 })

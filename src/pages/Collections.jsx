@@ -5,6 +5,7 @@ import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
+import { usePaymentEnvironment } from '../context/PaymentEnvironmentContext';
 
 export default function Collections() {
   const [products, setProducts] = useState([]);
@@ -14,6 +15,7 @@ export default function Collections() {
   const [cartToast, setCartToast] = useState('');
   const { addToCart } = useCart();
   const { isAdmin, isSuperAdmin } = useAuth();
+  const { isSandboxMode } = usePaymentEnvironment();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -112,10 +114,6 @@ export default function Collections() {
         {/* Header Section */}
         <header className="mb-16 md:mb-24 flex flex-col md:flex-row justify-between items-start md:items-end gap-8 border-b border-outline-variant/20 pb-8">
           <div className="max-w-2xl">
-            <div className="flex items-center gap-2 text-xs font-mono text-primary mb-2">
-              <span className="material-symbols-outlined text-sm">view_in_ar</span>
-              <span>ADMIN INVENTORY ASSETS</span>
-            </div>
             <h1 className="font-headline-xl text-headline-xl mb-3 uppercase">THE 3D COLLECTION</h1>
             <p className="font-body-lg text-body-lg text-on-surface-variant max-w-xl leading-relaxed">
               Curated digital apparel and WebAR wearable assets. Click any asset to inspect its interactive 3D model, review anchor specifications, and launch live camera try-on.
@@ -146,9 +144,8 @@ export default function Collections() {
                     <button
                       type="button"
                       onClick={() => setActiveCategory('ALL')}
-                      className={`w-full text-left transition-colors flex justify-between cursor-pointer ${
-                        activeCategory === 'ALL' ? 'text-primary font-bold' : 'hover:text-primary'
-                      }`}
+                      className={`w-full text-left transition-colors flex justify-between cursor-pointer ${activeCategory === 'ALL' ? 'text-primary font-bold' : 'hover:text-primary'
+                        }`}
                     >
                       <span>All Digital Assets</span>
                       <span>({products.length})</span>
@@ -158,9 +155,8 @@ export default function Collections() {
                     <button
                       type="button"
                       onClick={() => setActiveCategory('WEBAR')}
-                      className={`w-full text-left transition-colors flex justify-between cursor-pointer ${
-                        activeCategory === 'WEBAR' ? 'text-primary font-bold' : 'hover:text-primary'
-                      }`}
+                      className={`w-full text-left transition-colors flex justify-between cursor-pointer ${activeCategory === 'WEBAR' ? 'text-primary font-bold' : 'hover:text-primary'
+                        }`}
                     >
                       <span>WebAR Targets</span>
                       <span>({products.filter(p => p.mind_file_path).length})</span>
@@ -170,9 +166,8 @@ export default function Collections() {
                     <button
                       type="button"
                       onClick={() => setActiveCategory('VIDEO')}
-                      className={`w-full text-left transition-colors flex justify-between cursor-pointer ${
-                        activeCategory === 'VIDEO' ? 'text-primary font-bold' : 'hover:text-primary'
-                      }`}
+                      className={`w-full text-left transition-colors flex justify-between cursor-pointer ${activeCategory === 'VIDEO' ? 'text-primary font-bold' : 'hover:text-primary'
+                        }`}
                     >
                       <span>Video Textures</span>
                       <span>({products.filter(p => p.video_url || p.videoUrl || p.video_file_path).length})</span>
@@ -303,15 +298,17 @@ export default function Collections() {
                                 >
                                   + VAULT
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={(e) => handleSandboxBuy(e, product)}
-                                  className="px-2.5 py-1 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-[10px] font-mono font-bold transition-all shadow cursor-pointer active:scale-95 flex items-center gap-1"
-                                  title={`Send a PayPal Sandbox purchase for ${product.name || product.id} at $${price.toFixed(2)}`}
-                                >
-                                  <span className="material-symbols-outlined text-xs">shopping_cart_checkout</span>
-                                  <span>Sandbox Buy</span>
-                                </button>
+                                {isSandboxMode && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleSandboxBuy(e, product)}
+                                    className="px-2.5 py-1 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-[10px] font-mono font-bold transition-all shadow cursor-pointer active:scale-95 flex items-center gap-1"
+                                    title={`Send a PayPal Sandbox purchase for ${product.name || product.id} at $${price.toFixed(2)}`}
+                                  >
+                                    <span className="material-symbols-outlined text-xs">shopping_cart_checkout</span>
+                                    <span>Sandbox Buy</span>
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>

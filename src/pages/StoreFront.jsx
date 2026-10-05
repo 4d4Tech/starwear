@@ -293,33 +293,30 @@ export default function StoreFront() {
                 <button
                   type="button"
                   onClick={() => setActiveFilter('ALL')}
-                  className={`px-3 py-1.5 rounded text-xs font-mono font-bold transition-all cursor-pointer ${
-                    activeFilter === 'ALL'
-                      ? 'bg-on-background text-on-primary shadow'
-                      : 'text-secondary hover:text-on-background'
-                  }`}
+                  className={`px-3 py-1.5 rounded text-xs font-mono font-bold transition-all cursor-pointer ${activeFilter === 'ALL'
+                    ? 'bg-on-background text-on-primary shadow'
+                    : 'text-secondary hover:text-on-background'
+                    }`}
                 >
                   ALL ({inventory.length})
                 </button>
                 <button
                   type="button"
                   onClick={() => setActiveFilter('WEBAR')}
-                  className={`px-3 py-1.5 rounded text-xs font-mono font-bold transition-all cursor-pointer ${
-                    activeFilter === 'WEBAR'
-                      ? 'bg-on-background text-on-primary shadow'
-                      : 'text-secondary hover:text-on-background'
-                  }`}
+                  className={`px-3 py-1.5 rounded text-xs font-mono font-bold transition-all cursor-pointer ${activeFilter === 'WEBAR'
+                    ? 'bg-on-background text-on-primary shadow'
+                    : 'text-secondary hover:text-on-background'
+                    }`}
                 >
                   WEBAR TARGETS
                 </button>
                 <button
                   type="button"
                   onClick={() => setActiveFilter('VIDEO')}
-                  className={`px-3 py-1.5 rounded text-xs font-mono font-bold transition-all cursor-pointer ${
-                    activeFilter === 'VIDEO'
-                      ? 'bg-on-background text-on-primary shadow'
-                      : 'text-secondary hover:text-on-background'
-                  }`}
+                  className={`px-3 py-1.5 rounded text-xs font-mono font-bold transition-all cursor-pointer ${activeFilter === 'VIDEO'
+                    ? 'bg-on-background text-on-primary shadow'
+                    : 'text-secondary hover:text-on-background'
+                    }`}
                 >
                   VIDEO LAYERS
                 </button>
@@ -451,7 +448,7 @@ export default function StoreFront() {
                           <button
                             type="button"
                             onClick={(e) => handleQuickAdd(e, item)}
-                            className="p-2 bg-surface hover:bg-on-background hover:text-surface text-on-surface border border-outline-variant rounded-lg transition-colors cursor-pointer"
+                            className="p-2 bg-surface hover:bg-on-background hover:text-surface text-on-surface border border-outline-variant rounded-lg transition-colors cursor-pointer cart-icon"
                             title="Add to Cart"
                           >
                             <span className="material-symbols-outlined text-sm">shopping_cart</span>

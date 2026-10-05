@@ -8,6 +8,7 @@ import Header from '../components/Header';
 import ProductViewer from '../components/ProductViewer';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
+import { usePaymentEnvironment } from '../context/PaymentEnvironmentContext';
 
 // Curated Collection with punchy, plain-English descriptions
 export const CURATED_COLLECTION = [
@@ -195,6 +196,7 @@ export default function Shop() {
 
   const { addToCart, getCartCount } = useCart();
   const { isAdmin, isSuperAdmin } = useAuth();
+  const { isSandboxMode } = usePaymentEnvironment();
   const navigate = useNavigate();
 
   // Section references for sectioned-out cover parallax (at least 500px height)
@@ -625,15 +627,17 @@ export default function Shop() {
                   >
                     Add to Bag
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSandboxBuy(CURATED_COLLECTION[0])}
-                    className="px-5 py-2.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95"
-                    title={`Send a PayPal Sandbox purchase for ${CURATED_COLLECTION[0].name} at $${CURATED_COLLECTION[0].price.toFixed(2)}`}
-                  >
-                    <span className="material-symbols-outlined text-sm">shopping_cart_checkout</span>
-                    <span>Sandbox Buy • ${CURATED_COLLECTION[0].price.toFixed(2)}</span>
-                  </button>
+                  {isSandboxMode && (
+                    <button
+                      type="button"
+                      onClick={() => handleSandboxBuy(CURATED_COLLECTION[0])}
+                      className="px-5 py-2.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95"
+                      title={`Send a PayPal Sandbox purchase for ${CURATED_COLLECTION[0].name} at $${CURATED_COLLECTION[0].price.toFixed(2)}`}
+                    >
+                      <span className="material-symbols-outlined text-sm">shopping_cart_checkout</span>
+                      <span>Sandbox Buy • ${CURATED_COLLECTION[0].price.toFixed(2)}</span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -910,8 +914,8 @@ export default function Shop() {
                   type="button"
                   onClick={() => setSelectedProduct(item)}
                   className={`px-4 py-2 rounded-full text-xs font-medium transition-all cursor-pointer backdrop-blur-md ${selectedProduct?.id === item.id
-                      ? 'bg-white text-black shadow-lg font-semibold'
-                      : 'bg-[#121214]/90 text-[#a1a1aa] hover:text-white border border-white/[0.1]'
+                    ? 'bg-white text-black shadow-lg font-semibold'
+                    : 'bg-[#121214]/90 text-[#a1a1aa] hover:text-white border border-white/[0.1]'
                     }`}
                 >
                   {item.name || item.id}
@@ -1010,7 +1014,7 @@ export default function Shop() {
                       className="flex-1 py-3.5 rounded-full bg-[#2997ff] hover:bg-[#0077ed] text-white font-semibold text-sm transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
                     >
                       <span className="material-symbols-outlined text-base">shopping_bag</span>
-                      <span>Add to Bag</span>
+                      <span>Add To Cart</span>
                     </button>
 
                     <a
@@ -1201,8 +1205,8 @@ export default function Shop() {
                               setSelectedSizes(prev => ({ ...prev, [product.id]: sz }));
                             }}
                             className={`w-8 h-8 rounded-full text-xs font-semibold transition-all cursor-pointer ${selectedSize === sz
-                                ? 'bg-white text-black shadow-sm'
-                                : 'bg-white/[0.08] text-[#a1a1aa] hover:text-white'
+                              ? 'bg-white text-black shadow-sm'
+                              : 'bg-white/[0.08] text-[#a1a1aa] hover:text-white'
                               }`}
                           >
                             {sz}
@@ -1232,18 +1236,20 @@ export default function Shop() {
                           onClick={() => handleAddToBag(product)}
                           className="px-4 py-2 rounded-full bg-[#2997ff] hover:bg-[#0077ed] text-white text-xs font-semibold transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
                         >
-                          <span>Add to Bag</span>
+                          <span>Add To Cart</span>
                         </button>
 
-                        <button
-                          type="button"
-                          onClick={() => handleSandboxBuy(product)}
-                          className="px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-bold transition-all shadow-md flex items-center gap-1 cursor-pointer active:scale-95"
-                          title={`Send a PayPal Sandbox purchase for ${product.name} at $${price.toFixed(2)}`}
-                        >
-                          <span className="material-symbols-outlined text-xs">shopping_cart_checkout</span>
-                          <span>Sandbox Buy • ${price.toFixed(2)}</span>
-                        </button>
+                        {isSandboxMode && (
+                          <button
+                            type="button"
+                            onClick={() => handleSandboxBuy(product)}
+                            className="px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-bold transition-all shadow-md flex items-center gap-1 cursor-pointer active:scale-95"
+                            title={`Send a PayPal Sandbox purchase for ${product.name} at $${price.toFixed(2)}`}
+                          >
+                            <span className="material-symbols-outlined text-xs">shopping_cart_checkout</span>
+                            <span>Sandbox Buy • ${price.toFixed(2)}</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   </article>

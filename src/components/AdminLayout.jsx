@@ -1,11 +1,13 @@
 import React from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { usePaymentEnvironment } from '../context/PaymentEnvironmentContext';
 
 const AdminLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { currentUser, userType, isSuperAdmin, logout } = useAuth();
+  const { isSandboxMode, activeGateway } = usePaymentEnvironment();
 
   const handleLogout = async () => {
     await logout();
@@ -32,7 +34,31 @@ const AdminLayout = () => {
               {userType ? userType.toUpperCase() : (isSuperAdmin ? 'SUPERADMIN' : 'ADMIN')}
             </span>
           </div>
-          <p className="text-on-surface-variant mt-1 text-xs">Management Suite</p>
+          <div className="flex items-center justify-between mt-2 pt-2 border-t border-outline-variant/30">
+            <p className="text-on-surface-variant text-[11px]">Payment Env:</p>
+            <Link 
+              to="/admin/settings"
+              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider uppercase transition-all shadow-sm ${
+                isSandboxMode 
+                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 hover:bg-amber-500/30' 
+                  : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 hover:bg-emerald-500/30'
+              }`}
+              title={`Active Payment Environment: ${isSandboxMode ? 'Sandbox (Admin Only)' : 'Live Production'}. Click to configure in Settings.`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${isSandboxMode ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`}></span>
+              <span>{isSandboxMode ? 'SANDBOX' : 'LIVE'}</span>
+            </Link>
+          </div>
+          <div className="flex items-center justify-between mt-1">
+            <p className="text-on-surface-variant text-[11px]">Gateway:</p>
+            <Link 
+              to="/admin/settings"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider uppercase bg-primary/10 text-primary border border-primary/30 hover:bg-primary/20 transition-all shadow-sm"
+              title={`Active Gateway: ${activeGateway ? activeGateway.toUpperCase() : 'PAYPAL'}. Click to configure in Settings.`}
+            >
+              <span>{activeGateway === 'both' ? 'MULTI' : (activeGateway ? activeGateway.toUpperCase() : 'PAYPAL')}</span>
+            </Link>
+          </div>
         </div>
 
         <div className="flex-1 px-2 space-y-1.5 overflow-y-auto">

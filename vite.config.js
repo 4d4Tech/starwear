@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import basicSsl from '@vitejs/plugin-basic-ssl'
 import { Buffer } from 'node:buffer'
 
 function assetProxyPlugin() {
@@ -47,22 +48,24 @@ function assetProxyPlugin() {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
+    basicSsl(),
     assetProxyPlugin(),
     tailwindcss(),
     react()
   ],
   server: {
+    host: true,
     proxy: {
       '/api-3daistudio': {
         target: 'https://api.3daistudio.com',
         changeOrigin: true,
-        secure: false,
+        secure: true,
         rewrite: (path) => path.replace(/^\/api-3daistudio/, '')
       },
       '/api-tripo': {
         target: 'https://openapi.tripo3d.ai',
         changeOrigin: true,
-        secure: false,
+        secure: true,
         rewrite: (path) => path.replace(/^\/api-tripo/, '')
       }
     }

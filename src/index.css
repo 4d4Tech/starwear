@@ -159,6 +159,7 @@ video,
   0% {
     transform: translateX(0%);
   }
+
   100% {
     transform: translateX(-50%);
   }
@@ -168,4 +169,8 @@ video,
   display: inline-flex;
   animation: marquee 28s linear infinite;
   will-change: transform;
+}
+
+.cart-icon:hover {
+  color: #fff;
 }

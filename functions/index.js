@@ -10,7 +10,13 @@
 const {setGlobalOptions} = require("firebase-functions");
 const {onCall, onRequest} = require("firebase-functions/v2/https");
 const logger = require("firebase-functions/logger");
-const stripe = require('stripe')('sk_test_YOUR_STRIPE_SECRET_KEY'); // Replace with actual secret key
+
+const getStripe = () => {
+  const secretKey =
+    process.env.STRIPE_SECRET_KEY ||
+    'sk_test_51UNEk9PjHu5pL7bzl0ujBwCik6hvDwLaFjM7V47etNnadC6jyPwA0qcFMzEW3NEkAPZPh7FNm68eTuw13GglBqo000vqVjggQp';
+  return require('stripe')(secretKey);
+};
 
 setGlobalOptions({ maxInstances: 10 });
 
@@ -47,18 +53,59 @@ exports.capturePayPalOrder = onCall(async (request) => {
 
 exports.createStripeCheckoutSession = onCall(async (request) => {
   try {
-    const { items, successUrl, cancelUrl, total } = request.data || {};
-    // Seamless fallback to PayPal Order Creation
-    const paypalResult = await createPayPalOrder({
-      items,
-      total,
-      successUrl,
-      cancelUrl
+    const { items, total, successUrl, cancelUrl, orderDocId, metadata } = request.data || {};
+    const stripeClient = getStripe();
+
+    let lineItems = [];
+    if (items && Array.isArray(items) && items.length > 0) {
+      lineItems = items.map((item) => ({
+        price_data: {
+          currency: 'usd',
+          product_data: {
+            name: (item.name || 'Digital Garment').substring(0, 250),
+            images: item.image && item.image.startsWith('http') ? [item.image] : [],
+            description: item.size ? `Size: ${item.size}` : 'Spatial AR Garment',
+          },
+          unit_amount: Math.max(50, Math.round((Number(item.price) || 0) * 100)),
+        },
+        quantity: item.quantity || 1,
+      }));
+    } else {
+      lineItems = [{
+        price_data: {
+          currency: 'usd',
+          product_data: {
+            name: 'Star weAR Order',
+            description: 'Spatial AR Garments & Digital Assets',
+          },
+          unit_amount: Math.max(50, Math.round(Number(total || 0) * 100)),
+        },
+        quantity: 1,
+      }];
+    }
+
+    const session = await stripeClient.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: lineItems,
+      mode: 'payment',
+      success_url: successUrl || `https://star-wear-ecb39.web.app/success?session_id={CHECKOUT_SESSION_ID}&order_id=${orderDocId || ''}`,
+      cancel_url: cancelUrl || `https://star-wear-ecb39.web.app/checkout`,
+      metadata: {
+        orderDocId: orderDocId || '',
+        gateway: 'stripe',
+        ...(metadata || {})
+      }
     });
-    return { id: paypalResult.id, approvalUrl: paypalResult.approvalUrl };
+
+    return {
+      id: session.id,
+      sessionId: session.id,
+      url: session.url,
+      approvalUrl: session.url
+    };
   } catch (error) {
-    logger.error("Error creating checkout session:", error);
-    throw new Error("Unable to create checkout session");
+    logger.error("Error creating Stripe checkout session:", error);
+    throw new Error(error.message || "Unable to create Stripe checkout session");
   }
 });
 
