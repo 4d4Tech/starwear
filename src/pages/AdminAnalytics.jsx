@@ -1,234 +1,530 @@
 import React, { useState } from 'react';
+import { Line, Bar, Doughnut } from 'react-chartjs-2';
 import { useAnalyticsData } from '../hooks/useAnalyticsData';
+import {
+  formatCurrency,
+  getLineChartOptions,
+  getBarChartOptions,
+  getDoughnutChartOptions,
+  createGradient
+} from '../utils/chartConfig';
 
 const AdminAnalytics = () => {
-  const { data, loading } = useAnalyticsData();
-  const [chartView, setChartView] = useState('revenue'); // 'revenue' or 'orders'
+  const [chartView, setChartView] = useState('revenue'); // 'revenue' | 'orders' | 'dual'
+  const { data, loading, error, timeRange, setTimeRange, refresh, exportDataAsCsv } = useAnalyticsData('30d');
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+      <div className="flex h-96 flex-col items-center justify-center gap-4">
+        <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+        <p className="font-mono text-xs text-secondary tracking-widest uppercase">Aggregating Business Intelligence...</p>
       </div>
     );
   }
 
+  // 1. Main Line Chart: Sales Trends (Revenue / Orders / Dual)
+  const lineChartData = {
+    labels: data.chartDatasets?.labels || [],
+    datasets: chartView === 'dual'
+      ? [
+          {
+            label: 'Revenue ($)',
+            data: data.chartDatasets?.revenue || [],
+            borderColor: '#38bdf8',
+            backgroundColor: (context) => {
+              const ctx = context.chart.ctx;
+              return createGradient(ctx, 'rgba(56, 189, 248, 0.28)', 'rgba(56, 189, 248, 0.0)');
+            },
+            borderWidth: 2.5,
+            tension: 0.35,
+            fill: true,
+            yAxisID: 'y',
+            pointBackgroundColor: '#38bdf8',
+            pointBorderColor: '#0b0f19',
+            pointBorderWidth: 2,
+            pointRadius: 4,
+            pointHoverRadius: 6
+          },
+          {
+            label: 'Orders Count',
+            data: data.chartDatasets?.orders || [],
+            borderColor: '#a855f7',
+            backgroundColor: (context) => {
+              const ctx = context.chart.ctx;
+              return createGradient(ctx, 'rgba(168, 85, 247, 0.2)', 'rgba(168, 85, 247, 0.0)');
+            },
+            borderWidth: 2,
+            borderDash: [5, 5],
+            tension: 0.35,
+            fill: false,
+            yAxisID: 'y1',
+            pointBackgroundColor: '#a855f7',
+            pointBorderColor: '#0b0f19',
+            pointBorderWidth: 2,
+            pointRadius: 4,
+            pointHoverRadius: 6
+          }
+        ]
+      : [
+          chartView === 'revenue'
+            ? {
+                label: 'Revenue ($)',
+                data: data.chartDatasets?.revenue || [],
+                borderColor: '#38bdf8',
+                backgroundColor: (context) => {
+                  const ctx = context.chart.ctx;
+                  return createGradient(ctx, 'rgba(56, 189, 248, 0.35)', 'rgba(56, 189, 248, 0.0)');
+                },
+                borderWidth: 2.5,
+                tension: 0.35,
+                fill: true,
+                pointBackgroundColor: '#38bdf8',
+                pointBorderColor: '#0b0f19',
+                pointBorderWidth: 2,
+                pointRadius: 4,
+                pointHoverRadius: 6
+              }
+            : {
+                label: 'Order Volume',
+                data: data.chartDatasets?.orders || [],
+                borderColor: '#a855f7',
+                backgroundColor: (context) => {
+                  const ctx = context.chart.ctx;
+                  return createGradient(ctx, 'rgba(168, 85, 247, 0.35)', 'rgba(168, 85, 247, 0.0)');
+                },
+                borderWidth: 2.5,
+                tension: 0.35,
+                fill: true,
+                pointBackgroundColor: '#a855f7',
+                pointBorderColor: '#0b0f19',
+                pointBorderWidth: 2,
+                pointRadius: 4,
+                pointHoverRadius: 6
+              }
+        ]
+  };
+
+  // Dual axis options for line chart
+  const mainLineOptions = {
+    ...getLineChartOptions(chartView !== 'orders'),
+    scales: chartView === 'dual'
+      ? {
+          x: {
+            grid: { color: 'rgba(255, 255, 255, 0.04)' },
+            ticks: { color: '#94a3b8', font: { size: 11 } },
+            border: { display: false }
+          },
+          y: {
+            type: 'linear',
+            display: true,
+            position: 'left',
+            grid: { color: 'rgba(255, 255, 255, 0.06)' },
+            ticks: {
+              color: '#38bdf8',
+              font: { size: 11 },
+              callback: (val) => `$${val >= 1000 ? (val / 1000).toFixed(0) + 'k' : val}`
+            },
+            border: { display: false }
+          },
+          y1: {
+            type: 'linear',
+            display: true,
+            position: 'right',
+            grid: { drawOnChartArea: false },
+            ticks: {
+              color: '#a855f7',
+              font: { size: 11 }
+            },
+            border: { display: false }
+          }
+        }
+      : getLineChartOptions(chartView !== 'orders').scales
+  };
+
+  // 2. Channel Distribution Doughnut Chart
+  const channelChartData = {
+    labels: Object.keys(data.channels || {}),
+    datasets: [
+      {
+        data: Object.values(data.channels || {}),
+        backgroundColor: [
+          '#38bdf8', // WebAR Try-on
+          '#a855f7', // Curated Shop
+          '#f59e0b', // Product Page
+          '#10b981'  // Cart Checkout
+        ],
+        borderColor: '#0b0f19',
+        borderWidth: 2,
+        hoverOffset: 6
+      }
+    ]
+  };
+
+  // 3. Top Products Horizontal Bar Chart
+  const topProductsLabels = data.topProducts.map(p => p.name.length > 18 ? p.name.substring(0, 18) + '...' : p.name);
+  const topProductsChartData = {
+    labels: topProductsLabels,
+    datasets: [
+      {
+        label: 'Revenue ($)',
+        data: data.topProducts.map(p => p.revenue),
+        backgroundColor: (context) => {
+          const ctx = context.chart.ctx;
+          return createGradient(ctx, '#38bdf8', '#0284c7');
+        },
+        borderRadius: 6,
+        borderSkipped: false
+      }
+    ]
+  };
+
+  // 4. Order Status Distribution Chart
+  const statusLabels = Object.keys(data.statusBreakdown || {});
+  const statusChartData = {
+    labels: statusLabels,
+    datasets: [
+      {
+        data: Object.values(data.statusBreakdown || {}),
+        backgroundColor: [
+          '#10b981', // Paid (Emerald)
+          '#f59e0b', // Pending (Amber)
+          '#3b82f6'  // Processing (Blue)
+        ],
+        borderColor: '#0b0f19',
+        borderWidth: 2
+      }
+    ]
+  };
+
   return (
-    <>
-      {/* Header Section */}
-      <header className="flex flex-col md:flex-row justify-between items-start md:items-center mb-16 gap-6">
+    <div className="space-y-10 pb-16">
+      {/* Header */}
+      <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 pb-6 border-b border-outline-variant/20">
         <div>
-          <h2 className="font-headline-lg text-headline-lg-mobile md:text-headline-lg text-on-background">Analytics Overview</h2>
-          <p className="text-secondary mt-2">Comprehensive insights and performance metrics.</p>
-        </div>
-        <div className="flex items-center gap-4 w-full md:w-auto">
-          <div className="relative flex-1 md:w-64">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 transform -translate-y-1/2 text-outline">calendar_today</span>
-            <input className="w-full bg-transparent border-b border-outline-variant focus:border-primary py-2 pl-10 pr-4 text-sm focus:outline-none transition-colors" readOnly type="text" value="Last 30 Days" />
+          <div className="flex items-center gap-2 mb-1">
+            <span className="material-symbols-outlined text-sm text-primary">insights</span>
+            <span className="font-mono text-xs text-primary tracking-widest uppercase">Business Intelligence</span>
           </div>
-          <button onClick={() => alert("Exporting analytics data...")} className="bg-primary text-on-primary px-6 py-2 rounded flex items-center gap-2 hover:opacity-90 transition-opacity font-label-caps text-label-caps">
-            <span className="material-symbols-outlined text-[18px]">download</span>
-            EXPORT
+          <h2 className="font-headline-lg text-headline-lg-mobile md:text-headline-lg text-on-background font-bold tracking-tight">
+            Analytics Overview
+          </h2>
+          <p className="text-secondary text-sm mt-1">Real-time revenue telemetry, conversion metrics, and sales channels.</p>
+        </div>
+
+        {/* Action Controls */}
+        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+          {/* Interactive Date Range Selector */}
+          <div className="relative">
+            <select
+              value={timeRange}
+              onChange={(e) => setTimeRange(e.target.value)}
+              className="bg-surface-variant/40 border border-outline-variant/40 text-on-background text-xs font-mono py-2.5 pl-3 pr-8 rounded-lg focus:outline-none focus:border-primary cursor-pointer transition-colors"
+            >
+              <option value="7d">Last 7 Days</option>
+              <option value="30d">Last 30 Days</option>
+              <option value="90d">Last 90 Days</option>
+              <option value="ytd">Year to Date (YTD)</option>
+              <option value="all">All Time</option>
+            </select>
+          </div>
+
+          {/* Refresh Button */}
+          <button
+            type="button"
+            onClick={refresh}
+            className="p-2.5 rounded-lg border border-outline-variant/40 hover:border-primary/50 text-secondary hover:text-white transition-colors cursor-pointer"
+            title="Refresh Data from Firestore"
+          >
+            <span className="material-symbols-outlined text-sm">refresh</span>
+          </button>
+
+          {/* Export CSV Button */}
+          <button
+            type="button"
+            onClick={exportDataAsCsv}
+            className="bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold px-4 py-2.5 rounded-lg flex items-center gap-1.5 transition-all text-xs font-mono shadow-md cursor-pointer active:scale-95"
+            title="Export filtered orders to CSV"
+          >
+            <span className="material-symbols-outlined text-base">download</span>
+            <span>EXPORT CSV</span>
           </button>
         </div>
       </header>
 
+      {error && (
+        <div className="p-4 rounded-xl bg-error/10 border border-error/30 text-error flex items-center gap-3 text-xs font-mono">
+          <span className="material-symbols-outlined">warning</span>
+          <span>Failed to load some data: {error}</span>
+        </div>
+      )}
+
       {/* KPI Cards */}
-      <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter mb-16">
-        {/* Revenue */}
-        <div className="glass-panel p-6 rounded-lg relative overflow-hidden group">
-          <div className="flex justify-between items-start mb-4">
-            <div>
-              <p className="font-label-caps text-label-caps text-secondary mb-1">TOTAL REVENUE</p>
-              <h3 className="font-headline-lg-mobile text-on-background">${data.totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
-            </div>
-            <span className="material-symbols-outlined text-primary bg-primary/10 p-2 rounded-full">payments</span>
+      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* Total Revenue */}
+        <div className="glass-panel p-6 rounded-xl border border-outline-variant/20 hover:border-primary/40 transition-all shadow-sm">
+          <div className="flex justify-between items-start mb-3">
+            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase">TOTAL REVENUE</span>
+            <span className="material-symbols-outlined text-primary bg-primary/10 p-2 rounded-full text-base">
+              payments
+            </span>
           </div>
-          <div className="flex items-center gap-2 text-sm">
-            <span className={`material-symbols-outlined ${data.revenueTrend >= 0 ? 'text-primary' : 'text-error'} text-[16px]`}>
-              {data.revenueTrend >= 0 ? 'trending_up' : 'trending_down'}
-            </span>
-            <span className={`${data.revenueTrend >= 0 ? 'text-primary' : 'text-error'} font-bold`}>
-              {data.revenueTrend > 0 ? '+' : ''}{data.revenueTrend}%
-            </span>
-            <span className="text-secondary">vs last month</span>
+          <div className="font-headline-lg text-3xl sm:text-4xl text-on-background font-bold tracking-tight mb-2">
+            {formatCurrency(data.totalRevenue, 2)}
           </div>
-        </div>
-
-        {/* Orders */}
-        <div className="glass-panel p-6 rounded-lg relative overflow-hidden group">
-          <div className="flex justify-between items-start mb-4">
-            <div>
-              <p className="font-label-caps text-label-caps text-secondary mb-1">TOTAL ORDERS</p>
-              <h3 className="font-headline-lg-mobile text-on-background">{data.totalOrders.toLocaleString()}</h3>
-            </div>
-            <span className="material-symbols-outlined text-primary bg-primary/10 p-2 rounded-full">local_mall</span>
-          </div>
-          <div className="flex items-center gap-2 text-sm">
-            <span className={`material-symbols-outlined ${data.ordersTrend >= 0 ? 'text-primary' : 'text-error'} text-[16px]`}>
-              {data.ordersTrend >= 0 ? 'trending_up' : 'trending_down'}
+          <div className="flex items-center gap-2 text-xs font-mono">
+            <span
+              className={`flex items-center font-bold ${
+                data.revenueTrend >= 0 ? 'text-emerald-400' : 'text-rose-400'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">
+                {data.revenueTrend >= 0 ? 'trending_up' : 'trending_down'}
+              </span>
+              <span>
+                {data.revenueTrend >= 0 ? '+' : ''}
+                {data.revenueTrend}%
+              </span>
             </span>
-            <span className={`${data.ordersTrend >= 0 ? 'text-primary' : 'text-error'} font-bold`}>
-              {data.ordersTrend > 0 ? '+' : ''}{data.ordersTrend}%
-            </span>
-            <span className="text-secondary">vs last month</span>
+            <span className="text-secondary">vs previous period</span>
           </div>
         </div>
 
-        {/* Conversion */}
-        <div className="glass-panel p-6 rounded-lg relative overflow-hidden group">
-          <div className="flex justify-between items-start mb-4">
-            <div>
-              <p className="font-label-caps text-label-caps text-secondary mb-1">CONVERSION RATE</p>
-              <h3 className="font-headline-lg-mobile text-on-background">{data.conversionRate}%</h3>
-            </div>
-            <span className="material-symbols-outlined text-primary bg-primary/10 p-2 rounded-full">swap_horiz</span>
+        {/* Total Orders */}
+        <div className="glass-panel p-6 rounded-xl border border-outline-variant/20 hover:border-primary/40 transition-all shadow-sm">
+          <div className="flex justify-between items-start mb-3">
+            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase">TOTAL ORDERS</span>
+            <span className="material-symbols-outlined text-purple-400 bg-purple-500/10 p-2 rounded-full text-base">
+              local_mall
+            </span>
           </div>
-          <div className="flex items-center gap-2 text-sm">
-            <span className={`material-symbols-outlined ${data.conversionTrend >= 0 ? 'text-primary' : 'text-error'} text-[16px]`}>
-              {data.conversionTrend >= 0 ? 'trending_up' : 'trending_down'}
+          <div className="font-headline-lg text-3xl sm:text-4xl text-on-background font-bold tracking-tight mb-2">
+            {data.totalOrders.toLocaleString()}
+          </div>
+          <div className="flex items-center gap-2 text-xs font-mono">
+            <span
+              className={`flex items-center font-bold ${
+                data.ordersTrend >= 0 ? 'text-emerald-400' : 'text-rose-400'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">
+                {data.ordersTrend >= 0 ? 'trending_up' : 'trending_down'}
+              </span>
+              <span>
+                {data.ordersTrend >= 0 ? '+' : ''}
+                {data.ordersTrend}%
+              </span>
             </span>
-            <span className={`${data.conversionTrend >= 0 ? 'text-primary' : 'text-error'} font-bold`}>
-              {data.conversionTrend > 0 ? '+' : ''}{data.conversionTrend}%
-            </span>
-            <span className="text-secondary">vs last month</span>
+            <span className="text-secondary">vs previous period</span>
           </div>
         </div>
 
-        {/* AOV */}
-        <div className="glass-panel p-6 rounded-lg relative overflow-hidden group">
-          <div className="flex justify-between items-start mb-4">
-            <div>
-              <p className="font-label-caps text-label-caps text-secondary mb-1">AVG ORDER VALUE</p>
-              <h3 className="font-headline-lg-mobile text-on-background">${data.averageOrderValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</h3>
-            </div>
-            <span className="material-symbols-outlined text-primary bg-primary/10 p-2 rounded-full">receipt_long</span>
+        {/* Conversion Rate */}
+        <div className="glass-panel p-6 rounded-xl border border-outline-variant/20 hover:border-primary/40 transition-all shadow-sm">
+          <div className="flex justify-between items-start mb-3">
+            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase">CONVERSION RATE</span>
+            <span className="material-symbols-outlined text-amber-400 bg-amber-500/10 p-2 rounded-full text-base">
+              swap_horiz
+            </span>
           </div>
-          <div className="flex items-center gap-2 text-sm">
-            <span className={`material-symbols-outlined ${data.aovTrend >= 0 ? 'text-primary' : 'text-error'} text-[16px]`}>
-              {data.aovTrend >= 0 ? 'trending_up' : 'trending_down'}
+          <div className="font-headline-lg text-3xl sm:text-4xl text-on-background font-bold tracking-tight mb-2">
+            {data.conversionRate}%
+          </div>
+          <div className="flex items-center gap-2 text-xs font-mono">
+            <span
+              className={`flex items-center font-bold ${
+                data.conversionTrend >= 0 ? 'text-emerald-400' : 'text-rose-400'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">
+                {data.conversionTrend >= 0 ? 'trending_up' : 'trending_down'}
+              </span>
+              <span>
+                {data.conversionTrend >= 0 ? '+' : ''}
+                {data.conversionTrend}%
+              </span>
             </span>
-            <span className={`${data.aovTrend >= 0 ? 'text-primary' : 'text-error'} font-bold`}>
-              {data.aovTrend > 0 ? '+' : ''}{data.aovTrend}%
+            <span className="text-secondary">vs previous period</span>
+          </div>
+        </div>
+
+        {/* Average Order Value */}
+        <div className="glass-panel p-6 rounded-xl border border-outline-variant/20 hover:border-primary/40 transition-all shadow-sm">
+          <div className="flex justify-between items-start mb-3">
+            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase">AVG ORDER VALUE</span>
+            <span className="material-symbols-outlined text-emerald-400 bg-emerald-500/10 p-2 rounded-full text-base">
+              receipt_long
             </span>
-            <span className="text-secondary">vs last month</span>
+          </div>
+          <div className="font-headline-lg text-3xl sm:text-4xl text-on-background font-bold tracking-tight mb-2">
+            {formatCurrency(data.averageOrderValue, 2)}
+          </div>
+          <div className="flex items-center gap-2 text-xs font-mono">
+            <span
+              className={`flex items-center font-bold ${
+                data.aovTrend >= 0 ? 'text-emerald-400' : 'text-rose-400'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">
+                {data.aovTrend >= 0 ? 'trending_up' : 'trending_down'}
+              </span>
+              <span>
+                {data.aovTrend >= 0 ? '+' : ''}
+                {data.aovTrend}%
+              </span>
+            </span>
+            <span className="text-secondary">vs previous period</span>
           </div>
         </div>
       </section>
 
-      {/* Charts Grid */}
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-gutter">
-        {/* Main Chart */}
-        <div className="glass-panel p-8 rounded-lg lg:col-span-2 flex flex-col">
-          <div className="flex justify-between items-center mb-8">
-            <h3 className="font-bold text-lg text-on-background">Sales Trends</h3>
-            <div className="flex gap-4">
-              <button 
-                onClick={() => setChartView('revenue')}
-                className={`font-label-caps text-label-caps pb-1 transition-colors ${chartView === 'revenue' ? 'text-primary border-b-2 border-primary' : 'text-secondary hover:text-primary'}`}
-              >
-                REVENUE
-              </button>
-              <button 
-                onClick={() => setChartView('orders')}
-                className={`font-label-caps text-label-caps pb-1 transition-colors ${chartView === 'orders' ? 'text-primary border-b-2 border-primary' : 'text-secondary hover:text-primary'}`}
-              >
-                ORDERS
-              </button>
-            </div>
+      {/* Main Chart.js Interactive Graph */}
+      <section className="glass-panel p-6 sm:p-8 rounded-xl border border-outline-variant/20 shadow-sm flex flex-col">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+          <div>
+            <h3 className="font-bold text-lg text-on-background tracking-wide">Sales & Order Trends</h3>
+            <p className="text-xs text-secondary font-mono mt-0.5">Chart.js dynamic visual timeline</p>
           </div>
-          {/* Abstract Chart Placeholder using CSS Gradients/Shapes to simulate a minimalist area chart */}
-          <div className="flex-1 relative w-full min-h-[300px] border-b border-l border-outline-variant/30 flex items-end pt-8">
-            {/* Y Axis Labels */}
-            <div className="absolute left-[-40px] top-0 bottom-0 flex flex-col justify-between text-xs text-secondary py-2">
-              {chartView === 'revenue' ? (
-                <>
-                  <span>${(Math.max(...data.salesData.map(d => d.revenue), 50000) / 1000).toFixed(0)}k</span>
-                  <span>${(Math.max(...data.salesData.map(d => d.revenue), 50000) * 0.8 / 1000).toFixed(0)}k</span>
-                  <span>${(Math.max(...data.salesData.map(d => d.revenue), 50000) * 0.6 / 1000).toFixed(0)}k</span>
-                  <span>${(Math.max(...data.salesData.map(d => d.revenue), 50000) * 0.4 / 1000).toFixed(0)}k</span>
-                  <span>${(Math.max(...data.salesData.map(d => d.revenue), 50000) * 0.2 / 1000).toFixed(0)}k</span>
-                  <span>$0</span>
-                </>
-              ) : (
-                <>
-                  <span>{Math.max(...data.salesData.map(d => d.orders), 500)}</span>
-                  <span>{Math.round(Math.max(...data.salesData.map(d => d.orders), 500) * 0.8)}</span>
-                  <span>{Math.round(Math.max(...data.salesData.map(d => d.orders), 500) * 0.6)}</span>
-                  <span>{Math.round(Math.max(...data.salesData.map(d => d.orders), 500) * 0.4)}</span>
-                  <span>{Math.round(Math.max(...data.salesData.map(d => d.orders), 500) * 0.2)}</span>
-                  <span>0</span>
-                </>
-              )}
-            </div>
-            {/* Chart Area Simulation */}
-            <div className="relative w-full h-full flex items-end justify-between px-4 pb-2">
-              {/* Bars/Points */}
-              {data.salesData.map((item, index) => {
-                const value = chartView === 'revenue' ? item.revenue : item.orders;
-                const maxValue = chartView === 'revenue' 
-                  ? Math.max(...data.salesData.map(d => d.revenue), 50000) 
-                  : Math.max(...data.salesData.map(d => d.orders), 500);
-                const heightPercentage = `${Math.max((value / maxValue) * 100, 2)}%`; // Ensure min height of 2%
-                
+
+          {/* Metric Selector Toggle */}
+          <div className="flex items-center gap-1.5 bg-surface-variant/40 p-1 rounded-lg border border-outline-variant/30 text-xs font-mono">
+            <button
+              type="button"
+              onClick={() => setChartView('revenue')}
+              className={`px-3 py-1.5 rounded transition-all cursor-pointer ${
+                chartView === 'revenue'
+                  ? 'bg-cyan-500 text-slate-950 font-bold shadow-md'
+                  : 'text-secondary hover:text-white'
+              }`}
+            >
+              Revenue ($)
+            </button>
+            <button
+              type="button"
+              onClick={() => setChartView('orders')}
+              className={`px-3 py-1.5 rounded transition-all cursor-pointer ${
+                chartView === 'orders'
+                  ? 'bg-purple-500 text-white font-bold shadow-md'
+                  : 'text-secondary hover:text-white'
+              }`}
+            >
+              Orders Count
+            </button>
+            <button
+              type="button"
+              onClick={() => setChartView('dual')}
+              className={`px-3 py-1.5 rounded transition-all cursor-pointer ${
+                chartView === 'dual'
+                  ? 'bg-amber-500 text-slate-950 font-bold shadow-md'
+                  : 'text-secondary hover:text-white'
+              }`}
+            >
+              Dual Comparison
+            </button>
+          </div>
+        </div>
+
+        <div className="relative w-full h-[360px]">
+          <Line data={lineChartData} options={mainLineOptions} />
+        </div>
+      </section>
+
+      {/* Multi-Chart Analytics Grid */}
+      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Chart 1: Channels Doughnut */}
+        <div className="glass-panel p-6 sm:p-8 rounded-xl border border-outline-variant/20 shadow-sm flex flex-col">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-bold text-base text-on-background tracking-wide">Sales by Channel</h3>
+            <span className="text-[11px] font-mono text-secondary">WebAR vs Shop</span>
+          </div>
+          <div className="relative w-full h-[240px] flex items-center justify-center my-auto">
+            <Doughnut data={channelChartData} options={getDoughnutChartOptions('orders')} />
+          </div>
+          <div className="pt-4 border-t border-outline-variant/20 text-xs font-mono text-secondary flex justify-between">
+            <span>Direct WebAR Try-on:</span>
+            <span className="font-bold text-cyan-400">{data.channels?.['WebAR Try-on'] || 0}</span>
+          </div>
+        </div>
+
+        {/* Chart 2: Top Selling Products Bar Chart */}
+        <div className="glass-panel p-6 sm:p-8 rounded-xl border border-outline-variant/20 shadow-sm flex flex-col">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-bold text-base text-on-background tracking-wide">Top Products</h3>
+            <span className="text-[11px] font-mono text-secondary">By Revenue</span>
+          </div>
+          <div className="relative w-full h-[240px]">
+            <Bar data={topProductsChartData} options={getBarChartOptions(true, true)} />
+          </div>
+          <div className="pt-4 border-t border-outline-variant/20 text-xs font-mono text-secondary flex justify-between">
+            <span>Top Asset:</span>
+            <span className="font-bold text-on-background truncate max-w-[160px]">
+              {data.topProducts[0]?.name || 'N/A'}
+            </span>
+          </div>
+        </div>
+
+        {/* Chart 3: Order Status & Fulfillment */}
+        <div className="glass-panel p-6 sm:p-8 rounded-xl border border-outline-variant/20 shadow-sm flex flex-col">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-bold text-base text-on-background tracking-wide">Order Status</h3>
+            <span className="text-[11px] font-mono text-secondary">Fulfillment</span>
+          </div>
+          <div className="relative w-full h-[240px] flex items-center justify-center my-auto">
+            <Doughnut data={statusChartData} options={getDoughnutChartOptions('orders')} />
+          </div>
+          <div className="pt-4 border-t border-outline-variant/20 text-xs font-mono text-secondary flex justify-between">
+            <span>Verified Paid:</span>
+            <span className="font-bold text-emerald-400">{data.paidOrdersCount}</span>
+          </div>
+        </div>
+      </section>
+
+      {/* Granular Timeline Breakdown Table */}
+      <section className="glass-panel rounded-xl border border-outline-variant/20 overflow-hidden shadow-sm">
+        <div className="p-6 border-b border-outline-variant/20 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+          <div>
+            <h3 className="font-bold text-base text-on-background tracking-wide">Timeline Breakdown</h3>
+            <p className="text-xs text-secondary font-mono">Period telemetry table</p>
+          </div>
+          <span className="text-xs font-mono text-secondary px-2.5 py-1 rounded bg-surface-variant/40 border border-outline-variant/30">
+            {data.salesData.length} Interval Intervals
+          </span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs font-mono">
+            <thead>
+              <tr className="border-b border-outline-variant/20 text-secondary bg-surface-variant/20">
+                <th className="py-3 px-6 font-semibold">DATE INTERVAL</th>
+                <th className="py-3 px-6 font-semibold">ORDERS</th>
+                <th className="py-3 px-6 font-semibold">REVENUE</th>
+                <th className="py-3 px-6 font-semibold">AVG BASKET</th>
+                <th className="py-3 px-6 font-semibold text-right">STATUS</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-outline-variant/15 text-on-background">
+              {data.salesData.map((row, index) => {
+                const aov = row.orders > 0 ? row.revenue / row.orders : 0;
                 return (
-                  <div key={index} className="w-1/12 bg-primary/20 hover:bg-primary/40 transition-colors rounded-t relative group cursor-pointer" style={{ height: heightPercentage }}>
-                    <div className="hidden group-hover:block absolute -top-8 left-1/2 -translate-x-1/2 bg-inverse-surface text-inverse-on-surface text-xs py-1 px-2 rounded whitespace-nowrap z-10">
-                      {chartView === 'revenue' ? `$${(value / 1000).toFixed(0)}k` : `${value} orders`}
-                    </div>
-                  </div>
+                  <tr key={index} className="hover:bg-white/[0.02] transition-colors">
+                    <td className="py-3 px-6 font-bold">{row.label}</td>
+                    <td className="py-3 px-6">{row.orders} orders</td>
+                    <td className="py-3 px-6 font-bold text-cyan-400">{formatCurrency(row.revenue, 2)}</td>
+                    <td className="py-3 px-6 text-secondary">{formatCurrency(aov, 2)}</td>
+                    <td className="py-3 px-6 text-right">
+                      <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                        row.revenue > 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-surface-variant text-secondary'
+                      }`}>
+                        {row.revenue > 0 ? 'ACTIVE' : 'IDLE'}
+                      </span>
+                    </td>
+                  </tr>
                 );
               })}
-            </div>
-            {/* X Axis Labels */}
-            <div className="absolute -bottom-8 left-0 right-0 flex justify-between px-4 text-xs text-secondary">
-              {data.salesData.map((item, index) => (
-                <span key={index}>{item.label}</span>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Demographics / secondary chart */}
-        <div className="glass-panel p-8 rounded-lg flex flex-col">
-          <h3 className="font-bold text-lg text-on-background mb-8">Customer Demographics</h3>
-          <div className="flex-1 flex flex-col justify-center">
-            {/* Donut Chart Simulation */}
-            <div className="relative w-48 h-48 mx-auto mb-8 rounded-full border-[16px] border-surface-variant flex items-center justify-center">
-              <div className="absolute inset-[-16px] rounded-full border-[16px] border-primary" style={{clipPath: "polygon(50% 50%, 100% 0, 100% 100%, 0 100%, 0 50%)"}}></div>
-              <div className="absolute inset-[-16px] rounded-full border-[16px] border-primary-container" style={{clipPath: "polygon(50% 50%, 0 50%, 0 0, 50% 0)"}}></div>
-              <div className="text-center">
-                <span className="block font-headline-lg-mobile text-on-background">{data.demographics.female}%</span>
-                <span className="text-xs text-secondary font-label-caps">FEMALE</span>
-              </div>
-            </div>
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-primary"></div>
-                  <span className="text-sm">Female</span>
-                </div>
-                <span className="font-bold">{data.demographics.female}%</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-primary-container"></div>
-                  <span className="text-sm">Male</span>
-                </div>
-                <span className="font-bold">{data.demographics.male}%</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-surface-variant"></div>
-                  <span className="text-sm">Other/Unspecified</span>
-                </div>
-                <span className="font-bold">{data.demographics.other}%</span>
-              </div>
-            </div>
-          </div>
+            </tbody>
+          </table>
         </div>
       </section>
-    </>
+    </div>
   );
 };
 

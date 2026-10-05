@@ -163,6 +163,66 @@ function ProductDetails() {
   const assetPrice = asset?.price !== undefined ? Number(asset.price) : 99.00;
   const assetTitle = (asset?.name || asset?.id || 'DIGITAL ASSET').toUpperCase();
 
+  const [isPurchasing, setIsPurchasing] = useState(false);
+
+  // Send PayPal Sandbox Purchase directly for this product with its correct price
+  const handleSandboxPurchase = async () => {
+    if (!asset || isPurchasing) return;
+    setIsPurchasing(true);
+    try {
+      const { startDirectPayPalCheckout } = await import('../services/paypalService');
+      await startDirectPayPalCheckout({
+        items: [{
+          id: asset.id,
+          name: assetTitle,
+          price: assetPrice,
+          quantity: 1,
+          size: selectedSize,
+          image: asset.imageUrl || asset.image || modelUrl || ''
+        }],
+        total: assetPrice,
+        metadata: {
+          assetId: asset.id,
+          size: selectedSize,
+          source: 'product_details_sandbox_btn'
+        }
+      });
+    } catch (err) {
+      console.error('PayPal Sandbox purchase failed:', err);
+      alert(`PayPal Sandbox error: ${err.message}`);
+      setIsPurchasing(false);
+    }
+  };
+
+  // Instant 1-Click Sandbox Test Purchase for this product
+  const handleInstantSandboxPurchase = async () => {
+    if (!asset || isPurchasing) return;
+    setIsPurchasing(true);
+    try {
+      const { executeInstantSandboxPurchase } = await import('../services/paypalService');
+      await executeInstantSandboxPurchase({
+        items: [{
+          id: asset.id,
+          name: assetTitle,
+          price: assetPrice,
+          quantity: 1,
+          size: selectedSize,
+          image: asset.imageUrl || asset.image || modelUrl || ''
+        }],
+        total: assetPrice,
+        metadata: {
+          assetId: asset.id,
+          size: selectedSize,
+          source: 'product_details_instant_sandbox'
+        }
+      });
+    } catch (err) {
+      console.error('Instant sandbox purchase failed:', err);
+      alert(`Instant sandbox error: ${err.message}`);
+      setIsPurchasing(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background text-on-background selection:bg-primary-container selection:text-on-primary-container font-body-md antialiased">
       <Header />
@@ -224,7 +284,7 @@ function ProductDetails() {
                 {/* Interactive Elements */}
                 <div className="space-y-6">
                   {/* Size / Fit Selection */}
-                  <div className="space-y-3">
+                  {/* <div className="space-y-3">
                     <div className="flex justify-between items-center">
                       <span className="font-label-caps text-label-caps text-on-surface-variant">DIGITAL FIT / SIZE</span>
                       <span className="font-label-caps text-[10px] tracking-widest text-primary">UNIVERSAL AR MESH</span>
@@ -244,37 +304,67 @@ function ProductDetails() {
                         </button>
                       ))}
                     </div>
-                  </div>
+                  </div> */}
 
                   {/* Price & Primary Action */}
-                  <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
-                    <div className="flex flex-col">
-                      <span className="text-[10px] font-mono uppercase text-secondary">PRICE</span>
-                      <span className="font-headline-lg text-2xl md:text-3xl text-on-background font-bold">
-                        ${assetPrice.toFixed(2)}
-                      </span>
+                  <div className="pt-2 flex flex-col items-stretch gap-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex flex-col">
+                        <span className="text-[10px] font-mono uppercase text-secondary">PRICE</span>
+                        <span className="font-headline-lg text-2xl md:text-3xl text-on-background font-bold">
+                          ${assetPrice.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-500 border border-blue-500/20 text-[11px] font-mono">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                        <span>PayPal Sandbox</span>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    {/* Primary Button Group */}
+                    <div className="flex flex-col sm:flex-row items-stretch gap-2.5">
+                      {/* PayPal Sandbox Purchase Button */}
                       <button
                         type="button"
-                        onClick={handleAddToCart}
-                        disabled={loading || !asset}
-                        className="flex-1 sm:flex-initial bg-on-background text-on-primary px-6 py-3.5 font-label-caps text-label-caps hover:bg-on-background/90 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-lg"
+                        onClick={handleSandboxPurchase}
+                        disabled={loading || !asset || isPurchasing}
+                        className="flex-1 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 px-5 py-3.5 font-label-caps text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-lg active:scale-95"
+                        title="Send a PayPal Sandbox Purchase with this product's exact price"
                       >
-                        {addedToast ? (
+                        {isPurchasing ? (
                           <>
-                            <span className="material-symbols-outlined text-emerald-400 text-[18px]">check_circle</span>
-                            <span>ADDED TO CART</span>
+                            <span className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></span>
+                            <span>CONNECTING PAYPAL...</span>
                           </>
                         ) : (
                           <>
-                            <span>ADD TO CART</span>
-                            <span className="material-symbols-outlined text-[18px]">arrow_right_alt</span>
+                            <span className="material-symbols-outlined text-[18px]">shopping_cart_checkout</span>
+                            <span>SANDBOX PURCHASE • ${assetPrice.toFixed(2)}</span>
                           </>
                         )}
                       </button>
 
+                      {/* Add to Bag Button */}
+                      <button
+                        type="button"
+                        onClick={handleAddToCart}
+                        disabled={loading || !asset}
+                        className="bg-on-background text-on-primary px-5 py-3.5 font-label-caps text-xs hover:bg-on-background/90 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-md"
+                      >
+                        {addedToast ? (
+                          <>
+                            <span className="material-symbols-outlined text-emerald-400 text-[18px]">check_circle</span>
+                            <span>ADDED</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="material-symbols-outlined text-[18px]">add_shopping_cart</span>
+                            <span>ADD TO BAG</span>
+                          </>
+                        )}
+                      </button>
+
+                      {/* AR Try-On Button */}
                       {asset?.id && (
                         <a
                           href={`/ar/${asset.id}`}
@@ -285,6 +375,21 @@ function ProductDetails() {
                           <span className="hidden sm:inline">AR</span>
                         </a>
                       )}
+                    </div>
+
+                    {/* Instant 1-Click Sandbox Test Link */}
+                    <div className="flex items-center justify-between text-[11px] font-mono text-secondary pt-0.5 px-1">
+                      <span>Developer / Testing Sandbox:</span>
+                      <button
+                        type="button"
+                        onClick={handleInstantSandboxPurchase}
+                        disabled={loading || !asset || isPurchasing}
+                        className="text-amber-600 hover:text-amber-500 underline font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                        title="Simulates an approved PayPal sandbox payment and creates the paid order in Firestore immediately"
+                      >
+                        <span className="material-symbols-outlined text-xs">bolt</span>
+                        <span>Instant 1-Click Sandbox Test (${assetPrice.toFixed(2)})</span>
+                      </button>
                     </div>
                   </div>
 

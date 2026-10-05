@@ -1,11 +1,65 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Header from '../components/Header';
 import { useCart } from '../context/CartContext';
+import { startDirectPayPalCheckout } from '../services/paypalService';
 
 export default function ShoppingCart() {
   const { cartItems, updateQuantity, removeFromCart, getCartTotal } = useCart();
   const subtotal = getCartTotal();
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const handleSandboxBuyItem = async (item) => {
+    setIsProcessing(true);
+    const itemTotal = (Number(item.price) || 0) * (item.quantity || 1);
+    try {
+      await startDirectPayPalCheckout({
+        items: [{
+          id: item.id || '',
+          name: item.name || 'Digital Garment',
+          price: Number(item.price) || 0,
+          quantity: item.quantity || 1,
+          size: item.size || 'One Size',
+          image: item.image || ''
+        }],
+        total: itemTotal,
+        metadata: {
+          source: 'cart_single_item_sandbox_btn',
+          itemId: item.id
+        }
+      });
+    } catch (err) {
+      console.error('Cart item sandbox error:', err);
+      alert(`Sandbox purchase failed: ${err.message}`);
+      setIsProcessing(false);
+    }
+  };
+
+  const handleSandboxCheckoutCart = async () => {
+    if (cartItems.length === 0) return;
+    setIsProcessing(true);
+    try {
+      await startDirectPayPalCheckout({
+        items: cartItems.map(item => ({
+          id: item.id || '',
+          name: item.name || 'Digital Garment',
+          price: Number(item.price) || 0,
+          quantity: item.quantity || 1,
+          size: item.size || 'One Size',
+          image: item.image || ''
+        })),
+        total: subtotal,
+        metadata: {
+          source: 'cart_sandbox_checkout_btn',
+          itemCount: cartItems.length
+        }
+      });
+    } catch (err) {
+      console.error('Cart sandbox checkout error:', err);
+      alert(`Sandbox purchase failed: ${err.message}`);
+      setIsProcessing(false);
+    }
+  };
 
   return (
     <div className="bg-background text-on-background antialiased min-h-screen flex flex-col font-body-md selection:bg-primary-container selection:text-on-primary-container">
@@ -48,7 +102,7 @@ export default function ShoppingCart() {
                       <p className="font-body-md text-body-md text-secondary mb-4">Size: {item.size || 'One Size'}</p>
                     </div>
                     
-                    <div className="flex justify-between items-end">
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                       <div className="flex items-center space-x-4 border border-outline-variant/50 rounded-full px-4 py-2 w-max">
                         <button 
                           className="text-secondary hover:text-on-background transition-colors"
@@ -65,12 +119,25 @@ export default function ShoppingCart() {
                         </button>
                       </div>
                       
-                      <button 
-                        className="font-label-caps text-label-caps text-secondary hover:text-error transition-colors uppercase border-b border-transparent hover:border-error pb-0.5 tracking-widest"
-                        onClick={() => removeFromCart(item.id)}
-                      >
-                        Remove
-                      </button>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => handleSandboxBuyItem(item)}
+                          disabled={isProcessing}
+                          className="px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-all active:scale-95 disabled:opacity-50"
+                          title={`Send a PayPal Sandbox purchase for ${item.name} at its price of $${((Number(item.price) || 0) * (item.quantity || 1)).toFixed(2)}`}
+                        >
+                          <span className="material-symbols-outlined text-sm">shopping_cart_checkout</span>
+                          <span>Sandbox Buy • ${((Number(item.price) || 0) * (item.quantity || 1)).toFixed(2)}</span>
+                        </button>
+
+                        <button 
+                          className="font-label-caps text-label-caps text-secondary hover:text-error transition-colors uppercase border-b border-transparent hover:border-error pb-0.5 tracking-widest cursor-pointer"
+                          onClick={() => removeFromCart(item.id)}
+                        >
+                          Remove
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -110,6 +177,17 @@ export default function ShoppingCart() {
               >
                 PROCEED TO CHECKOUT
               </Link>
+
+              <button
+                type="button"
+                onClick={handleSandboxCheckoutCart}
+                disabled={cartItems.length === 0 || isProcessing}
+                className="mt-3 w-full py-3.5 px-6 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-label-caps text-xs font-bold rounded shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95 disabled:opacity-50"
+                title={`Send a PayPal Sandbox purchase for the total cart of $${subtotal.toFixed(2)}`}
+              >
+                <span className="material-symbols-outlined text-base">shopping_cart_checkout</span>
+                <span>SEND SANDBOX PURCHASE • ${subtotal.toFixed(2)} USD</span>
+              </button>
               
               <div className="mt-6 flex justify-center gap-4 text-secondary">
                 <span className="material-symbols-outlined text-xl" style={{ fontVariationSettings: "'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24" }}>lock</span>

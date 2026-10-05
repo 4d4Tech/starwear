@@ -14,35 +14,50 @@ const stripe = require('stripe')('sk_test_YOUR_STRIPE_SECRET_KEY'); // Replace w
 
 setGlobalOptions({ maxInstances: 10 });
 
+const { createPayPalOrder, capturePayPalOrder } = require("./src/paypalService");
+
+exports.createPayPalOrder = onCall(async (request) => {
+  try {
+    const { items, total, currency, successUrl, cancelUrl, orderDocId } = request.data || {};
+    const result = await createPayPalOrder({
+      items,
+      total,
+      currency: currency || "USD",
+      successUrl,
+      cancelUrl,
+      orderDocId
+    });
+    return result;
+  } catch (error) {
+    logger.error("Error creating PayPal order:", error);
+    throw new Error(error.message || "Unable to create PayPal order");
+  }
+});
+
+exports.capturePayPalOrder = onCall(async (request) => {
+  try {
+    const { orderId, orderDocId } = request.data || {};
+    const result = await capturePayPalOrder({ orderId, orderDocId });
+    return result;
+  } catch (error) {
+    logger.error("Error capturing PayPal order:", error);
+    throw new Error(error.message || "Unable to capture PayPal order");
+  }
+});
+
 exports.createStripeCheckoutSession = onCall(async (request) => {
   try {
-    const { items, successUrl, cancelUrl } = request.data;
-
-    // Format items for Stripe
-    const lineItems = items.map((item) => ({
-      price_data: {
-        currency: 'usd',
-        product_data: {
-          name: item.name,
-          images: item.image ? [item.image] : [],
-        },
-        unit_amount: Math.round(item.price * 100), // Stripe expects cents
-      },
-      quantity: item.quantity,
-    }));
-
-    // Create Checkout Session
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: lineItems,
-      mode: 'payment',
-      success_url: successUrl,
-      cancel_url: cancelUrl,
+    const { items, successUrl, cancelUrl, total } = request.data || {};
+    // Seamless fallback to PayPal Order Creation
+    const paypalResult = await createPayPalOrder({
+      items,
+      total,
+      successUrl,
+      cancelUrl
     });
-
-    return { id: session.id };
+    return { id: paypalResult.id, approvalUrl: paypalResult.approvalUrl };
   } catch (error) {
-    logger.error("Error creating stripe session:", error);
+    logger.error("Error creating checkout session:", error);
     throw new Error("Unable to create checkout session");
   }
 });

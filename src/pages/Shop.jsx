@@ -10,7 +10,7 @@ import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 
 // Curated Collection with punchy, plain-English descriptions
-const CURATED_COLLECTION = [
+export const CURATED_COLLECTION = [
   {
     id: 'aether-chrono-trench',
     name: 'Aether Trench',
@@ -372,6 +372,34 @@ export default function Shop() {
     setTimeout(() => setCartToast(null), 4000);
   };
 
+  const handleSandboxBuy = async (product) => {
+    const size = selectedSizes[product.id] || 'M';
+    const color = selectedColors[product.id] || product.colors?.[0]?.name || 'Classic';
+    const price = product.price !== undefined ? Number(product.price) : 280.00;
+
+    try {
+      const { startDirectPayPalCheckout } = await import('../services/paypalService');
+      await startDirectPayPalCheckout({
+        items: [{
+          id: `${product.id}-${size}-${color.replace(/\s+/g, '')}`,
+          name: product.name || product.id,
+          price: price,
+          quantity: 1,
+          size: `${size} • ${color}`,
+          image: product.imageUrl || product.image || ''
+        }],
+        total: price,
+        metadata: {
+          productId: product.id,
+          source: 'shop_sandbox_btn'
+        }
+      });
+    } catch (err) {
+      console.error('Shop sandbox purchase error:', err);
+      alert(`Sandbox purchase failed: ${err.message}`);
+    }
+  };
+
   // Smooth scroll handler using Lenis
   const scrollToSection = (e, sectionId) => {
     e.preventDefault();
@@ -582,7 +610,7 @@ export default function Shop() {
                   </p>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <a
                     href="/ar/aether-chrono-trench"
                     className="px-5 py-2.5 rounded-full bg-white/15 hover:bg-white/25 backdrop-blur-xl border border-white/20 text-white text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
@@ -595,7 +623,16 @@ export default function Shop() {
                     onClick={() => handleAddToBag(CURATED_COLLECTION[0])}
                     className="px-5 py-2.5 rounded-full bg-[#2997ff] hover:bg-[#0077ed] text-white text-xs font-semibold transition-all shadow-md cursor-pointer"
                   >
-                    Buy $280
+                    Add to Bag
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSandboxBuy(CURATED_COLLECTION[0])}
+                    className="px-5 py-2.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95"
+                    title={`Send a PayPal Sandbox purchase for ${CURATED_COLLECTION[0].name} at $${CURATED_COLLECTION[0].price.toFixed(2)}`}
+                  >
+                    <span className="material-symbols-outlined text-sm">shopping_cart_checkout</span>
+                    <span>Sandbox Buy • ${CURATED_COLLECTION[0].price.toFixed(2)}</span>
                   </button>
                 </div>
               </div>
@@ -1181,7 +1218,7 @@ export default function Shop() {
                         <span className="text-xl font-bold text-white">${price.toFixed(2)}</span>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <a
                           href={`/ar/${product.id}`}
                           className="p-2.5 rounded-full bg-white/[0.08] hover:bg-white/[0.18] text-[#a1a1aa] hover:text-white transition-colors"
@@ -1193,9 +1230,19 @@ export default function Shop() {
                         <button
                           type="button"
                           onClick={() => handleAddToBag(product)}
-                          className="px-5 py-2.5 rounded-full bg-[#2997ff] hover:bg-[#0077ed] text-white text-xs font-semibold transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
+                          className="px-4 py-2 rounded-full bg-[#2997ff] hover:bg-[#0077ed] text-white text-xs font-semibold transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
                         >
                           <span>Add to Bag</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleSandboxBuy(product)}
+                          className="px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-bold transition-all shadow-md flex items-center gap-1 cursor-pointer active:scale-95"
+                          title={`Send a PayPal Sandbox purchase for ${product.name} at $${price.toFixed(2)}`}
+                        >
+                          <span className="material-symbols-outlined text-xs">shopping_cart_checkout</span>
+                          <span>Sandbox Buy • ${price.toFixed(2)}</span>
                         </button>
                       </div>
                     </div>

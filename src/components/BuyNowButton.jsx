@@ -1,8 +1,10 @@
 import React from 'react';
 
-const BuyNowButton = ({ color = '#e11d48', onClick }) => {
+const BuyNowButton = ({ color = '#e11d48', onClick, price, label, disabled = false }) => {
+  const displayLabel = label || (price !== undefined && price !== null ? `Buy Now • $${Number(price).toFixed(2)}` : 'Buy Now');
+
   return (
-    <div className="absolute bottom-12 left-1/2 z-50" style={{ transform: 'translateX(-50%)' }}>
+    <div className="absolute bottom-12 left-1/2 z-50 pointer-events-auto" style={{ transform: 'translateX(-50%)' }}>
       <style>{`
         @keyframes scale-pulse {
           0%, 100% { transform: scale(1); }
@@ -15,7 +17,7 @@ const BuyNowButton = ({ color = '#e11d48', onClick }) => {
         }
         .ar-buy-btn:hover {
           animation: none;
-          transform: scale(1.1);
+          transform: scale(1.05);
         }
         .ar-buy-btn:active {
           animation: none;
@@ -23,14 +25,16 @@ const BuyNowButton = ({ color = '#e11d48', onClick }) => {
         }
       `}</style>
       <button
-        className="ar-buy-btn px-10 py-4 text-white font-bold tracking-widest text-lg uppercase cursor-pointer border border-white/20"
+        disabled={disabled}
+        className="ar-buy-btn px-8 py-3.5 text-white font-bold tracking-wider text-base uppercase cursor-pointer border border-white/20 flex items-center gap-2 backdrop-blur-md disabled:opacity-50"
         style={{
           backgroundColor: color,
-          borderRadius: '8px'
+          borderRadius: '9999px'
         }}
         onClick={onClick}
       >
-        Buy Now
+        <span className="material-symbols-outlined text-lg">shopping_cart_checkout</span>
+        <span>{displayLabel}</span>
       </button>
     </div>
   );

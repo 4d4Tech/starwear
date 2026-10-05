@@ -900,37 +900,42 @@ useEffect(() => {
     logToScreen('MEDIA_MUTE_TOGGLE', `Audio state changed: ${nextMuted ? 'MUTED' : 'UNMUTED'}`);
   };
 
-  // Stripe Checkout Handler
+  // PayPal Checkout Handler
   const handleCheckout = async () => {
     setCheckoutLoading(true);
     try {
-      const { loadStripe } = await import('@stripe/stripe-js');
-      const { httpsCallable } = await import('firebase/functions');
-      const { functions, analytics } = await import('../firebase');
+      const { analytics } = await import('../firebase');
       const { logEvent } = await import('firebase/analytics');
+      const { startDirectPayPalCheckout } = await import('../services/paypalService');
 
-      logEvent(analytics, 'checkout_started', {
-        items: [{ item_name: 'AR Garment', price: 99.0 }],
-        batch_id: batchId
-      });
-
-      const stripe = await loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY || 'pk_test_TYooMQauvdEDq54NiTphI7jx');
-      const createCheckoutSession = httpsCallable(functions, 'createStripeCheckoutSession');
-
-      const response = await createCheckoutSession({
-        items: [{ name: 'AR Garment Purchase', price: 99.0, quantity: 1 }],
-        successUrl: window.location.origin + '/success',
-        cancelUrl: window.location.origin + '/cancel'
-      });
-
-      const sessionId = response.data?.id;
-      if (stripe && sessionId) {
-        await stripe.redirectToCheckout({ sessionId });
+      try {
+        logEvent(analytics, 'checkout_started', {
+          items: [{ item_name: 'AR Garment', price: 99.0 }],
+          batch_id: batchId
+        });
+      } catch {
+        // Analytics failure non-fatal
       }
+
+      const itemPrice = arData?.price !== undefined ? Number(arData.price) : 99.00;
+
+      await startDirectPayPalCheckout({
+        items: [{
+          id: batchId || '',
+          name: arData?.name || `AR Garment (${batchId || 'Exclusive'})`,
+          price: itemPrice,
+          quantity: 1,
+          image: arData?.gltfPath || ''
+        }],
+        total: itemPrice,
+        metadata: {
+          batchId: batchId || '',
+          source: 'ar_experience'
+        }
+      });
     } catch (err) {
-      console.error('Checkout error:', err);
+      console.error('PayPal Checkout error:', err);
       alert(`Checkout failed: ${err.message}`);
-    } finally {
       setCheckoutLoading(false);
     }
   };
@@ -1365,6 +1370,7 @@ useEffect(() => {
           color={buyButtonColor}
           onClick={handleCheckout}
           disabled={checkoutLoading}
+          price={arData?.price !== undefined ? Number(arData.price) : 99.00}
         />
       )}
 

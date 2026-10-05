@@ -52,6 +52,33 @@ export default function Collections() {
     setTimeout(() => setCartToast(''), 3500);
   };
 
+  const handleSandboxBuy = async (e, product) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const price = product.price !== undefined ? Number(product.price) : 99.00;
+    try {
+      const { startDirectPayPalCheckout } = await import('../services/paypalService');
+      await startDirectPayPalCheckout({
+        items: [{
+          id: product.id,
+          name: (product.name || product.id).toUpperCase(),
+          price: price,
+          quantity: 1,
+          size: 'M',
+          image: product.imageUrl || product.image || ''
+        }],
+        total: price,
+        metadata: {
+          productId: product.id,
+          source: 'collections_sandbox_btn'
+        }
+      });
+    } catch (err) {
+      console.error('Collections sandbox error:', err);
+      alert(`Sandbox purchase failed: ${err.message}`);
+    }
+  };
+
   // Filter products
   const filteredProducts = products.filter(p => {
     if (activeCategory === 'WEBAR') return !!p.mind_file_path;
@@ -264,17 +291,28 @@ export default function Collections() {
                             <h3 className="font-body-lg text-body-lg font-bold text-on-background uppercase truncate group-hover:text-primary transition-colors">
                               {product.name || product.id}
                             </h3>
-                            <div className="flex items-center justify-between mt-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2 mt-3 pt-2 border-t border-white/5">
                               <p className="font-mono text-base font-bold text-primary">
                                 ${price.toFixed(2)}
                               </p>
-                              <button
-                                type="button"
-                                onClick={(e) => handleAddToCart(e, product)}
-                                className="font-label-caps text-[10px] tracking-widest text-primary border-b border-primary hover:opacity-70 transition-opacity uppercase z-10 relative cursor-pointer"
-                              >
-                                + ADD TO VAULT
-                              </button>
+                              <div className="flex items-center gap-2 z-10 relative">
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleAddToCart(e, product)}
+                                  className="font-label-caps text-[10px] tracking-widest text-secondary hover:text-white border-b border-transparent hover:border-white transition-all uppercase cursor-pointer"
+                                >
+                                  + VAULT
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleSandboxBuy(e, product)}
+                                  className="px-2.5 py-1 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-[10px] font-mono font-bold transition-all shadow cursor-pointer active:scale-95 flex items-center gap-1"
+                                  title={`Send a PayPal Sandbox purchase for ${product.name || product.id} at $${price.toFixed(2)}`}
+                                >
+                                  <span className="material-symbols-outlined text-xs">shopping_cart_checkout</span>
+                                  <span>Sandbox Buy</span>
+                                </button>
+                              </div>
                             </div>
                           </div>
                         </div>

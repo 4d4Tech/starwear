@@ -3013,32 +3013,35 @@ const ARTest = () => {
   const handleCheckout = async () => {
     setCheckoutLoading(true);
     try {
-      logEvent(analytics, 'checkout_started', {
-        items: [{ item_name: 'AR Garment', price: 99.00 }],
-        batch_id: batchId
-      });
+      const { startDirectPayPalCheckout } = await import('../services/paypalService');
+      const itemPrice = arData?.price !== undefined ? Number(arData.price) : 99.00;
 
-      const stripe = await loadStripe(import.meta.env.VITE_STRIPE_PUBLIC_KEY || 'pk_test_TYooMQauvdEDq54NiTphI7jx');
-      const createCheckoutSession = httpsCallable(functions, 'createStripeCheckoutSession');
-
-      const response = await createCheckoutSession({
-        items: [{
-          name: 'AR Garment Purchase',
-          price: 99.00,
-          quantity: 1
-        }],
-        successUrl: window.location.origin + '/success',
-        cancelUrl: window.location.origin + '/cancel'
-      });
-
-      const sessionId = response.data.id;
-      if (stripe && sessionId) {
-        await stripe.redirectToCheckout({ sessionId });
+      try {
+        logEvent(analytics, 'checkout_started', {
+          items: [{ item_name: 'AR Garment', price: itemPrice }],
+          batch_id: batchId
+        });
+      } catch {
+        // Analytics failure non-fatal
       }
+
+      await startDirectPayPalCheckout({
+        items: [{
+          id: batchId || '',
+          name: arData?.name || `AR Garment (${batchId || 'Exclusive'})`,
+          price: itemPrice,
+          quantity: 1,
+          image: localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || ''
+        }],
+        total: itemPrice,
+        metadata: {
+          batchId: batchId || '',
+          source: 'ar_test'
+        }
+      });
     } catch (error) {
-      console.error("Checkout error:", error);
-      alert("Checkout failed. See console for details.");
-    } finally {
+      console.error("PayPal Checkout error:", error);
+      alert(`Checkout failed: ${error.message}`);
       setCheckoutLoading(false);
     }
   };
@@ -5716,6 +5719,7 @@ const ARTest = () => {
             color={buyButtonColor}
             onClick={handleCheckout}
             disabled={checkoutLoading}
+            price={arData?.price !== undefined ? Number(arData.price) : 99.00}
           />
         )}
       </div>
