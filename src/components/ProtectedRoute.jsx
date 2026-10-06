@@ -2,8 +2,8 @@ import React from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-export default function ProtectedRoute({ requireSuperAdmin = false, requireStudio = false }) {
-  const { currentUser, isAdmin, isSuperAdmin, isCreator, loading } = useAuth();
+export default function ProtectedRoute({ requireSuperAdmin = false }) {
+  const { currentUser, isAdmin, isSuperAdmin, loading } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -17,12 +17,10 @@ export default function ProtectedRoute({ requireSuperAdmin = false, requireStudi
     );
   }
 
-  // Grant access if user meets the role requirement (superadmin, general admin, or studio creator)
+  // Only authenticated admin users (superadmin or admin) have access
   let hasAccess = false;
   if (requireSuperAdmin) {
     hasAccess = Boolean(currentUser && isSuperAdmin);
-  } else if (requireStudio) {
-    hasAccess = Boolean(currentUser && (isSuperAdmin || isAdmin || isCreator));
   } else {
     hasAccess = Boolean(currentUser && (isAdmin || isSuperAdmin));
   }

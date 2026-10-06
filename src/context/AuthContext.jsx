@@ -45,13 +45,13 @@ export function AuthProvider({ children }) {
       const isClaimCreator = isClaimAdmin || roleClaim === 'creator' || roleClaim === 'creater' || claims.creator === true || claims.isCreator === true;
 
       if (isClaimSuper) {
-        return { isSuper: true, isAdmin: true, isCreator: true, canAccessStudio: true, type: 'superadmin' };
+        return { isSuper: true, isAdmin: true, isCreator: true, canAccessStudio: true, canAccessARTest: true, type: 'superadmin' };
       }
       if (isClaimAdmin) {
-        return { isSuper: false, isAdmin: true, isCreator: true, canAccessStudio: true, type: 'admin' };
+        return { isSuper: false, isAdmin: true, isCreator: true, canAccessStudio: true, canAccessARTest: true, type: 'admin' };
       }
       if (isClaimCreator) {
-        return { isSuper: false, isAdmin: false, isCreator: true, canAccessStudio: true, type: 'creator' };
+        return { isSuper: false, isAdmin: false, isCreator: true, canAccessStudio: false, canAccessARTest: false, type: 'creator' };
       }
 
       // 3. Check Firestore 'users' collection (by UID)
@@ -65,13 +65,13 @@ export function AuthProvider({ children }) {
         const isDocCreator = isDocAdmin || docRole === 'creator' || docRole === 'creater' || data.isCreator === true || data.creator === true;
 
         if (isDocSuper) {
-          return { isSuper: true, isAdmin: true, isCreator: true, canAccessStudio: true, type: data.userType || 'superadmin' };
+          return { isSuper: true, isAdmin: true, isCreator: true, canAccessStudio: true, canAccessARTest: true, type: data.userType || 'superadmin' };
         }
         if (isDocAdmin) {
-          return { isSuper: false, isAdmin: true, isCreator: true, canAccessStudio: true, type: data.userType || 'admin' };
+          return { isSuper: false, isAdmin: true, isCreator: true, canAccessStudio: true, canAccessARTest: true, type: data.userType || 'admin' };
         }
         if (isDocCreator) {
-          return { isSuper: false, isAdmin: false, isCreator: true, canAccessStudio: true, type: data.userType || 'creator' };
+          return { isSuper: false, isAdmin: false, isCreator: true, canAccessStudio: false, canAccessARTest: false, type: data.userType || 'creator' };
         }
       }
 
@@ -87,21 +87,21 @@ export function AuthProvider({ children }) {
           const isDocCreator = isDocAdmin || docRole === 'creator' || docRole === 'creater' || data.isCreator === true || data.creator === true;
 
           if (isDocSuper) {
-            return { isSuper: true, isAdmin: true, isCreator: true, canAccessStudio: true, type: data.userType || 'superadmin' };
+            return { isSuper: true, isAdmin: true, isCreator: true, canAccessStudio: true, canAccessARTest: true, type: data.userType || 'superadmin' };
           }
           if (isDocAdmin) {
-            return { isSuper: false, isAdmin: true, isCreator: true, canAccessStudio: true, type: data.userType || 'admin' };
+            return { isSuper: false, isAdmin: true, isCreator: true, canAccessStudio: true, canAccessARTest: true, type: data.userType || 'admin' };
           }
           if (isDocCreator) {
-            return { isSuper: false, isAdmin: false, isCreator: true, canAccessStudio: true, type: data.userType || 'creator' };
+            return { isSuper: false, isAdmin: false, isCreator: true, canAccessStudio: false, canAccessARTest: false, type: data.userType || 'creator' };
           }
         }
       }
     } catch (err) {
-      console.error('Error verifying admin/creator permissions:', err);
+      console.error('Error verifying admin permissions:', err);
     }
 
-    return { isSuper: false, isAdmin: false, isCreator: false, canAccessStudio: false, type: 'user' };
+    return { isSuper: false, isAdmin: false, isCreator: false, canAccessStudio: false, canAccessARTest: false, type: 'user' };
   };
 
   useEffect(() => {
@@ -147,7 +147,9 @@ export function AuthProvider({ children }) {
     setUserType(null);
   };
 
-  const canAccessStudio = isSuperAdmin || isAdmin || isCreator;
+  // Only authenticated admin users (superadmin or admin) have access to Studio 4D4 and AR-Test
+  const canAccessStudio = Boolean(currentUser && (isSuperAdmin || isAdmin));
+  const canAccessARTest = Boolean(currentUser && (isSuperAdmin || isAdmin));
 
   const value = {
     currentUser,
@@ -156,6 +158,7 @@ export function AuthProvider({ children }) {
     isSuperAdmin,
     isCreator,
     canAccessStudio,
+    canAccessARTest,
     loading,
     login,
     logout

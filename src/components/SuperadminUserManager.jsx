@@ -305,14 +305,14 @@ export default function SuperadminUserManager() {
                   onChange={(e) => setNewRole(e.target.value)}
                   className="w-full px-4 py-2.5 rounded-xl bg-[#1c1c22] border border-white/[0.12] focus:border-purple-400 text-white text-xs outline-none font-mono transition-colors cursor-pointer"
                 >
-                  <option value="superadmin">Superadmin (Full System Access & Users)</option>
-                  <option value="admin">Admin (Inventory, Orders, Analytics, Studio 4D4)</option>
-                  <option value="creator">Creator (Studio 4D4 Rigging, Templates, AR)</option>
+                  <option value="superadmin">Superadmin (Full System Access, Roles, Studio 4D4 & AR-Test)</option>
+                  <option value="admin">Admin (Inventory, Orders, Analytics, Studio 4D4 & AR-Test)</option>
+                  <option value="creator">Creator / Contributor (Catalog Contributor)</option>
                 </select>
                 <p className="text-[10px] text-[#71717a] font-mono">
-                  {newRole === 'superadmin' && '• Has full authority to edit settings, view credentials, and provision other admins.'}
-                  {newRole === 'admin' && '• Can manage storefront products, orders, and launch Studio 4D4.'}
-                  {newRole === 'creator' && '• Dedicated access to Studio 4D4 3D workstation, rigging tools, and mesh templates.'}
+                  {newRole === 'superadmin' && '• Has full authority to edit settings, view credentials, manage users, and access Studio 4D4 & AR-Test.'}
+                  {newRole === 'admin' && '• Can manage storefront products, orders, and access Studio 4D4 & AR-Test calibration.'}
+                  {newRole === 'creator' && '• General contributor profile. Studio 4D4 and AR-Test are restricted to authenticated admins.'}
                 </p>
               </div>
 
@@ -423,7 +423,7 @@ export default function SuperadminUserManager() {
                 <th className="py-3 px-4">Account / Email</th>
                 <th className="py-3 px-4">Assigned Role</th>
                 <th className="py-3 px-4">Access Tier</th>
-                <th className="py-3 px-4">Studio 4D4 Access</th>
+                <th className="py-3 px-4">Studio & AR Access</th>
                 <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
@@ -447,7 +447,7 @@ export default function SuperadminUserManager() {
                 filteredUsers.map((u) => {
                   const role = (u.role || u.userType || 'user').toLowerCase();
                   const isOwner = (u.email || '').toLowerCase() === PRIMARY_OWNER_EMAIL;
-                  const canStudio = isOwner || ['superadmin', 'admin', 'creator', 'creater'].includes(role) || u.isCreator || u.isAdmin || u.isSuperAdmin;
+                  const canStudio = isOwner || ['superadmin', 'admin'].includes(role) || u.isAdmin || u.isSuperAdmin;
 
                   return (
                     <tr key={u.id} className="hover:bg-surface-variant/20 transition-colors">
@@ -509,13 +509,13 @@ export default function SuperadminUserManager() {
 
                       {/* Access Tier Description */}
                       <td className="py-3.5 px-4 text-secondary text-[11px]">
-                        {role === 'superadmin' && 'Full System Control (Settings + Billing + Roles)'}
-                        {role === 'admin' && 'Store Management (Orders + Inventory + Templates)'}
-                        {(role === 'creator' || role === 'creater') && 'Spatial Creator (Studio 4D4 Rigging + Templates)'}
+                        {role === 'superadmin' && 'Full System Control (Settings + Billing + Roles + Studio/AR)'}
+                        {role === 'admin' && 'Store Management (Orders + Inventory + Studio/AR)'}
+                        {(role === 'creator' || role === 'creater') && 'Creator / Contributor (Read-only catalog content)'}
                         {role === 'user' && 'Restricted (Customer View Only)'}
                       </td>
 
-                      {/* Studio 4D4 Access Indicator */}
+                      {/* Studio 4D4 & AR Access Indicator */}
                       <td className="py-3.5 px-4">
                         {canStudio ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">

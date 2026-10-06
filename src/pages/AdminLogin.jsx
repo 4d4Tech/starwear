@@ -17,12 +17,12 @@ export default function AdminLogin() {
   const searchParams = new URLSearchParams(location.search);
   const redirectPath = searchParams.get('redirect') || '/admin/dashboard';
 
-  // If already logged in as admin, superadmin, or creator, redirect directly
+  // If already logged in as admin or superadmin, redirect directly
   React.useEffect(() => {
-    if (currentUser && (isAdmin || isSuperAdmin || isCreator)) {
+    if (currentUser && (isAdmin || isSuperAdmin)) {
       navigate(redirectPath, { replace: true });
     }
-  }, [currentUser, isAdmin, isSuperAdmin, isCreator, navigate, redirectPath]);
+  }, [currentUser, isAdmin, isSuperAdmin, navigate, redirectPath]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -31,12 +31,12 @@ export default function AdminLogin() {
 
     try {
       const result = await login(email.trim(), password);
-      if (result.isSuperAdmin || result.isAdmin || result.isCreator) {
+      if (result.isSuperAdmin || result.isAdmin) {
         navigate(redirectPath, { replace: true });
       } else {
-        // Authenticated, but lacking admin or creator privileges
+        // Authenticated, but lacking admin privileges
         await logout();
-        setErrorMessage('Access Denied: This account does not possess Admin or Creator privileges.');
+        setErrorMessage('Access Denied: Only authenticated admin users have access.');
       }
     } catch (err) {
       console.error('Login error:', err);
