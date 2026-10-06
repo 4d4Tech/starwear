@@ -14,6 +14,7 @@ import AdminInventory from './pages/AdminInventory';
 import AdminOrders from './pages/AdminOrders';
 import AdminSettings from './pages/AdminSettings';
 import AdminModelTemplates from './pages/AdminModelTemplates';
+import AdminTeam from './pages/AdminTeam';
 import SeedDatabase from './pages/SeedDatabase';
 import Studio4D4 from './pages/Studio4D4';
 import About from './pages/About';
@@ -45,9 +46,13 @@ function App() {
           <Route path="/contact" element={<Contact />} />
           <Route path="/seed" element={<SeedDatabase />} />
           <Route path="/ar/:batchId" element={<ARExperience />} />
-          <Route path="/studio44" element={<Studio4D4 />} />
-          <Route path="/studio" element={<Studio4D4 />} />
-          <Route path="/studio4d4" element={<Studio4D4 />} />
+
+          {/* Studio 4D4 Workspace - Restricted to Superadmin, Admin, and Creator roles */}
+          <Route element={<ProtectedRoute requireStudio={true} />}>
+            <Route path="/studio44" element={<Studio4D4 />} />
+            <Route path="/studio" element={<Studio4D4 />} />
+            <Route path="/studio4d4" element={<Studio4D4 />} />
+          </Route>
 
           {/* Admin Login Portal */}
           <Route path="/admin/login" element={<AdminLogin />} />
@@ -66,6 +71,8 @@ function App() {
               <Route path="model-templates" element={<AdminModelTemplates />} />
               <Route path="templates" element={<AdminModelTemplates />} />
               <Route path="orders" element={<AdminOrders />} />
+              <Route path="team" element={<AdminTeam />} />
+              <Route path="roles" element={<AdminTeam />} />
               <Route path="settings" element={<AdminSettings />} />
             </Route>
           </Route>

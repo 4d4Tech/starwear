@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { usePaymentEnvironment } from '../context/PaymentEnvironmentContext';
+import SuperadminUserManager from '../components/SuperadminUserManager';
 
 const AdminSettings = () => {
   const { currentUser, isSuperAdmin, isAdmin } = useAuth();
@@ -455,6 +456,13 @@ const AdminSettings = () => {
             </div>
           </div>
         </section>
+
+        {/* SUPERADMIN ONLY: Admin & Role Governance Section */}
+        {isSuperAdmin && (
+          <section className="glass-panel p-6 sm:p-8 rounded-xl border border-purple-500/30 lg:col-span-3 shadow-lg">
+            <SuperadminUserManager />
+          </section>
+        )}
       </div>
     </div>
   );

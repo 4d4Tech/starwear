@@ -29,5 +29,5 @@ const storage = getStorage(app);
 const templatesStorage = getStorage(app, "gs://3dtemplates");
 const functions = getFunctions(app);
 
-export { app, analytics, db, auth, storage, templatesStorage, functions };
+export { app, analytics, db, auth, storage, templatesStorage, functions, firebaseConfig };
 

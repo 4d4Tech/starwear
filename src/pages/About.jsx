@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
+import { useAuth } from '../context/AuthContext';
 
 export default function About() {
+  const { canAccessStudio } = useAuth();
   const [activeLayer, setActiveLayer] = useState('hologram');
 
   const layers = [
@@ -80,13 +82,23 @@ export default function About() {
                 <span>Explore The Drops</span>
                 <span className="material-symbols-outlined text-sm">arrow_forward</span>
               </Link>
-              <Link
-                to="/studio4d4"
-                className="px-8 py-3.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/[0.15] text-white font-mono font-bold text-xs uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2"
-              >
-                <span className="material-symbols-outlined text-sm text-[#38bdf8]">view_in_ar</span>
-                <span>Open Studio 4D4</span>
-              </Link>
+              {canAccessStudio ? (
+                <Link
+                  to="/studio4d4"
+                  className="px-8 py-3.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/[0.15] text-white font-mono font-bold text-xs uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2"
+                >
+                  <span className="material-symbols-outlined text-sm text-[#38bdf8]">view_in_ar</span>
+                  <span>Open Studio 4D4</span>
+                </Link>
+              ) : (
+                <Link
+                  to="/collections"
+                  className="px-8 py-3.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/[0.15] text-white font-mono font-bold text-xs uppercase tracking-wider transition-all cursor-pointer flex items-center gap-2"
+                >
+                  <span className="material-symbols-outlined text-sm text-[#38bdf8]">grid_view</span>
+                  <span>View Collections</span>
+                </Link>
+              )}
             </div>
           </div>
 
@@ -392,13 +404,23 @@ export default function About() {
               </div>
 
               <div className="pt-4">
-                <Link
-                  to="/studio4d4"
-                  className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-black hover:bg-[#38bdf8] hover:text-black font-mono font-bold text-xs uppercase tracking-wider transition-all"
-                >
-                  <span>Launch Studio 4D4 Workstation</span>
-                  <span className="material-symbols-outlined text-sm">open_in_new</span>
-                </Link>
+                {canAccessStudio ? (
+                  <Link
+                    to="/studio4d4"
+                    className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-black hover:bg-[#38bdf8] hover:text-black font-mono font-bold text-xs uppercase tracking-wider transition-all"
+                  >
+                    <span>Launch Studio 4D4 Workstation</span>
+                    <span className="material-symbols-outlined text-sm">open_in_new</span>
+                  </Link>
+                ) : (
+                  <Link
+                    to="/contact"
+                    className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-black hover:bg-[#38bdf8] hover:text-black font-mono font-bold text-xs uppercase tracking-wider transition-all"
+                  >
+                    <span>Request Bespoke 3D Commission</span>
+                    <span className="material-symbols-outlined text-sm">arrow_forward</span>
+                  </Link>
+                )}
               </div>
             </div>
 

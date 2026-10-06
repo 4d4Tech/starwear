@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 export default function Header() {
   const location = useLocation();
   const { getCartCount } = useCart();
-  const { isAdmin, isSuperAdmin } = useAuth();
+  const { isAdmin, isSuperAdmin, canAccessStudio } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Close mobile menu whenever location changes
@@ -98,10 +98,12 @@ export default function Header() {
               <span>CONTACT</span>
               <span className="material-symbols-outlined text-xs">arrow_forward</span>
             </Link>
-            <Link className={getMobileLinkClasses('/studio4d4')} to="/studio4d4">
-              <span>STUDIO 4D4 (3D)</span>
-              <span className="material-symbols-outlined text-xs">view_in_ar</span>
-            </Link>
+            {canAccessStudio && (
+              <Link className={getMobileLinkClasses('/studio4d4')} to="/studio4d4">
+                <span>STUDIO 4D4 (3D)</span>
+                <span className="material-symbols-outlined text-xs">view_in_ar</span>
+              </Link>
+            )}
 
             <div className="pt-4 border-t border-outline-variant/20 flex items-center justify-between text-xs text-secondary font-mono">
               <span>SPATIAL LUXURY</span>

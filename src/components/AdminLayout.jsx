@@ -82,6 +82,12 @@ const AdminLayout = () => {
             <span className="material-symbols-outlined">category</span>
             <span>MODEL TEMPLATES</span>
           </Link>
+          {isSuperAdmin && (
+            <Link to="/admin/team" className={getLinkClass('/admin/team')}>
+              <span className="material-symbols-outlined">manage_accounts</span>
+              <span>ADMIN & ROLES</span>
+            </Link>
+          )}
           <Link to="/admin/settings" className={getLinkClass('/admin/settings')}>
             <span className="material-symbols-outlined">settings</span>
             <span>SETTINGS</span>

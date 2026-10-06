@@ -22,38 +22,36 @@ export function AuthProvider({ children }) {
   const [userType, setUserType] = useState(null);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isCreator, setIsCreator] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Helper function to determine if a user has admin or superadmin rights
+  // Helper function to determine if a user has admin, superadmin, or creator rights
   const verifyRoles = async (user) => {
-    if (!user) return { isSuper: false, isAdmin: false, type: null };
+    if (!user) return { isSuper: false, isAdmin: false, isCreator: false, canAccessStudio: false, type: null };
 
     // 1. Primary email check for system owner (always full superadmin)
     const email = user.email?.toLowerCase();
     if (email === 'brandonrobinson81@gmail.com') {
-      return { isSuper: true, isAdmin: true, type: 'superadmin' };
+      return { isSuper: true, isAdmin: true, isCreator: true, canAccessStudio: true, type: 'superadmin' };
     }
 
     try {
       // 2. Check Custom Claims in JWT Token
       const tokenResult = await user.getIdTokenResult(true);
       const claims = tokenResult?.claims || {};
-      const isClaimSuper = 
-        claims.userType === 'superadmin' || 
-        claims.role === 'superadmin' || 
-        claims.superadmin === true;
-      const isClaimAdmin = 
-        isClaimSuper ||
-        claims.userType === 'admin' || 
-        claims.role === 'admin' || 
-        claims.admin === true ||
-        claims.isAdmin === true;
+      const roleClaim = (claims.role || claims.userType || '').toLowerCase();
+      const isClaimSuper = roleClaim === 'superadmin' || claims.superadmin === true;
+      const isClaimAdmin = isClaimSuper || roleClaim === 'admin' || claims.admin === true || claims.isAdmin === true;
+      const isClaimCreator = isClaimAdmin || roleClaim === 'creator' || roleClaim === 'creater' || claims.creator === true || claims.isCreator === true;
 
       if (isClaimSuper) {
-        return { isSuper: true, isAdmin: true, type: claims.userType || 'superadmin' };
+        return { isSuper: true, isAdmin: true, isCreator: true, canAccessStudio: true, type: 'superadmin' };
       }
       if (isClaimAdmin) {
-        return { isSuper: false, isAdmin: true, type: claims.userType || 'admin' };
+        return { isSuper: false, isAdmin: true, isCreator: true, canAccessStudio: true, type: 'admin' };
+      }
+      if (isClaimCreator) {
+        return { isSuper: false, isAdmin: false, isCreator: true, canAccessStudio: true, type: 'creator' };
       }
 
       // 3. Check Firestore 'users' collection (by UID)
@@ -61,21 +59,19 @@ export function AuthProvider({ children }) {
       const userSnap = await getDoc(userDocRef);
       if (userSnap.exists()) {
         const data = userSnap.data();
-        const isDocSuper = 
-          data.userType === 'superadmin' || 
-          data.role === 'superadmin' || 
-          data.isSuperAdmin === true;
-        const isDocAdmin = 
-          isDocSuper ||
-          data.userType === 'admin' || 
-          data.role === 'admin' || 
-          data.isAdmin === true;
+        const docRole = (data.role || data.userType || '').toLowerCase();
+        const isDocSuper = docRole === 'superadmin' || data.isSuperAdmin === true;
+        const isDocAdmin = isDocSuper || docRole === 'admin' || data.isAdmin === true;
+        const isDocCreator = isDocAdmin || docRole === 'creator' || docRole === 'creater' || data.isCreator === true || data.creator === true;
 
         if (isDocSuper) {
-          return { isSuper: true, isAdmin: true, type: data.userType || 'superadmin' };
+          return { isSuper: true, isAdmin: true, isCreator: true, canAccessStudio: true, type: data.userType || 'superadmin' };
         }
         if (isDocAdmin) {
-          return { isSuper: false, isAdmin: true, type: data.userType || 'admin' };
+          return { isSuper: false, isAdmin: true, isCreator: true, canAccessStudio: true, type: data.userType || 'admin' };
+        }
+        if (isDocCreator) {
+          return { isSuper: false, isAdmin: false, isCreator: true, canAccessStudio: true, type: data.userType || 'creator' };
         }
       }
 
@@ -85,43 +81,43 @@ export function AuthProvider({ children }) {
         const emailSnap = await getDoc(emailDocRef);
         if (emailSnap.exists()) {
           const data = emailSnap.data();
-          const isDocSuper = 
-            data.userType === 'superadmin' || 
-            data.role === 'superadmin' || 
-            data.isSuperAdmin === true;
-          const isDocAdmin = 
-            isDocSuper ||
-            data.userType === 'admin' || 
-            data.role === 'admin' || 
-            data.isAdmin === true;
+          const docRole = (data.role || data.userType || '').toLowerCase();
+          const isDocSuper = docRole === 'superadmin' || data.isSuperAdmin === true;
+          const isDocAdmin = isDocSuper || docRole === 'admin' || data.isAdmin === true;
+          const isDocCreator = isDocAdmin || docRole === 'creator' || docRole === 'creater' || data.isCreator === true || data.creator === true;
 
           if (isDocSuper) {
-            return { isSuper: true, isAdmin: true, type: data.userType || 'superadmin' };
+            return { isSuper: true, isAdmin: true, isCreator: true, canAccessStudio: true, type: data.userType || 'superadmin' };
           }
           if (isDocAdmin) {
-            return { isSuper: false, isAdmin: true, type: data.userType || 'admin' };
+            return { isSuper: false, isAdmin: true, isCreator: true, canAccessStudio: true, type: data.userType || 'admin' };
+          }
+          if (isDocCreator) {
+            return { isSuper: false, isAdmin: false, isCreator: true, canAccessStudio: true, type: data.userType || 'creator' };
           }
         }
       }
     } catch (err) {
-      console.error('Error verifying admin permissions:', err);
+      console.error('Error verifying admin/creator permissions:', err);
     }
 
-    return { isSuper: false, isAdmin: false, type: 'user' };
+    return { isSuper: false, isAdmin: false, isCreator: false, canAccessStudio: false, type: 'user' };
   };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setCurrentUser(user);
-        const { isSuper, isAdmin: isAdm, type } = await verifyRoles(user);
+        const { isSuper, isAdmin: isAdm, isCreator: isCrt, type } = await verifyRoles(user);
         setIsSuperAdmin(isSuper);
         setIsAdmin(isAdm);
+        setIsCreator(isCrt);
         setUserType(type);
       } else {
         setCurrentUser(null);
         setIsSuperAdmin(false);
         setIsAdmin(false);
+        setIsCreator(false);
         setUserType(null);
       }
       setLoading(false);
@@ -134,11 +130,12 @@ export function AuthProvider({ children }) {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     const user = userCredential.user;
     setCurrentUser(user);
-    const { isSuper, isAdmin: isAdm, type } = await verifyRoles(user);
+    const { isSuper, isAdmin: isAdm, isCreator: isCrt, canAccessStudio: canStudio, type } = await verifyRoles(user);
     setIsSuperAdmin(isSuper);
     setIsAdmin(isAdm);
+    setIsCreator(isCrt);
     setUserType(type);
-    return { user, isSuperAdmin: isSuper, isAdmin: isAdm, userType: type };
+    return { user, isSuperAdmin: isSuper, isAdmin: isAdm, isCreator: isCrt, canAccessStudio: canStudio, userType: type };
   };
 
   const logout = async () => {
@@ -146,14 +143,19 @@ export function AuthProvider({ children }) {
     setCurrentUser(null);
     setIsSuperAdmin(false);
     setIsAdmin(false);
+    setIsCreator(false);
     setUserType(null);
   };
+
+  const canAccessStudio = isSuperAdmin || isAdmin || isCreator;
 
   const value = {
     currentUser,
     userType,
     isAdmin,
     isSuperAdmin,
+    isCreator,
+    canAccessStudio,
     loading,
     login,
     logout

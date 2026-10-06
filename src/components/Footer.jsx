@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useCart } from '../context/CartContext';
 
 export default function Footer() {
-  const { isAdmin, isSuperAdmin } = useAuth();
+  const { isAdmin, isSuperAdmin, canAccessStudio } = useAuth();
   const { getCartCount } = useCart();
   const [email, setEmail] = useState('');
   const [subscribed, setSubscribed] = useState(false);
@@ -89,9 +89,11 @@ export default function Footer() {
               <li>
                 <Link to="/shop" className="hover:text-white transition-colors">All Garments</Link>
               </li>
-              <li>
-                <Link to="/studio4d4" className="hover:text-white transition-colors">Studio 4D4 3D Rigging</Link>
-              </li>
+              {canAccessStudio && (
+                <li>
+                  <Link to="/studio4d4" className="hover:text-white transition-colors">Studio 4D4 3D Rigging</Link>
+                </li>
+              )}
               <li>
                 <Link to="/cart" className="hover:text-white transition-colors">Bag ({getCartCount()})</Link>
               </li>
