@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
@@ -10,7 +10,7 @@ export default function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Close mobile menu whenever location changes
-  React.useEffect(() => {
+  useEffect(() => {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
