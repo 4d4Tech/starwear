@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import Header from '../components/Header';
 import { useCart } from '../context/CartContext';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { capturePayPalOrder } from '../services/paypalService';
+import { calculateStripeFeeBreakdown } from '../services/stripeService';
 
 const OrderSuccess = () => {
   const [searchParams] = useSearchParams();
@@ -49,10 +50,25 @@ const OrderSuccess = () => {
         try {
           const orderRef = doc(db, 'orders', orderId);
           if (isStripe) {
+            let orderTotal = 0;
+            try {
+              const orderSnap = await getDoc(orderRef);
+              if (orderSnap.exists()) {
+                orderTotal = Number(orderSnap.data()?.total || 0);
+              }
+            } catch (snapErr) {
+              console.warn('Could not read order total for fee calculation:', snapErr);
+            }
+
+            const feeInfo = calculateStripeFeeBreakdown(orderTotal);
+
             await updateDoc(orderRef, {
               status: 'paid',
               stripeSessionId: sessionId || '',
               paymentMethod: 'stripe',
+              stripeFee: feeInfo.totalFee,
+              netAmount: feeInfo.net,
+              feeBreakdown: feeInfo,
               testMode: isSandbox || Boolean(sessionId && sessionId.startsWith('cs_test_')),
               paidAt: serverTimestamp()
             });

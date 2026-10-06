@@ -17,17 +17,60 @@ export const getStripe = () => {
 };
 
 /**
- * Creates an order document in Firestore for Stripe tracking
+ * Calculates Stripe's standard processing fees (2.9% + $0.30) and net merchant payout
+ */
+export const calculateStripeFeeBreakdown = (amount = 0) => {
+  const gross = Number(amount) || 0;
+  if (gross <= 0) {
+    return {
+      gross: 0,
+      percentageRate: 0.029,
+      fixedFee: 0,
+      percentageFee: 0,
+      totalFee: 0,
+      net: 0,
+      effectiveRate: '0.00',
+      rateDescription: '2.9% + $0.30 USD'
+    };
+  }
+
+  // Standard domestic card processing rate in the US: 2.9% + $0.30 per successful charge
+  const percentageFee = Math.round((gross * 0.029) * 100) / 100;
+  const fixedFee = 0.30;
+  const totalFee = Math.round((percentageFee + fixedFee) * 100) / 100;
+  const net = Math.max(0, Math.round((gross - totalFee) * 100) / 100);
+  const effectiveRate = ((totalFee / gross) * 100).toFixed(2);
+
+  return {
+    gross,
+    percentageRate: 0.029,
+    percentageFee,
+    fixedFee,
+    totalFee,
+    net,
+    effectiveRate,
+    rateDescription: '2.9% + $0.30 USD'
+  };
+};
+
+/**
+ * Creates an order document in Firestore for Stripe tracking with cost breakdown
  */
 export const createFirestoreStripeOrder = async ({ items = [], total = 0, metadata = {} }) => {
   const currentUser = auth.currentUser;
+  const numericTotal = Number(total) || 0;
+  const feeInfo = calculateStripeFeeBreakdown(numericTotal);
+
   const orderRef = await addDoc(collection(db, 'orders'), {
     userId: currentUser ? currentUser.uid : 'guest',
     customerEmail: currentUser ? currentUser.email : '',
     items,
-    total: Number(total),
+    total: numericTotal,
     status: 'pending',
     paymentMethod: 'stripe',
+    stripeFee: feeInfo.totalFee,
+    netAmount: feeInfo.net,
+    feeBreakdown: feeInfo,
     metadata,
     createdAt: serverTimestamp()
   });
@@ -124,12 +167,16 @@ export const executeInstantStripeSandboxPurchase = async ({ items = [], total, m
 
   // 2. Update Firestore order document to 'paid' status
   try {
+    const feeInfo = calculateStripeFeeBreakdown(calculatedTotal);
     const orderRef = doc(db, 'orders', orderDocId);
     await updateDoc(orderRef, {
       status: 'paid',
       stripeSessionId: mockSessionId,
       paidAt: serverTimestamp(),
       paymentMethod: 'stripe',
+      stripeFee: feeInfo.totalFee,
+      netAmount: feeInfo.net,
+      feeBreakdown: feeInfo,
       testMode: true
     });
   } catch (dbErr) {
