@@ -130,8 +130,8 @@ export default function Footer() {
             <div className="space-y-3 text-xs text-[#a1a1aa]">
               <div>
                 <span className="text-[10px] font-mono text-[#71717a] block uppercase">Customer Care</span>
-                <a href="mailto:concierge@starwear.io" className="text-white hover:text-[#38bdf8] transition-colors font-mono text-xs">
-                  concierge@starwear.io
+                <a href="mailto:concierge@ttl44.com" className="text-white hover:text-[#38bdf8] transition-colors font-mono text-xs">
+                  concierge@ttl44.com
                 </a>
               </div>
               <div>

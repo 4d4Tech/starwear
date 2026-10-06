@@ -88,8 +88,8 @@ exports.createStripeCheckoutSession = onCall(async (request) => {
       payment_method_types: ['card'],
       line_items: lineItems,
       mode: 'payment',
-      success_url: successUrl || `https://star-wear-ecb39.web.app/success?session_id={CHECKOUT_SESSION_ID}&order_id=${orderDocId || ''}`,
-      cancel_url: cancelUrl || `https://star-wear-ecb39.web.app/checkout`,
+      success_url: successUrl || `https://ttl44.com/success?session_id={CHECKOUT_SESSION_ID}&order_id=${orderDocId || ''}`,
+      cancel_url: cancelUrl || `https://ttl44.com/checkout`,
       metadata: {
         orderDocId: orderDocId || '',
         gateway: 'stripe',

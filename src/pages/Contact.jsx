@@ -166,10 +166,10 @@ export default function Contact() {
               </div>
 
               <div className="pt-3 border-t border-white/[0.06] flex items-center justify-between">
-                <span className="font-mono text-xs text-white">concierge@starwear.io</span>
+                <span className="font-mono text-xs text-white">concierge@ttl44.com</span>
                 <button
                   type="button"
-                  onClick={() => handleCopy('concierge@starwear.io', 'concierge')}
+                  onClick={() => handleCopy('concierge@ttl44.com', 'concierge')}
                   className="p-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.15] text-[#38bdf8] transition-colors cursor-pointer text-xs"
                   title="Copy email address"
                 >
@@ -224,10 +224,10 @@ export default function Contact() {
               </div>
 
               <div className="pt-3 border-t border-white/[0.06] flex items-center justify-between">
-                <span className="font-mono text-xs text-white">press@starwear.io</span>
+                <span className="font-mono text-xs text-white">press@ttl44.com</span>
                 <button
                   type="button"
-                  onClick={() => handleCopy('press@starwear.io', 'press')}
+                  onClick={() => handleCopy('press@ttl44.com', 'press')}
                   className="p-1.5 rounded-lg bg-white/[0.06] hover:bg-white/[0.15] text-[#ec4899] transition-colors cursor-pointer text-xs"
                   title="Copy email address"
                 >
