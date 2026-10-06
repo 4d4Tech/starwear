@@ -16,6 +16,8 @@ import AdminSettings from './pages/AdminSettings';
 import AdminModelTemplates from './pages/AdminModelTemplates';
 import SeedDatabase from './pages/SeedDatabase';
 import Studio4D4 from './pages/Studio4D4';
+import About from './pages/About';
+import Contact from './pages/Contact';
 
 import ProtectedRoute from './components/ProtectedRoute';
 import AdminLogin from './pages/AdminLogin';
@@ -39,6 +41,8 @@ function App() {
           <Route path="/cart" element={<ShoppingCart />} />
           <Route path="/checkout" element={<Checkout />} />
           <Route path="/success" element={<OrderSuccess />} />
+          <Route path="/about" element={<About />} />
+          <Route path="/contact" element={<Contact />} />
           <Route path="/seed" element={<SeedDatabase />} />
           <Route path="/ar/:batchId" element={<ARExperience />} />
           <Route path="/studio44" element={<Studio4D4 />} />

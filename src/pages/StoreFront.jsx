@@ -481,6 +481,8 @@ export default function StoreFront() {
           <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/">STOREFRONT</Link>
           <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/shop">SHOP</Link>
           <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/collections">COLLECTIONS</Link>
+          <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/about">ABOUT</Link>
+          <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/contact">CONTACT</Link>
           {(isAdmin || isSuperAdmin) && (
             <Link className="text-secondary hover:text-on-background hover:underline transition-all font-label-caps text-label-caps" to="/admin/inventory">ADMIN INVENTORY</Link>
           )}

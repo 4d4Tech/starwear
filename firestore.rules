@@ -101,6 +101,12 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    // Inquiries Collection (Customer contact form submissions)
+    match /inquiries/{inquiryId} {
+      allow create: if true;
+      allow read, update, delete: if isAdmin();
+    }
+
     // Default Fallback
     match /{document=**} {
       allow read: if true;

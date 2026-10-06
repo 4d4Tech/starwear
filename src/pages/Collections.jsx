@@ -346,6 +346,8 @@ export default function Collections() {
           <Link className="font-label-caps text-[12px] tracking-widest text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/">STOREFRONT</Link>
           <Link className="font-label-caps text-[12px] tracking-widest text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/shop">SHOP</Link>
           <Link className="font-label-caps text-[12px] tracking-widest text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/collections">COLLECTIONS</Link>
+          <Link className="font-label-caps text-[12px] tracking-widest text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/about">ABOUT</Link>
+          <Link className="font-label-caps text-[12px] tracking-widest text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/contact">CONTACT</Link>
           {(isAdmin || isSuperAdmin) && (
             <Link className="font-label-caps text-[12px] tracking-widest text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/admin/inventory">ADMIN INVENTORY</Link>
           )}

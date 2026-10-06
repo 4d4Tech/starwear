@@ -1346,6 +1346,8 @@ export default function Shop() {
               <Link to="/" className="hover:text-white transition-colors">Home</Link>
               <Link to="/shop" className="text-white font-medium transition-colors">Shop</Link>
               <Link to="/collections" className="hover:text-white transition-colors">Collections</Link>
+              <Link to="/about" className="hover:text-white transition-colors">About</Link>
+              <Link to="/contact" className="hover:text-white transition-colors">Contact</Link>
               <Link to="/cart" className="hover:text-white transition-colors">Bag ({getCartCount()})</Link>
               {(isAdmin || isSuperAdmin) && (
                 <Link to="/admin/inventory" className="hover:text-white transition-colors">Admin</Link>
