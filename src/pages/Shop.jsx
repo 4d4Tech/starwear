@@ -193,10 +193,9 @@ export default function Shop() {
   const [selectedColors, setSelectedColors] = useState({});
   const [activeSubTab, setActiveSubTab] = useState('overview');
   const [cartToast, setCartToast] = useState(null);
-
   const { addToCart, getCartCount } = useCart();
   const { isAdmin, isSuperAdmin } = useAuth();
-  const { isSandboxMode } = usePaymentEnvironment();
+  const { isSandboxMode, activeGateway } = usePaymentEnvironment();
   const navigate = useNavigate();
 
   // Section references for sectioned-out cover parallax (at least 500px height)
@@ -379,23 +378,37 @@ export default function Shop() {
     const color = selectedColors[product.id] || product.colors?.[0]?.name || 'Classic';
     const price = product.price !== undefined ? Number(product.price) : 280.00;
 
+    const itemPayload = {
+      id: `${product.id}-${size}-${color.replace(/\s+/g, '')}`,
+      name: product.name || product.id,
+      price: price,
+      quantity: 1,
+      size: `${size} • ${color}`,
+      image: product.imageUrl || product.image || ''
+    };
+
     try {
-      const { startDirectPayPalCheckout } = await import('../services/paypalService');
-      await startDirectPayPalCheckout({
-        items: [{
-          id: `${product.id}-${size}-${color.replace(/\s+/g, '')}`,
-          name: product.name || product.id,
-          price: price,
-          quantity: 1,
-          size: `${size} • ${color}`,
-          image: product.imageUrl || product.image || ''
-        }],
-        total: price,
-        metadata: {
-          productId: product.id,
-          source: 'shop_sandbox_btn'
-        }
-      });
+      if (activeGateway === 'stripe') {
+        const { startDirectStripeCheckout } = await import('../services/stripeService');
+        await startDirectStripeCheckout({
+          items: [itemPayload],
+          total: price,
+          metadata: {
+            productId: product.id,
+            source: 'shop_sandbox_btn'
+          }
+        });
+      } else {
+        const { startDirectPayPalCheckout } = await import('../services/paypalService');
+        await startDirectPayPalCheckout({
+          items: [itemPayload],
+          total: price,
+          metadata: {
+            productId: product.id,
+            source: 'shop_sandbox_btn'
+          }
+        });
+      }
     } catch (err) {
       console.error('Shop sandbox purchase error:', err);
       alert(`Sandbox purchase failed: ${err.message}`);
@@ -632,7 +645,7 @@ export default function Shop() {
                       type="button"
                       onClick={() => handleSandboxBuy(CURATED_COLLECTION[0])}
                       className="px-5 py-2.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95"
-                      title={`Send a PayPal Sandbox purchase for ${CURATED_COLLECTION[0].name} at $${CURATED_COLLECTION[0].price.toFixed(2)}`}
+                      title={`Send a ${activeGateway === 'stripe' ? 'Stripe' : 'PayPal'} Sandbox purchase for ${CURATED_COLLECTION[0].name} at $${CURATED_COLLECTION[0].price.toFixed(2)}`}
                     >
                       <span className="material-symbols-outlined text-sm">shopping_cart_checkout</span>
                       <span>Sandbox Buy • ${CURATED_COLLECTION[0].price.toFixed(2)}</span>
@@ -1244,7 +1257,7 @@ export default function Shop() {
                             type="button"
                             onClick={() => handleSandboxBuy(product)}
                             className="px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-bold transition-all shadow-md flex items-center gap-1 cursor-pointer active:scale-95"
-                            title={`Send a PayPal Sandbox purchase for ${product.name} at $${price.toFixed(2)}`}
+                            title={`Send a ${activeGateway === 'stripe' ? 'Stripe' : 'PayPal'} Sandbox purchase for ${product.name} at $${price.toFixed(2)}`}
                           >
                             <span className="material-symbols-outlined text-xs">shopping_cart_checkout</span>
                             <span>Sandbox Buy • ${price.toFixed(2)}</span>

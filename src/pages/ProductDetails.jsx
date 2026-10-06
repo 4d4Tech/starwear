@@ -15,7 +15,7 @@ function ProductDetails() {
   const navigate = useNavigate();
   const { addToCart } = useCart();
   const { isAdmin, isSuperAdmin } = useAuth();
-  const { isSandboxMode } = usePaymentEnvironment();
+  const { isSandboxMode, activeGateway, isPayPalEnabled, isStripeEnabled } = usePaymentEnvironment();
 
   // Resolve target asset ID from URL path or query string
   const routeAssetId = params.id || searchParams.get('id') || searchParams.get('batchId') || '';
@@ -167,57 +167,89 @@ function ProductDetails() {
 
   const [isPurchasing, setIsPurchasing] = useState(false);
 
-  // Send PayPal Sandbox Purchase directly for this product with its correct price
-  const handleSandboxPurchase = async () => {
+  // Send Sandbox Purchase directly for this product with its correct price
+  const handleSandboxPurchase = async (preferredGateway = null) => {
     if (!asset || isPurchasing) return;
     setIsPurchasing(true);
+    const targetGateway = preferredGateway || activeGateway;
+    const itemPayload = {
+      id: asset.id,
+      name: assetTitle,
+      price: assetPrice,
+      quantity: 1,
+      size: selectedSize,
+      image: asset.imageUrl || asset.image || modelUrl || ''
+    };
+
     try {
-      const { startDirectPayPalCheckout } = await import('../services/paypalService');
-      await startDirectPayPalCheckout({
-        items: [{
-          id: asset.id,
-          name: assetTitle,
-          price: assetPrice,
-          quantity: 1,
-          size: selectedSize,
-          image: asset.imageUrl || asset.image || modelUrl || ''
-        }],
-        total: assetPrice,
-        metadata: {
-          assetId: asset.id,
-          size: selectedSize,
-          source: 'product_details_sandbox_btn'
-        }
-      });
+      if (targetGateway === 'stripe') {
+        const { startDirectStripeCheckout } = await import('../services/stripeService');
+        await startDirectStripeCheckout({
+          items: [itemPayload],
+          total: assetPrice,
+          metadata: {
+            assetId: asset.id,
+            size: selectedSize,
+            source: 'product_details_stripe_sandbox_btn'
+          }
+        });
+      } else {
+        const { startDirectPayPalCheckout } = await import('../services/paypalService');
+        await startDirectPayPalCheckout({
+          items: [itemPayload],
+          total: assetPrice,
+          metadata: {
+            assetId: asset.id,
+            size: selectedSize,
+            source: 'product_details_paypal_sandbox_btn'
+          }
+        });
+      }
     } catch (err) {
-      console.error('PayPal Sandbox purchase failed:', err);
-      alert(`PayPal Sandbox error: ${err.message}`);
+      console.error('Sandbox purchase failed:', err);
+      alert(`Sandbox purchase error: ${err.message}`);
       setIsPurchasing(false);
     }
   };
 
   // Instant 1-Click Sandbox Test Purchase for this product
-  const handleInstantSandboxPurchase = async () => {
+  const handleInstantSandboxPurchase = async (preferredGateway = null) => {
     if (!asset || isPurchasing) return;
     setIsPurchasing(true);
+    const targetGateway = preferredGateway || activeGateway;
+    const itemPayload = {
+      id: asset.id,
+      name: assetTitle,
+      price: assetPrice,
+      quantity: 1,
+      size: selectedSize,
+      image: asset.imageUrl || asset.image || modelUrl || ''
+    };
+
     try {
-      const { executeInstantSandboxPurchase } = await import('../services/paypalService');
-      await executeInstantSandboxPurchase({
-        items: [{
-          id: asset.id,
-          name: assetTitle,
-          price: assetPrice,
-          quantity: 1,
-          size: selectedSize,
-          image: asset.imageUrl || asset.image || modelUrl || ''
-        }],
-        total: assetPrice,
-        metadata: {
-          assetId: asset.id,
-          size: selectedSize,
-          source: 'product_details_instant_sandbox'
-        }
-      });
+      if (targetGateway === 'stripe') {
+        const { executeInstantStripeSandboxPurchase } = await import('../services/stripeService');
+        await executeInstantStripeSandboxPurchase({
+          items: [itemPayload],
+          total: assetPrice,
+          metadata: {
+            assetId: asset.id,
+            size: selectedSize,
+            source: 'product_details_stripe_instant_sandbox'
+          }
+        });
+      } else {
+        const { executeInstantSandboxPurchase } = await import('../services/paypalService');
+        await executeInstantSandboxPurchase({
+          items: [itemPayload],
+          total: assetPrice,
+          metadata: {
+            assetId: asset.id,
+            size: selectedSize,
+            source: 'product_details_paypal_instant_sandbox'
+          }
+        });
+      }
     } catch (err) {
       console.error('Instant sandbox purchase failed:', err);
       alert(`Instant sandbox error: ${err.message}`);
@@ -320,7 +352,7 @@ function ProductDetails() {
                       {isSandboxMode ? (
                         <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-500 border border-amber-500/20 text-[11px] font-mono">
                           <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                          <span>PayPal Sandbox</span>
+                          <span>{activeGateway === 'stripe' ? 'Stripe Sandbox' : activeGateway === 'both' ? 'Multi-Gateway Sandbox' : 'PayPal Sandbox'}</span>
                         </div>
                       ) : (
                         <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[11px] font-mono">
@@ -332,27 +364,72 @@ function ProductDetails() {
 
                     {/* Primary Button Group */}
                     <div className="flex flex-col sm:flex-row items-stretch gap-2.5">
-                      {/* PayPal Sandbox Purchase Button (Rendered ONLY in Sandbox mode for Admins) */}
+                      {/* Sandbox Purchase Buttons (Rendered ONLY in Sandbox mode for Admins) */}
                       {isSandboxMode ? (
-                        <button
-                          type="button"
-                          onClick={handleSandboxPurchase}
-                          disabled={loading || !asset || isPurchasing}
-                          className="flex-1 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 px-5 py-3.5 font-label-caps text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-lg active:scale-95"
-                          title="Send a PayPal Sandbox Purchase with this product's exact price"
-                        >
-                          {isPurchasing ? (
-                            <>
-                              <span className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></span>
-                              <span>CONNECTING PAYPAL...</span>
-                            </>
-                          ) : (
-                            <>
-                              <span className="material-symbols-outlined text-[18px]">shopping_cart_checkout</span>
-                              <span>SANDBOX PURCHASE • ${assetPrice.toFixed(2)}</span>
-                            </>
-                          )}
-                        </button>
+                        activeGateway === 'both' ? (
+                          <div className="flex-1 flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleSandboxPurchase('stripe')}
+                              disabled={loading || !asset || isPurchasing}
+                              className="flex-1 bg-[#635bff] hover:bg-[#534be0] text-white px-3 py-3.5 font-label-caps text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-lg active:scale-95 rounded-lg"
+                              title="Send a Stripe Sandbox Purchase with this product's exact price"
+                            >
+                              <span className="material-symbols-outlined text-base">credit_card</span>
+                              <span>STRIPE SANDBOX</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSandboxPurchase('paypal')}
+                              disabled={loading || !asset || isPurchasing}
+                              className="flex-1 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 px-3 py-3.5 font-label-caps text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-lg active:scale-95 rounded-lg"
+                              title="Send a PayPal Sandbox Purchase with this product's exact price"
+                            >
+                              <span className="material-symbols-outlined text-base">shopping_cart_checkout</span>
+                              <span>PAYPAL SANDBOX</span>
+                            </button>
+                          </div>
+                        ) : activeGateway === 'stripe' ? (
+                          <button
+                            type="button"
+                            onClick={() => handleSandboxPurchase('stripe')}
+                            disabled={loading || !asset || isPurchasing}
+                            className="flex-1 bg-[#635bff] hover:bg-[#534be0] text-white px-5 py-3.5 font-label-caps text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-lg active:scale-95 rounded-lg"
+                            title="Send a Stripe Sandbox Purchase with this product's exact price"
+                          >
+                            {isPurchasing ? (
+                              <>
+                                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                                <span>CONNECTING STRIPE...</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="material-symbols-outlined text-[18px]">credit_card</span>
+                                <span>STRIPE SANDBOX BUY • ${assetPrice.toFixed(2)}</span>
+                              </>
+                            )}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleSandboxPurchase('paypal')}
+                            disabled={loading || !asset || isPurchasing}
+                            className="flex-1 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 px-5 py-3.5 font-label-caps text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-lg active:scale-95"
+                            title="Send a PayPal Sandbox Purchase with this product's exact price"
+                          >
+                            {isPurchasing ? (
+                              <>
+                                <span className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></span>
+                                <span>CONNECTING PAYPAL...</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="material-symbols-outlined text-[18px]">shopping_cart_checkout</span>
+                                <span>PAYPAL SANDBOX BUY • ${assetPrice.toFixed(2)}</span>
+                              </>
+                            )}
+                          </button>
+                        )
                       ) : (
                         <button
                           type="button"
@@ -401,18 +478,54 @@ function ProductDetails() {
 
                     {/* Instant 1-Click Sandbox Test Link (Rendered ONLY in Sandbox mode for Admins) */}
                     {isSandboxMode && (
-                      <div className="flex items-center justify-between text-[11px] font-mono text-secondary pt-0.5 px-1">
-                        <span>Developer / Testing Sandbox:</span>
-                        <button
-                          type="button"
-                          onClick={handleInstantSandboxPurchase}
-                          disabled={loading || !asset || isPurchasing}
-                          className="text-amber-600 hover:text-amber-500 underline font-semibold flex items-center gap-1 cursor-pointer transition-colors"
-                          title="Simulates an approved PayPal sandbox payment and creates the paid order in Firestore immediately"
-                        >
-                          <span className="material-symbols-outlined text-xs">bolt</span>
-                          <span>Instant 1-Click Sandbox Test (${assetPrice.toFixed(2)})</span>
-                        </button>
+                      <div className="flex flex-wrap items-center justify-between text-[11px] font-mono text-secondary pt-0.5 px-1 gap-2">
+                        <span>Developer Sandbox:</span>
+                        {activeGateway === 'both' ? (
+                          <div className="flex items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={() => handleInstantSandboxPurchase('stripe')}
+                              disabled={loading || !asset || isPurchasing}
+                              className="text-indigo-400 hover:text-indigo-300 underline font-semibold flex items-center gap-0.5 cursor-pointer transition-colors"
+                              title="Instant Stripe sandbox payment simulation"
+                            >
+                              <span className="material-symbols-outlined text-xs">bolt</span>
+                              <span>Stripe 1-Click (${assetPrice.toFixed(2)})</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleInstantSandboxPurchase('paypal')}
+                              disabled={loading || !asset || isPurchasing}
+                              className="text-amber-500 hover:text-amber-400 underline font-semibold flex items-center gap-0.5 cursor-pointer transition-colors"
+                              title="Instant PayPal sandbox payment simulation"
+                            >
+                              <span className="material-symbols-outlined text-xs">bolt</span>
+                              <span>PayPal 1-Click (${assetPrice.toFixed(2)})</span>
+                            </button>
+                          </div>
+                        ) : activeGateway === 'stripe' ? (
+                          <button
+                            type="button"
+                            onClick={() => handleInstantSandboxPurchase('stripe')}
+                            disabled={loading || !asset || isPurchasing}
+                            className="text-indigo-400 hover:text-indigo-300 underline font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Simulates an approved Stripe sandbox payment and creates the paid order in Firestore immediately"
+                          >
+                            <span className="material-symbols-outlined text-xs">bolt</span>
+                            <span>Instant 1-Click Stripe Test (${assetPrice.toFixed(2)})</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleInstantSandboxPurchase('paypal')}
+                            disabled={loading || !asset || isPurchasing}
+                            className="text-amber-600 hover:text-amber-500 underline font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Simulates an approved PayPal sandbox payment and creates the paid order in Firestore immediately"
+                          >
+                            <span className="material-symbols-outlined text-xs">bolt</span>
+                            <span>Instant 1-Click PayPal Test (${assetPrice.toFixed(2)})</span>
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

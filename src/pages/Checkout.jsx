@@ -556,7 +556,7 @@ export default function Checkout() {
                       <div className="space-y-3 pt-1">
                         <button
                           type="button"
-                          onClick={() => handleInstantStripeSandbox(null)}
+                          onClick={handleStripeCheckout}
                           disabled={activeItems.length === 0 || isProcessing}
                           className="w-full py-4 px-6 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-label-caps text-xs sm:text-sm font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-[0.98] disabled:opacity-50"
                           title={`Send a Stripe Sandbox purchase for the total order of $${subtotal.toFixed(2)}`}
@@ -778,7 +778,7 @@ export default function Checkout() {
                             onClick={() => handlePurchaseSingleProduct(item)}
                             disabled={isProcessing}
                             className="w-full py-2 px-3 bg-amber-500/10 hover:bg-amber-500/20 active:scale-95 text-amber-600 dark:text-amber-400 border border-amber-500/30 rounded-lg text-[11px] font-mono font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
-                            title={`Send a PayPal Sandbox purchase through for ${item.name} at its price of $${itemTotal.toFixed(2)}`}
+                            title={`Send a ${activeGateway === 'stripe' ? 'Stripe' : 'PayPal'} Sandbox purchase through for ${item.name} at its price of $${itemTotal.toFixed(2)}`}
                           >
                             <span className="material-symbols-outlined text-sm">shopping_cart_checkout</span>
                             <span>SANDBOX PURCHASE THIS ITEM • ${itemTotal.toFixed(2)}</span>
@@ -788,7 +788,13 @@ export default function Checkout() {
                             <span>Instant Sandbox test:</span>
                             <button
                               type="button"
-                              onClick={() => handleInstantSandboxPurchase(item)}
+                              onClick={() => {
+                                if (activeGateway === 'stripe' || selectedMethod === 'stripe') {
+                                  handleInstantStripeSandbox(item);
+                                } else {
+                                  handleInstantSandboxPurchase(item);
+                                }
+                              }}
                               disabled={isProcessing}
                               className="text-amber-600 hover:text-amber-500 underline font-semibold flex items-center gap-0.5 cursor-pointer"
                               title={`Instantly test purchase for ${item.name} ($${itemTotal.toFixed(2)})`}

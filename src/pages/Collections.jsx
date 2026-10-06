@@ -15,7 +15,7 @@ export default function Collections() {
   const [cartToast, setCartToast] = useState('');
   const { addToCart } = useCart();
   const { isAdmin, isSuperAdmin } = useAuth();
-  const { isSandboxMode } = usePaymentEnvironment();
+  const { isSandboxMode, activeGateway } = usePaymentEnvironment();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -58,23 +58,37 @@ export default function Collections() {
     e.preventDefault();
     e.stopPropagation();
     const price = product.price !== undefined ? Number(product.price) : 99.00;
+    const itemPayload = {
+      id: product.id,
+      name: (product.name || product.id).toUpperCase(),
+      price: price,
+      quantity: 1,
+      size: 'M',
+      image: product.imageUrl || product.image || ''
+    };
+
     try {
-      const { startDirectPayPalCheckout } = await import('../services/paypalService');
-      await startDirectPayPalCheckout({
-        items: [{
-          id: product.id,
-          name: (product.name || product.id).toUpperCase(),
-          price: price,
-          quantity: 1,
-          size: 'M',
-          image: product.imageUrl || product.image || ''
-        }],
-        total: price,
-        metadata: {
-          productId: product.id,
-          source: 'collections_sandbox_btn'
-        }
-      });
+      if (activeGateway === 'stripe') {
+        const { startDirectStripeCheckout } = await import('../services/stripeService');
+        await startDirectStripeCheckout({
+          items: [itemPayload],
+          total: price,
+          metadata: {
+            productId: product.id,
+            source: 'collections_sandbox_btn'
+          }
+        });
+      } else {
+        const { startDirectPayPalCheckout } = await import('../services/paypalService');
+        await startDirectPayPalCheckout({
+          items: [itemPayload],
+          total: price,
+          metadata: {
+            productId: product.id,
+            source: 'collections_sandbox_btn'
+          }
+        });
+      }
     } catch (err) {
       console.error('Collections sandbox error:', err);
       alert(`Sandbox purchase failed: ${err.message}`);
@@ -303,7 +317,7 @@ export default function Collections() {
                                     type="button"
                                     onClick={(e) => handleSandboxBuy(e, product)}
                                     className="px-2.5 py-1 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-[10px] font-mono font-bold transition-all shadow cursor-pointer active:scale-95 flex items-center gap-1"
-                                    title={`Send a PayPal Sandbox purchase for ${product.name || product.id} at $${price.toFixed(2)}`}
+                                    title={`Send a ${activeGateway === 'stripe' ? 'Stripe' : 'PayPal'} Sandbox purchase for ${product.name || product.id} at $${price.toFixed(2)}`}
                                   >
                                     <span className="material-symbols-outlined text-xs">shopping_cart_checkout</span>
                                     <span>Sandbox Buy</span>

@@ -7,29 +7,44 @@ import { startDirectPayPalCheckout } from '../services/paypalService';
 
 export default function ShoppingCart() {
   const { cartItems, updateQuantity, removeFromCart, getCartTotal } = useCart();
-  const { isSandboxMode } = usePaymentEnvironment();
+  const { isSandboxMode, activeGateway } = usePaymentEnvironment();
   const subtotal = getCartTotal();
   const [isProcessing, setIsProcessing] = useState(false);
 
   const handleSandboxBuyItem = async (item) => {
     setIsProcessing(true);
     const itemTotal = (Number(item.price) || 0) * (item.quantity || 1);
+    const itemPayload = {
+      id: item.id || '',
+      name: item.name || 'Digital Garment',
+      price: Number(item.price) || 0,
+      quantity: item.quantity || 1,
+      size: item.size || 'One Size',
+      image: item.image || ''
+    };
+
     try {
-      await startDirectPayPalCheckout({
-        items: [{
-          id: item.id || '',
-          name: item.name || 'Digital Garment',
-          price: Number(item.price) || 0,
-          quantity: item.quantity || 1,
-          size: item.size || 'One Size',
-          image: item.image || ''
-        }],
-        total: itemTotal,
-        metadata: {
-          source: 'cart_single_item_sandbox_btn',
-          itemId: item.id
-        }
-      });
+      if (activeGateway === 'stripe') {
+        const { startDirectStripeCheckout } = await import('../services/stripeService');
+        await startDirectStripeCheckout({
+          items: [itemPayload],
+          total: itemTotal,
+          metadata: {
+            source: 'cart_single_item_sandbox_btn',
+            itemId: item.id
+          }
+        });
+      } else {
+        const { startDirectPayPalCheckout } = await import('../services/paypalService');
+        await startDirectPayPalCheckout({
+          items: [itemPayload],
+          total: itemTotal,
+          metadata: {
+            source: 'cart_single_item_sandbox_btn',
+            itemId: item.id
+          }
+        });
+      }
     } catch (err) {
       console.error('Cart item sandbox error:', err);
       alert(`Sandbox purchase failed: ${err.message}`);
@@ -40,22 +55,37 @@ export default function ShoppingCart() {
   const handleSandboxCheckoutCart = async () => {
     if (cartItems.length === 0) return;
     setIsProcessing(true);
+    const itemsPayload = cartItems.map(item => ({
+      id: item.id || '',
+      name: item.name || 'Digital Garment',
+      price: Number(item.price) || 0,
+      quantity: item.quantity || 1,
+      size: item.size || 'One Size',
+      image: item.image || ''
+    }));
+
     try {
-      await startDirectPayPalCheckout({
-        items: cartItems.map(item => ({
-          id: item.id || '',
-          name: item.name || 'Digital Garment',
-          price: Number(item.price) || 0,
-          quantity: item.quantity || 1,
-          size: item.size || 'One Size',
-          image: item.image || ''
-        })),
-        total: subtotal,
-        metadata: {
-          source: 'cart_sandbox_checkout_btn',
-          itemCount: cartItems.length
-        }
-      });
+      if (activeGateway === 'stripe') {
+        const { startDirectStripeCheckout } = await import('../services/stripeService');
+        await startDirectStripeCheckout({
+          items: itemsPayload,
+          total: subtotal,
+          metadata: {
+            source: 'cart_sandbox_checkout_btn',
+            itemCount: cartItems.length
+          }
+        });
+      } else {
+        const { startDirectPayPalCheckout } = await import('../services/paypalService');
+        await startDirectPayPalCheckout({
+          items: itemsPayload,
+          total: subtotal,
+          metadata: {
+            source: 'cart_sandbox_checkout_btn',
+            itemCount: cartItems.length
+          }
+        });
+      }
     } catch (err) {
       console.error('Cart sandbox checkout error:', err);
       alert(`Sandbox purchase failed: ${err.message}`);
@@ -128,7 +158,7 @@ export default function ShoppingCart() {
                             onClick={() => handleSandboxBuyItem(item)}
                             disabled={isProcessing}
                             className="px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-all active:scale-95 disabled:opacity-50"
-                            title={`Send a PayPal Sandbox purchase for ${item.name} at its price of $${((Number(item.price) || 0) * (item.quantity || 1)).toFixed(2)}`}
+                            title={`Send a ${activeGateway === 'stripe' ? 'Stripe' : 'PayPal'} Sandbox purchase for ${item.name} at its price of $${((Number(item.price) || 0) * (item.quantity || 1)).toFixed(2)}`}
                           >
                             <span className="material-symbols-outlined text-sm">shopping_cart_checkout</span>
                             <span>Sandbox Buy • ${((Number(item.price) || 0) * (item.quantity || 1)).toFixed(2)}</span>
@@ -188,7 +218,7 @@ export default function ShoppingCart() {
                   onClick={handleSandboxCheckoutCart}
                   disabled={cartItems.length === 0 || isProcessing}
                   className="mt-3 w-full py-3.5 px-6 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-label-caps text-xs font-bold rounded shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95 disabled:opacity-50"
-                  title={`Send a PayPal Sandbox purchase for the total cart of $${subtotal.toFixed(2)}`}
+                  title={`Send a ${activeGateway === 'stripe' ? 'Stripe' : 'PayPal'} Sandbox purchase for the total cart of $${subtotal.toFixed(2)}`}
                 >
                   <span className="material-symbols-outlined text-base">shopping_cart_checkout</span>
                   <span>SEND SANDBOX PURCHASE • ${subtotal.toFixed(2)} USD</span>
