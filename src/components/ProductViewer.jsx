@@ -397,8 +397,8 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
             const slotIdx = typeof config.videoTargetMaterialIndex === 'number'
               ? config.videoTargetMaterialIndex
               : (typeof targetNode.userData?.videoTargetMaterialIndex === 'number'
-                  ? targetNode.userData.videoTargetMaterialIndex
-                  : 0);
+                ? targetNode.userData.videoTargetMaterialIndex
+                : 0);
             const frame = computeGeometrySurfaceFrame(targetNode, slotIdx);
             baseCssScale = Math.max(frame.size.x, 0.05) / iframeW;
           }
@@ -656,8 +656,8 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
           const slotIdx = typeof config.videoTargetMaterialIndex === 'number'
             ? config.videoTargetMaterialIndex
             : (typeof tNode.userData?.videoTargetMaterialIndex === 'number'
-                ? tNode.userData.videoTargetMaterialIndex
-                : 0);
+              ? tNode.userData.videoTargetMaterialIndex
+              : 0);
           const frame = computeGeometrySurfaceFrame(tNode, slotIdx);
 
           const uScale = Number(config.videoScale ?? tNode.userData?.videoScale ?? 1.0);
@@ -711,7 +711,7 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
     // 12. Unlock video autoplay on user interaction
     const handleUserUnlock = () => {
       if (videoEl && videoEl.paused) {
-        videoEl.play().catch(() => {});
+        videoEl.play().catch(() => { });
       }
     };
     const mountEl = mountRef.current;
@@ -817,11 +817,10 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
 
           {hasActiveVideo && (
             <div className="flex items-center gap-1.5">
-              <span className={`backdrop-blur-md px-2.5 py-1 rounded text-[10px] font-mono font-bold border flex items-center gap-1 ${
-                activeVideoType === 'youtube'
+              <span className={`backdrop-blur-md px-2.5 py-1 rounded text-[10px] font-mono font-bold border flex items-center gap-1 ${activeVideoType === 'youtube'
                   ? 'bg-red-950/80 text-red-300 border-red-500/40'
                   : 'bg-purple-950/80 text-purple-300 border-purple-500/40'
-              }`}>
+                }`}>
                 <span className="material-symbols-outlined text-xs">
                   {activeVideoType === 'youtube' ? 'smart_display' : 'play_circle'}
                 </span>
@@ -832,11 +831,10 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
               <button
                 type="button"
                 onClick={toggleMute}
-                className={`backdrop-blur-md px-2.5 py-1 rounded text-[10px] font-mono font-bold border flex items-center gap-1 transition-all cursor-pointer shadow-md ${
-                  !isMuted
+                className={`backdrop-blur-md px-2.5 py-1 rounded text-[10px] font-mono font-bold border flex items-center gap-1 transition-all cursor-pointer shadow-md ${!isMuted
                     ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60'
                     : 'bg-neutral-900/80 text-neutral-400 hover:text-white border-white/10'
-                }`}
+                  }`}
                 title={isMuted ? 'Unmute Audio' : 'Mute Audio'}
               >
                 <span className="material-symbols-outlined text-xs">
@@ -849,11 +847,10 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
               <button
                 type="button"
                 onClick={() => setShowPip(prev => !prev)}
-                className={`backdrop-blur-md px-2 py-1 rounded text-[10px] font-mono border flex items-center gap-1 transition-all cursor-pointer ${
-                  showPip
+                className={`backdrop-blur-md px-2 py-1 rounded text-[10px] font-mono border flex items-center gap-1 transition-all cursor-pointer ${showPip
                     ? 'bg-cyan-950 text-cyan-300 border-cyan-500/50'
                     : 'bg-black/60 text-neutral-400 hover:text-white border-white/10'
-                }`}
+                  }`}
                 title="Toggle Picture-In-Picture Monitor"
               >
                 <span className="material-symbols-outlined text-xs">picture_in_picture_alt</span>
@@ -958,7 +955,7 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
       )}
 
       {/* Bottom Floating Interactive Control Pill */}
-      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-black/80 backdrop-blur-lg px-3 py-1.5 rounded-full border border-white/15 shadow-2xl">
+      {/* <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-black/80 backdrop-blur-lg px-3 py-1.5 rounded-full border border-white/15 shadow-2xl">
         <button
           type="button"
           onClick={toggleAutoRotate}
@@ -1016,7 +1013,7 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
             </a>
           </>
         )}
-      </div>
+      </div> */}
 
       {/* Subtle Bottom Drag Hint */}
       <div className="absolute bottom-16 left-1/2 -translate-x-1/2 pointer-events-none opacity-40 hover:opacity-100 transition-opacity">

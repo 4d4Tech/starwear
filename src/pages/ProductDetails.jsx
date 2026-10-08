@@ -162,6 +162,11 @@ function ProductDetails() {
     setTimeout(() => setAddedToast(false), 4000);
   };
 
+  const moreInventoryHandler = (id) => {
+    window.scrollTo({ top: -200, behavior: 'smooth' });
+    navigate(`/product/${id}`);
+  }
+
   const assetPrice = asset?.price !== undefined ? Number(asset.price) : 99.00;
   const assetTitle = (asset?.name || asset?.id || 'DIGITAL ASSET').toUpperCase();
 
@@ -264,15 +269,15 @@ function ProductDetails() {
       {/* Main Content Canvas */}
       <main className="pt-20 pb-32 min-h-screen">
         {/* Product Showcase Section */}
-        <section className="w-full h-[1024px] min-h-[800px] relative overflow-hidden bg-surface-container-lowest">
+        <section className="w-full min-h-270 bg-surface-container">
           <div className="absolute inset-0 flex flex-col md:flex-row h-full">
 
             {/* Left Side: Glassmorphic Content Panel */}
-            <div className="w-full md:w-1/2 h-full relative z-10 glass-panel border-r border-outline-variant/20 flex flex-col justify-center px-margin-mobile md:px-margin-desktop overflow-y-auto">
+            <div className="w-full md:w-1/2 h-full relative z-10 glass-panel border-r border-outline-variant/20 flex flex-col justify-center px-margin-mobile md:px-margin-desktop">
               <div className="max-w-md mx-auto md:mx-0 pt-20 md:pt-0">
 
                 {/* Breadcrumb Navigation */}
-                <div className="flex items-center gap-2 mb-4 text-xs font-mono text-secondary">
+                <div className="flex items-center gap-2 mb-4 text-xs font-mono text-secondary mt-[500px] md:mt-8">
                   <Link to="/" className="hover:text-primary transition-colors">STOREFRONT</Link>
                   <span>/</span>
                   <Link to="/collections" className="hover:text-primary transition-colors">INVENTORY</Link>
@@ -292,9 +297,15 @@ function ProductDetails() {
                       Video Texture
                     </span>
                   )}
-                  <span className="px-2.5 py-1 bg-white/5 text-secondary border border-white/10 rounded text-[10px] font-mono">
-                    ID: {asset?.id || '—'}
-                  </span>
+                  <div className="w-full md:w-1/2 mobile-product-viewer h-[450px] md:h-full relative bg-[#0d1117] group">
+                    <ProductViewer
+                      modelUrl={modelUrl}
+                      videoUrl={videoUrl}
+                      config={arConfig}
+                      assetName={asset?.name || asset?.id || 'Digital Asset'}
+                      assetId={asset?.id || ''}
+                    />
+                  </div>
                 </div>
 
                 <h1 className="font-headline-lg text-headline-lg-mobile md:text-[44px] md:leading-[50px] text-on-background mb-3 uppercase tracking-wide">
@@ -567,7 +578,7 @@ function ProductDetails() {
                       <button
                         key={item.id}
                         type="button"
-                        onClick={() => navigate(`/product/${item.id}`)}
+                        onClick={() => moreInventoryHandler(item.id)}
                         className={`flex-shrink-0 text-left p-2.5 rounded-lg border transition-all cursor-pointer w-32 ${isSelected
                           ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50 shadow-md'
                           : 'bg-surface-variant/30 border-outline-variant/20 hover:border-primary/50 text-secondary hover:text-on-background'
@@ -590,9 +601,8 @@ function ProductDetails() {
                 </div>
               </div>
             </div>
-
-            {/* Right Side: 3D Interactive Canvas */}
-            <div className="w-full md:w-1/2 h-[450px] md:h-full relative bg-[#0d1117] overflow-hidden group">
+            {/* Right Side: 3D Interactive Canvas hidden in mobile view*/}
+            <div className="hidden md:block md:w-1/2 product-viewer h-[450px] md:h-full relative bg-[#0d1117] overflow-hidden group">
               <ProductViewer
                 modelUrl={modelUrl}
                 videoUrl={videoUrl}
@@ -605,7 +615,7 @@ function ProductDetails() {
         </section>
 
         {/* Accordion Details (Bento Grid Style) */}
-        <section className="px-margin-mobile md:px-margin-desktop py-24 max-w-[1440px] mx-auto">
+        <section className="px-margin-mobile md:px-margin-desktop py-24 max-w-[1440px] mx-auto mt-[200px] md:mt-[-100px]">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-gutter">
             <div className="p-8 border border-outline-variant/20 hover:border-outline-variant/50 transition-colors">
               <div className="flex items-center gap-3 mb-4">
@@ -675,7 +685,7 @@ function ProductDetails() {
           © 2026 STAR WEAR. ALL RIGHTS RESERVED.
         </div>
       </footer>
-    </div>
+    </div >
   );
 }
 
