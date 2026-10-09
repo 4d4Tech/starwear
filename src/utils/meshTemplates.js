@@ -3,6 +3,7 @@
 import { db, storage, templatesStorage } from '../firebase';
 import { collection, getDocs, doc, setDoc, deleteDoc, query } from 'firebase/firestore';
 import { ref, listAll, getDownloadURL, uploadBytes, deleteObject } from 'firebase/storage';
+import { getPreRenderedThumbnail, captureModelThumbnail } from './modelThumbnailRenderer';
 
 export const TEMPLATES_BUCKET_NAME = '3dtemplates';
 export const TEMPLATES_BUCKET_URL = `https://storage.googleapis.com/${TEMPLATES_BUCKET_NAME}`;
@@ -113,6 +114,11 @@ export function parseTemplateFromPath(fullPath, metadata = {}) {
     .map((seg) => encodeURIComponent(seg))
     .join('/');
   const url = metadata.downloadUrl || `${TEMPLATES_BUCKET_URL}/${encodedPath}`;
+  const thumbnailUrl =
+    metadata.thumbnailUrl ||
+    getPreRenderedThumbnail(cleanPath) ||
+    getPreRenderedThumbnail(filename) ||
+    null;
 
   return {
     id,
@@ -123,6 +129,7 @@ export function parseTemplateFromPath(fullPath, metadata = {}) {
     cleanName,
     ext: ext.toUpperCase(),
     url,
+    thumbnailUrl,
     icon,
     bucket: TEMPLATES_BUCKET_NAME,
     size: metadata.size ? parseInt(metadata.size, 10) : undefined,
@@ -345,15 +352,31 @@ export async function uploadModelTemplate({
   const modelUrl = await getDownloadURL(modelStorageRef);
   onProgress({ step: 'MODEL_DONE', progress: 65, message: '3D model file uploaded successfully.' });
 
-  // 2. Upload Thumbnail (if provided)
+  // 2. Upload Thumbnail (if provided, or auto-generate snapshot)
   let thumbnailUrl = null;
   let thumbnailStoragePath = null;
-  if (thumbnailFile) {
+  let finalThumbFile = thumbnailFile;
+
+  if (!finalThumbFile && typeof window !== 'undefined') {
+    try {
+      onProgress({ step: 'AUTO_THUMB', progress: 70, message: 'Auto-generating 3D model thumbnail preview...' });
+      const dataUrl = await captureModelThumbnail(file);
+      if (dataUrl && dataUrl.startsWith('data:image/')) {
+        const res = await fetch(dataUrl);
+        const blob = await res.blob();
+        finalThumbFile = new File([blob], `${safeFilename}_thumb.png`, { type: 'image/png' });
+      }
+    } catch (err) {
+      console.warn('Auto-thumbnail capture notice:', err);
+    }
+  }
+
+  if (finalThumbFile) {
     onProgress({ step: 'THUMBNAIL_UPLOAD', progress: 75, message: 'Uploading preview thumbnail...' });
-    const safeThumbName = thumbnailFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const safeThumbName = finalThumbFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     thumbnailStoragePath = `model_templates/thumbnails/${timestamp}_${safeThumbName}`;
     const thumbStorageRef = ref(storage, thumbnailStoragePath);
-    await uploadBytes(thumbStorageRef, thumbnailFile);
+    await uploadBytes(thumbStorageRef, finalThumbFile);
     thumbnailUrl = await getDownloadURL(thumbStorageRef);
   }
 

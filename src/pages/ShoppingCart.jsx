@@ -1,15 +1,43 @@
-import React, { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { collection, getDocs } from 'firebase/firestore';
+import { db } from '../firebase';
 import Header from '../components/Header';
+import Model3DThumbnail from '../components/Model3DThumbnail';
+import { CURATED_COLLECTION } from './Shop';
+import { resolveCartItemModel } from '../utils/cartModelResolver';
 import { useCart } from '../context/CartContext';
 import { usePaymentEnvironment } from '../context/PaymentEnvironmentContext';
-import { startDirectPayPalCheckout } from '../services/paypalService';
 
 export default function ShoppingCart() {
   const { cartItems, updateQuantity, removeFromCart, getCartTotal } = useCart();
   const { isSandboxMode, activeGateway } = usePaymentEnvironment();
   const subtotal = getCartTotal();
   const [isProcessing, setIsProcessing] = useState(false);
+  const [remoteAssets, setRemoteAssets] = useState({});
+
+  // Sync remote assets to resolve 3D models for items from inventory
+  useEffect(() => {
+    let isMounted = true;
+    async function fetchAssets() {
+      try {
+        const snap = await getDocs(collection(db, 'assets'));
+        if (!snap.empty && isMounted) {
+          const map = {};
+          snap.docs.forEach((d) => {
+            map[d.id] = { id: d.id, ...d.data() };
+          });
+          setRemoteAssets(map);
+        }
+      } catch (err) {
+        console.warn('Cart remote assets sync:', err);
+      }
+    }
+    fetchAssets();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleSandboxBuyItem = async (item) => {
     setIsProcessing(true);
@@ -20,7 +48,7 @@ export default function ShoppingCart() {
       price: Number(item.price) || 0,
       quantity: item.quantity || 1,
       size: item.size || 'One Size',
-      image: item.image || ''
+      image: item.image || item.thumbnailUrl || ''
     };
 
     try {
@@ -55,13 +83,13 @@ export default function ShoppingCart() {
   const handleSandboxCheckoutCart = async () => {
     if (cartItems.length === 0) return;
     setIsProcessing(true);
-    const itemsPayload = cartItems.map(item => ({
+    const itemsPayload = cartItems.map((item) => ({
       id: item.id || '',
       name: item.name || 'Digital Garment',
       price: Number(item.price) || 0,
       quantity: item.quantity || 1,
       size: item.size || 'One Size',
-      image: item.image || ''
+      image: item.image || item.thumbnailUrl || ''
     }));
 
     try {
@@ -100,11 +128,14 @@ export default function ShoppingCart() {
       {/* Main Content */}
       <main className="flex-grow pt-32 pb-24 px-margin-mobile md:px-margin-desktop w-full max-w-7xl mx-auto">
         <div className="mb-12">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 text-xs font-mono font-semibold uppercase mb-3">
+            <span>$ antigravity bag --active</span>
+          </div>
           <h1 className="font-headline-xl text-headline-lg-mobile md:text-headline-xl text-on-background mb-4 font-bold tracking-wide">
-            YOUR CART
+            YOUR DIGITAL BAG
           </h1>
           <p className="font-body-lg text-body-lg text-secondary">
-            Review your selections before proceeding to checkout.
+            Review your physical chassis foundations and swappable 3D visual skins before proceeding to checkout.
           </p>
         </div>
 
@@ -112,104 +143,177 @@ export default function ShoppingCart() {
           {/* Cart Items List */}
           <div className="w-full lg:w-2/3 flex flex-col gap-8">
             {cartItems.length === 0 ? (
-              <p className="text-secondary">Your cart is empty.</p>
+              <div className="p-12 rounded-2xl bg-surface-container/40 border border-outline-variant/30 text-center space-y-4">
+                <span className="material-symbols-outlined text-5xl text-secondary">shopping_bag</span>
+                <p className="text-secondary font-mono text-sm">Your digital closet bag is currently empty.</p>
+                <Link
+                  to="/shop"
+                  className="inline-block px-6 py-2.5 rounded-full bg-primary text-white font-mono text-xs font-semibold hover:bg-primary/90 transition-all"
+                >
+                  Browse 3D Chassis Drops →
+                </Link>
+              </div>
             ) : (
-              cartItems.map((item) => (
-                <div key={item.id} className="flex flex-col sm:flex-row gap-6 pb-8 border-b border-outline-variant/30 relative group">
-                  <div className="w-full sm:w-48 aspect-[3/4] bg-surface-container relative overflow-hidden shrink-0 rounded">
-                    <img
-                      alt={item.name}
-                      className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 mix-blend-multiply"
-                      src={item.image || "https://lh3.googleusercontent.com/aida-public/AB6AXuA_lPkQp6i1iZnEAk_2TeaylzhDzLW-XhRcKPttTLT1OTzraJo9veg0F-EMKVYrI78nNMmi-zV_9hoI0wtDrEIVas-Gqn5ntJnuFMhVBEG_5oeniqUXyVhJZPnUTZS-4gbyL8dWi_ylDWVts8nNh0jWtR9pIS1SjldmXqeh-XJXRQvV00UPW9JSJJYIN81IJyKEKakN5Dk1cEalWZK0RpfQ2YNSZ8nK1Zg07WFPhbVJy9Bh37yY0xTwXiruuzCdM-OMwnMBtFveOtk"}
-                    />
-                  </div>
-                  
-                  <div className="flex flex-col justify-between flex-grow py-2">
-                    <div>
-                      <div className="flex justify-between items-start mb-2">
-                        <h3 className="font-body-lg text-body-lg font-semibold text-on-background">{item.name}</h3>
-                        <span className="font-body-lg text-body-lg text-on-background">${item.price.toFixed(2)}</span>
-                      </div>
-                      <p className="font-body-md text-body-md text-secondary mb-1">Color: {item.color || 'Standard'}</p>
-                      <p className="font-body-md text-body-md text-secondary mb-4">Size: {item.size || 'One Size'}</p>
+              cartItems.map((item) => {
+                const resolved = resolveCartItemModel(item, remoteAssets);
+                const targetId = item.baseId || item.id?.split('-')[0] || item.id;
+                const isCurated = CURATED_COLLECTION.some((c) => c.id === targetId || item.id?.startsWith(c.id));
+                const itemPrice = Number(item.price) || 0;
+                const itemTotal = itemPrice * (item.quantity || 1);
+
+                return (
+                  <div
+                    key={item.id}
+                    className="flex flex-col sm:flex-row gap-6 pb-8 border-b border-outline-variant/30 relative group items-start sm:items-stretch"
+                  >
+                    {/* 3D Model Thumbnail Representation */}
+                    <div className="w-full sm:w-44 md:w-48 aspect-[3/4] bg-[#0d0d10] relative overflow-hidden shrink-0 rounded-2xl border border-white/10 shadow-lg">
+                      <Model3DThumbnail
+                        modelUrl={resolved.modelUrl}
+                        fallbackImageUrl={resolved.fallbackImage}
+                        cleanName={resolved.cleanName}
+                        category={resolved.category}
+                        className="w-full h-full"
+                        aspectRatio="aspect-[3/4]"
+                        badge="3D MODEL"
+                        interactiveOnHover={true}
+                      />
                     </div>
-                    
-                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                      <div className="flex items-center space-x-4 border border-outline-variant/50 rounded-full px-4 py-2 w-max">
-                        <button 
-                          className="text-secondary hover:text-on-background transition-colors"
-                          onClick={() => updateQuantity(item.id, item.quantity - 1)}
-                        >
-                          <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24" }}>remove</span>
-                        </button>
-                        <span className="font-body-md text-body-md w-4 text-center">{item.quantity}</span>
-                        <button 
-                          className="text-secondary hover:text-on-background transition-colors"
-                          onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                        >
-                          <span className="material-symbols-outlined text-sm" style={{ fontVariationSettings: "'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24" }}>add</span>
-                        </button>
-                      </div>
-                      
-                      <div className="flex items-center gap-3">
-                        {isSandboxMode && (
-                          <button
-                            type="button"
-                            onClick={() => handleSandboxBuyItem(item)}
-                            disabled={isProcessing}
-                            className="px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-all active:scale-95 disabled:opacity-50"
-                            title={`Send a ${activeGateway === 'stripe' ? 'Stripe' : 'PayPal'} Sandbox purchase for ${item.name} at its price of $${((Number(item.price) || 0) * (item.quantity || 1)).toFixed(2)}`}
-                          >
-                            <span className="material-symbols-outlined text-sm">shopping_cart_checkout</span>
-                            <span>Sandbox Buy • ${((Number(item.price) || 0) * (item.quantity || 1)).toFixed(2)}</span>
-                          </button>
+
+                    <div className="flex flex-col justify-between flex-grow py-1 w-full space-y-4 sm:space-y-0">
+                      <div>
+                        <div className="flex justify-between items-start mb-2 gap-4">
+                          <div>
+                            <div className="flex items-center gap-2 mb-1.5">
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-primary/10 text-primary border border-primary/20 uppercase font-semibold">
+                                Living WebAR Chassis
+                              </span>
+                              {targetId && (
+                                <Link
+                                  to={isCurated ? `/shop#studio` : `/product/${targetId}`}
+                                  className="text-[10px] font-mono text-cyan-500 hover:text-cyan-400 hover:underline flex items-center gap-0.5"
+                                  title="View in 3D Preview"
+                                >
+                                  <span className="material-symbols-outlined text-xs">view_in_ar</span>
+                                  <span>View in 3D</span>
+                                </Link>
+                              )}
+                            </div>
+                            <h3 className="font-body-lg text-lg sm:text-xl font-bold text-on-background tracking-tight">
+                              {item.name}
+                            </h3>
+                          </div>
+                          <span className="font-body-lg text-lg font-bold text-on-background shrink-0 font-mono">
+                            ${itemTotal.toFixed(2)}
+                          </span>
+                        </div>
+
+                        {item.description && (
+                          <p className="text-xs text-secondary line-clamp-2 mb-3 leading-relaxed">
+                            {item.description}
+                          </p>
                         )}
 
-                        <button 
-                          className="font-label-caps text-label-caps text-secondary hover:text-error transition-colors uppercase border-b border-transparent hover:border-error pb-0.5 tracking-widest cursor-pointer"
-                          onClick={() => removeFromCart(item.id)}
-                        >
-                          Remove
-                        </button>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-secondary font-mono mb-2">
+                          <span>
+                            Size: <strong className="text-on-background font-semibold">{item.size || 'One Size'}</strong>
+                          </span>
+                          {item.color && (
+                            <span>
+                              Color: <strong className="text-on-background font-semibold">{item.color}</strong>
+                            </span>
+                          )}
+                          <span>
+                            Unit Price: <strong className="text-on-background font-semibold">${itemPrice.toFixed(2)}</strong>
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-4 pt-3 border-t border-outline-variant/15">
+                        <div className="flex items-center space-x-3 border border-outline-variant/50 rounded-full px-3.5 py-1.5 w-max bg-black/5 dark:bg-white/5">
+                          <button
+                            className="text-secondary hover:text-on-background transition-colors cursor-pointer flex items-center justify-center"
+                            onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                            aria-label="Decrease quantity"
+                          >
+                            <span className="material-symbols-outlined text-sm">remove</span>
+                          </button>
+                          <span className="font-mono text-xs font-semibold w-5 text-center">{item.quantity}</span>
+                          <button
+                            className="text-secondary hover:text-on-background transition-colors cursor-pointer flex items-center justify-center"
+                            onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                            aria-label="Increase quantity"
+                          >
+                            <span className="material-symbols-outlined text-sm">add</span>
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          {isSandboxMode && (
+                            <button
+                              type="button"
+                              onClick={() => handleSandboxBuyItem(item)}
+                              disabled={isProcessing}
+                              className="px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md cursor-pointer transition-all active:scale-95 disabled:opacity-50 font-mono"
+                              title={`Send a ${activeGateway === 'stripe' ? 'Stripe' : 'PayPal'} Sandbox purchase for ${item.name}`}
+                            >
+                              <span className="material-symbols-outlined text-sm">shopping_cart_checkout</span>
+                              <span>Sandbox Buy • ${itemTotal.toFixed(2)}</span>
+                            </button>
+                          )}
+
+                          <button
+                            className="font-label-caps text-xs text-secondary hover:text-red-500 transition-colors uppercase border-b border-transparent hover:border-red-500 pb-0.5 tracking-wider cursor-pointer font-mono"
+                            onClick={() => removeFromCart(item.id)}
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
 
           {/* Order Summary Sidebar */}
           <div className="w-full lg:w-1/3">
-            <div className="sticky top-32 bg-surface-container-lowest p-8 rounded border border-outline-variant/20 shadow-sm">
-              <h2 className="font-headline-lg-mobile text-2xl font-bold text-on-background mb-8 tracking-wide">SUMMARY</h2>
-              <div className="space-y-4 mb-8">
+            <div className="sticky top-32 bg-surface-container-lowest p-8 rounded-2xl border border-outline-variant/20 shadow-xl space-y-8">
+              <h2 className="font-headline-lg-mobile text-2xl font-bold text-on-background tracking-wide">
+                SUMMARY
+              </h2>
+              <div className="space-y-4">
                 <div className="flex justify-between font-body-md text-body-md text-secondary">
                   <span>Subtotal</span>
-                  <span className="text-on-background">${subtotal.toFixed(2)}</span>
+                  <span className="text-on-background font-mono font-semibold">${subtotal.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between font-body-md text-body-md text-secondary">
-                  <span>Estimated Shipping</span>
-                  <span>Calculated at checkout</span>
+                  <span>Express Shipping</span>
+                  <span className="text-emerald-500 font-mono text-xs font-semibold">FREE (WORLDWIDE)</span>
                 </div>
                 <div className="flex justify-between font-body-md text-body-md text-secondary">
-                  <span>Taxes</span>
-                  <span>$0.00</span>
+                  <span>Taxes &amp; Duties</span>
+                  <span className="font-mono">$0.00</span>
                 </div>
               </div>
-              
-              <div className="border-t border-outline-variant/30 pt-6 mb-8">
+
+              <div className="border-t border-outline-variant/30 pt-6">
                 <div className="flex justify-between items-end">
                   <span className="font-body-lg text-body-lg text-on-background">Total</span>
-                  <span className="font-headline-lg-mobile text-2xl font-bold text-on-background">${subtotal.toFixed(2)}</span>
+                  <span className="font-headline-lg-mobile text-2xl font-bold text-on-background font-mono">
+                    ${subtotal.toFixed(2)}
+                  </span>
                 </div>
               </div>
-              
-              <Link 
+
+              <Link
                 to="/checkout"
-                className={`block w-full bg-on-background text-on-primary py-4 px-6 font-label-caps text-label-caps tracking-widest text-center transition-colors duration-300 rounded ${cartItems.length === 0 ? 'opacity-50 pointer-events-none' : 'hover:bg-tertiary'}`}
+                className={`block w-full bg-on-background text-on-primary py-4 px-6 font-label-caps text-xs tracking-widest text-center transition-colors duration-300 rounded-xl font-mono ${
+                  cartItems.length === 0 ? 'opacity-50 pointer-events-none' : 'hover:bg-primary'
+                }`}
               >
-                PROCEED TO CHECKOUT
+                [ PROCEED TO CHECKOUT ]
               </Link>
 
               {isSandboxMode && (
@@ -217,17 +321,17 @@ export default function ShoppingCart() {
                   type="button"
                   onClick={handleSandboxCheckoutCart}
                   disabled={cartItems.length === 0 || isProcessing}
-                  className="mt-3 w-full py-3.5 px-6 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-label-caps text-xs font-bold rounded shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95 disabled:opacity-50"
+                  className="w-full py-3.5 px-6 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-label-caps text-xs font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95 disabled:opacity-50 font-mono"
                   title={`Send a ${activeGateway === 'stripe' ? 'Stripe' : 'PayPal'} Sandbox purchase for the total cart of $${subtotal.toFixed(2)}`}
                 >
                   <span className="material-symbols-outlined text-base">shopping_cart_checkout</span>
                   <span>SEND SANDBOX PURCHASE • ${subtotal.toFixed(2)} USD</span>
                 </button>
               )}
-              
-              <div className="mt-6 flex justify-center gap-4 text-secondary">
-                <span className="material-symbols-outlined text-xl" style={{ fontVariationSettings: "'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24" }}>lock</span>
-                <span className="font-label-caps text-label-caps tracking-widest">SECURE CHECKOUT</span>
+
+              <div className="pt-2 flex justify-center items-center gap-2 text-xs font-mono text-secondary">
+                <span className="material-symbols-outlined text-sm text-emerald-500">lock</span>
+                <span className="tracking-wider uppercase">ENCRYPTED SPATIAL CHECKOUT</span>
               </div>
             </div>
           </div>
@@ -236,16 +340,25 @@ export default function ShoppingCart() {
 
       {/* Footer */}
       <footer className="w-full py-16 px-margin-mobile md:px-margin-desktop flex flex-col md:flex-row justify-between items-center gap-8 bg-background border-t border-outline-variant/30 mt-auto text-on-background">
-        <div className="font-headline-lg text-headline-lg text-on-background tracking-widest">
-            LUXE EDITORIAL
+        <div className="font-headline-lg text-xl font-bold text-on-background tracking-widest">
+          STAR <span className="text-primary font-light">weAR</span>
         </div>
-        <div className="flex flex-wrap justify-center gap-6 font-label-caps text-label-caps tracking-widest">
-          <a className="text-secondary hover:text-on-background hover:underline transition-all uppercase" href="#">PRIVACY POLICY</a>
-          <a className="text-secondary hover:text-on-background hover:underline transition-all uppercase" href="#">TERMS OF SERVICE</a>
-          <a className="text-secondary hover:text-on-background hover:underline transition-all uppercase" href="#">SHIPPING & RETURNS</a>
+        <div className="flex flex-wrap justify-center gap-6 font-label-caps text-xs tracking-widest">
+          <Link className="text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/">
+            HOME
+          </Link>
+          <Link className="text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/shop">
+            SHOP
+          </Link>
+          <Link className="text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/collections">
+            COLLECTIONS
+          </Link>
+          <Link className="text-secondary hover:text-on-background hover:underline transition-all uppercase" to="/about">
+            ABOUT
+          </Link>
         </div>
-        <div className="font-body-md text-sm text-secondary">
-            © 2024 LUXE EDITORIAL. ALL RIGHTS RESERVED.
+        <div className="font-mono text-xs text-secondary">
+          © 2026 STAR WEAR INC. ALL RIGHTS RESERVED.
         </div>
       </footer>
     </div>

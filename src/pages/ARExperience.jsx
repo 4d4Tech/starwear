@@ -1045,17 +1045,17 @@ useEffect(() => {
         {cameraEnabled && (
           <div className="pointer-events-none">
             {trackingStatus === 'DETECTED' ? (
-              <div className="flex items-center gap-2 px-3.5 py-1.5 bg-emerald-500/90 text-white text-xs font-bold uppercase tracking-wider rounded-full shadow-lg backdrop-blur-md border border-emerald-400/30 animate-fade-in">
+              <div className="flex items-center gap-2 px-3.5 py-1.5 bg-emerald-600 text-white text-xs font-black uppercase tracking-wider rounded-full shadow-xl backdrop-blur-md border border-emerald-300 animate-fade-in">
                 <span className="w-2 h-2 bg-white rounded-full animate-ping"></span>
                 Marker Locked
               </div>
             ) : trackingStatus === 'ERROR' ? (
-              <div className="flex items-center gap-2 px-3.5 py-1.5 bg-red-600/90 text-white text-xs font-bold uppercase tracking-wider rounded-full shadow-lg backdrop-blur-md border border-red-400/30 animate-fade-in">
+              <div className="flex items-center gap-2 px-3.5 py-1.5 bg-red-600 text-white text-xs font-black uppercase tracking-wider rounded-full shadow-xl backdrop-blur-md border border-red-300 animate-fade-in">
                 <span className="w-2 h-2 bg-white rounded-full"></span>
                 Camera Error
               </div>
             ) : (
-              <div className="flex items-center gap-2 px-3.5 py-1.5 bg-slate-900/80 text-amber-300 text-xs font-bold uppercase tracking-wider rounded-full shadow-lg backdrop-blur-md border border-amber-500/30 animate-pulse">
+              <div className="flex items-center gap-2 px-3.5 py-1.5 bg-black text-amber-300 text-xs font-black uppercase tracking-wider rounded-full shadow-xl backdrop-blur-md border-2 border-amber-400 animate-pulse">
                 <span className="w-2 h-2 bg-amber-400 rounded-full"></span>
                 Scanning Marker...
               </div>
@@ -1323,7 +1323,7 @@ useEffect(() => {
             {/* Center Target Indicator */}
             <div className="w-6 h-6 border border-emerald-400/60 rounded-full animate-ping"></div>
           </div>
-          <p className="mt-5 text-emerald-300 text-[11px] font-mono font-semibold tracking-widest uppercase bg-black/75 px-4 py-2 rounded-full border border-emerald-500/30 backdrop-blur-md shadow-xl">
+          <p className="mt-5 text-emerald-300 text-xs font-mono font-black tracking-widest uppercase bg-black/95 px-4 py-2 rounded-full border-2 border-emerald-400 backdrop-blur-md shadow-2xl">
             Point Camera at Marker
           </p>
         </div>

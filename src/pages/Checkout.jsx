@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import Header from '../components/Header';
 import { useCart } from '../context/CartContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -6,7 +6,6 @@ import { PayPalScriptProvider, PayPalButtons } from '@paypal/react-paypal-js';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import {
-  PAYPAL_CLIENT_ID,
   getPayPalScriptOptions,
   createFirestoreOrder,
   createPayPalOrder,
@@ -20,10 +19,12 @@ import {
 } from '../services/stripeService';
 import { CURATED_COLLECTION } from './Shop';
 import { usePaymentEnvironment } from '../context/PaymentEnvironmentContext';
+import Model3DThumbnail from '../components/Model3DThumbnail';
+import { resolveCartItemModel } from '../utils/cartModelResolver';
 
 export default function Checkout() {
   const { cartItems, getCartTotal, clearCart } = useCart();
-  const { isSandboxMode, activeGateway, isPayPalEnabled, isStripeEnabled } = usePaymentEnvironment();
+  const { isSandboxMode, activeGateway } = usePaymentEnvironment();
   const [selectedMethod, setSelectedMethod] = useState(() => {
     return activeGateway === 'stripe' ? 'stripe' : 'paypal';
   });
@@ -739,6 +740,7 @@ export default function Checkout() {
                 <div className="text-secondary text-sm">No items selected</div>
               ) : (
                 activeItems.map((item) => {
+                  const resolved = resolveCartItemModel(item);
                   const itemPrice = Number(item.price) || 99.00;
                   const itemQty = item.quantity || 1;
                   const itemTotal = itemPrice * itemQty;
@@ -746,14 +748,16 @@ export default function Checkout() {
                   return (
                     <div key={item.id} className="p-3 rounded-xl bg-surface-variant/20 border border-outline-variant/20 space-y-3">
                       <div className="flex gap-3 items-center">
-                        <div className="w-14 h-14 bg-surface-container overflow-hidden rounded-lg flex-shrink-0 border border-outline-variant/20">
-                          <img
-                            alt={item.name}
-                            className="w-full h-full object-cover"
-                            src={
-                              item.image ||
-                              'https://firebasestorage.googleapis.com/v0/b/star-wear-ecb39.firebasestorage.app/o/assets%2Fasset_hologram_1%2Fpreview.png?alt=media'
-                            }
+                        <div className="w-14 h-14 bg-[#0d0d10] overflow-hidden rounded-lg flex-shrink-0 border border-outline-variant/20 relative">
+                          <Model3DThumbnail
+                            modelUrl={resolved.modelUrl}
+                            fallbackImageUrl={resolved.fallbackImage}
+                            cleanName={resolved.cleanName}
+                            category={resolved.category}
+                            className="w-full h-full"
+                            aspectRatio="aspect-square"
+                            badge={false}
+                            interactiveOnHover={false}
                           />
                         </div>
                         <div className="flex-grow flex flex-col justify-between">

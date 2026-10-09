@@ -129,40 +129,40 @@ const AdminOrders = () => {
                     <td className="p-4 sm:p-5">
                       <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
                         isStripe 
-                          ? 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/30' 
-                          : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+                          ? 'bg-indigo-100 text-indigo-950 border border-indigo-300 dark:bg-indigo-950/80 dark:text-indigo-200 dark:border-indigo-800' 
+                          : 'bg-blue-100 text-blue-950 border border-blue-300 dark:bg-blue-950/80 dark:text-blue-200 dark:border-blue-800'
                       }`}>
                         <span className="material-symbols-outlined text-[11px]">{isStripe ? 'credit_card' : 'account_balance_wallet'}</span>
                         <span>{isStripe ? 'Stripe' : 'PayPal'}</span>
                       </span>
                     </td>
                     <td className="p-4 sm:p-5">
-                      <span className="font-extrabold text-cyan-400 block text-xs">
+                      <span className="font-extrabold text-cyan-600 dark:text-cyan-400 block text-xs">
                         {formatCurrency(totalPaid, 2)}
                       </span>
                       <span className="text-[10px] text-secondary">Customer Paid</span>
                     </td>
                     <td className="p-4 sm:p-5">
-                      <span className="font-semibold text-rose-400 block text-xs">
+                      <span className="font-semibold text-rose-600 dark:text-rose-400 block text-xs">
                         -{formatCurrency(stripeFee, 2)}
                       </span>
                       <span className="text-[10px] text-secondary font-mono">2.9% + $0.30</span>
                     </td>
                     <td className="p-4 sm:p-5">
-                      <span className="font-bold text-emerald-400 block text-xs">
+                      <span className="font-bold text-emerald-700 dark:text-emerald-400 block text-xs">
                         +{formatCurrency(netAmount, 2)}
                       </span>
-                      <span className="text-[10px] text-emerald-400/70 font-mono">
+                      <span className="text-[10px] text-emerald-800 dark:text-emerald-300/80 font-mono">
                         {(100 - Number(feeDetails.effectiveRate)).toFixed(1)}% Net
                       </span>
                     </td>
                     <td className="p-4 sm:p-5">
                       <span className={`px-2.5 py-1 rounded text-[10px] font-bold uppercase ${
                         status === 'paid' || status === 'completed'
-                          ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                          ? 'bg-emerald-100 text-emerald-950 border border-emerald-300 dark:bg-emerald-950/80 dark:text-emerald-200 dark:border-emerald-800'
                           : status === 'pending'
-                          ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
-                          : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+                          ? 'bg-amber-100 text-amber-950 border border-amber-300 dark:bg-amber-950/80 dark:text-amber-200 dark:border-amber-800'
+                          : 'bg-blue-100 text-blue-950 border border-blue-300 dark:bg-blue-950/80 dark:text-blue-200 dark:border-blue-800'
                       }`}>
                         {order.status || 'pending'}
                       </span>
@@ -301,7 +301,7 @@ const AdminOrders = () => {
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#635bff]/15 text-indigo-300 border border-[#635bff]/30 text-[10px] font-mono font-bold">
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-950 border border-indigo-300 dark:bg-indigo-950/80 dark:text-indigo-200 dark:border-indigo-800 text-[10px] font-mono font-bold">
                     <span className="material-symbols-outlined text-xs">credit_card</span>
                     <span>Stripe Rate: 2.9% + $0.30</span>
                   </div>
@@ -318,7 +318,7 @@ const AdminOrders = () => {
                   {/* Delivery */}
                   <div className="flex justify-between items-center text-secondary">
                     <span>WebAR Interactive Experience Delivery:</span>
-                    <span className="text-emerald-400 font-medium">FREE ($0.00)</span>
+                    <span className="text-emerald-700 dark:text-emerald-400 font-medium">FREE ($0.00)</span>
                   </div>
 
                   {/* Taxes */}
@@ -335,60 +335,60 @@ const AdminOrders = () => {
                       </span>
                       <span className="text-[10px] text-secondary">Full charge processed to customer</span>
                     </div>
-                    <span className="font-black text-cyan-400 text-lg sm:text-xl">
+                    <span className="font-black text-cyan-600 dark:text-cyan-400 text-lg sm:text-xl">
                       {formatCurrency(totalPaid, 2)} USD
                     </span>
                   </div>
 
                   {/* Stripe Processing Fee Deduction Card */}
-                  <div className="p-4 rounded-xl bg-black/50 border border-rose-500/30 space-y-2.5 mt-3">
+                  <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-950 dark:bg-rose-950/40 dark:border-rose-800/60 dark:text-rose-100 space-y-2.5 mt-3">
                     <div className="flex justify-between items-center">
                       <div className="flex items-center gap-2">
-                        <span className="w-2 h-2 rounded-full bg-rose-400 animate-pulse"></span>
-                        <span className="font-bold text-rose-300 uppercase tracking-wide text-xs">
+                        <span className="w-2 h-2 rounded-full bg-rose-600 dark:bg-rose-400 animate-pulse"></span>
+                        <span className="font-bold text-rose-900 dark:text-rose-200 uppercase tracking-wide text-xs">
                           Stripe Processing Fee (Expense)
                         </span>
                       </div>
-                      <span className="font-black text-rose-400 text-sm sm:text-base">
+                      <span className="font-black text-rose-700 dark:text-rose-400 text-sm sm:text-base">
                         -{formatCurrency(stripeFee, 2)} USD
                       </span>
                     </div>
 
                     {/* Itemized Stripe Fee Formula */}
-                    <div className="pl-3 border-l-2 border-rose-500/40 space-y-1 text-[11px]">
+                    <div className="pl-3 border-l-2 border-rose-300 dark:border-rose-500/40 space-y-1 text-[11px]">
                       <div className="flex justify-between text-secondary">
                         <span>• Variable Fee (2.9% of {formatCurrency(totalPaid, 2)}):</span>
-                        <span className="text-rose-300 font-medium">-{formatCurrency(feeDetails.percentageFee, 2)} USD</span>
+                        <span className="text-rose-800 dark:text-rose-300 font-medium">-{formatCurrency(feeDetails.percentageFee, 2)} USD</span>
                       </div>
                       <div className="flex justify-between text-secondary">
                         <span>• Fixed Transaction Fee (Stripe Card Standard):</span>
-                        <span className="text-rose-300 font-medium">-$0.30 USD</span>
+                        <span className="text-rose-800 dark:text-rose-300 font-medium">-$0.30 USD</span>
                       </div>
-                      <div className="flex justify-between text-[10px] text-secondary/70 pt-1 border-t border-outline-variant/15">
+                      <div className="flex justify-between text-[10px] text-secondary/70 pt-1 border-t border-rose-200 dark:border-outline-variant/15">
                         <span>Effective Processing Fee Rate:</span>
-                        <span className="text-rose-300/90 font-mono font-semibold">{effectiveRate}% of transaction</span>
+                        <span className="text-rose-900 dark:text-rose-300/90 font-mono font-bold">{effectiveRate}% of transaction</span>
                       </div>
                     </div>
                   </div>
 
                   {/* Net Merchant Settlement Payout Banner */}
-                  <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-950/40 to-emerald-900/20 border border-emerald-500/50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                  <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-950 dark:bg-emerald-950/40 dark:border-emerald-700/60 dark:text-emerald-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="material-symbols-outlined text-emerald-400 text-lg">account_balance</span>
-                        <span className="font-black text-emerald-300 uppercase tracking-wider text-xs sm:text-sm">
+                        <span className="material-symbols-outlined text-emerald-700 dark:text-emerald-400 text-lg">account_balance</span>
+                        <span className="font-black text-emerald-900 dark:text-emerald-200 uppercase tracking-wider text-xs sm:text-sm">
                           Net Merchant Payout (Settlement)
                         </span>
                       </div>
-                      <p className="text-[11px] text-emerald-200/80 mt-0.5">
+                      <p className="text-[11px] text-emerald-800 dark:text-emerald-200/80 mt-0.5">
                         Net funds deposited to Star weAR account after Stripe fee deduction
                       </p>
                     </div>
                     <div className="text-left sm:text-right w-full sm:w-auto">
-                      <span className="text-xl sm:text-2xl font-black text-emerald-400 tracking-tight block">
+                      <span className="text-xl sm:text-2xl font-black text-emerald-800 dark:text-emerald-400 tracking-tight block">
                         +{formatCurrency(netPayout, 2)} USD
                       </span>
-                      <span className="text-[10px] font-mono text-emerald-300/80 uppercase font-semibold">
+                      <span className="text-[10px] font-mono text-emerald-900 dark:text-emerald-300/80 uppercase font-bold">
                         {(100 - Number(effectiveRate)).toFixed(1)}% Retained Net Margin
                       </span>
                     </div>
@@ -396,15 +396,15 @@ const AdminOrders = () => {
 
                   {/* Alternative Gateway Comparison for PayPal orders */}
                   {!isStripe && (
-                    <div className="p-3 rounded-lg bg-blue-950/20 border border-blue-500/25 text-[11px] text-blue-200 space-y-1">
-                      <div className="flex items-center justify-between font-bold text-blue-300">
+                    <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-[11px] text-blue-950 dark:bg-blue-950/30 dark:border-blue-800/60 dark:text-blue-100 space-y-1">
+                      <div className="flex items-center justify-between font-bold text-blue-900 dark:text-blue-200">
                         <span className="flex items-center gap-1">
                           <span className="material-symbols-outlined text-xs">compare_arrows</span>
                           <span>Gateway Fee Comparison (PayPal vs Stripe)</span>
                         </span>
                         <span>Stripe Fee: {formatCurrency(stripeFee, 2)}</span>
                       </div>
-                      <p className="text-[10px] text-blue-200/70">
+                      <p className="text-[10px] text-blue-900/80 dark:text-blue-100/80">
                         This order was paid with PayPal. If processed via Stripe (2.9% + $0.30), merchant processing fees for this ${totalPaid.toFixed(2)} purchase are exactly <strong>{formatCurrency(stripeFee, 2)}</strong>, with a net payout of <strong>{formatCurrency(netPayout, 2)}</strong>.
                       </p>
                     </div>

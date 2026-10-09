@@ -7,6 +7,7 @@ import {
   getTemplateSubcategories,
   TEMPLATES_BUCKET_NAME
 } from '../utils/meshTemplates';
+import Model3DThumbnail from './Model3DThumbnail';
 
 export default function MeshTemplateBrowser({
   isOpen = true,
@@ -232,13 +233,16 @@ export default function MeshTemplateBrowser({
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <div className="w-8 h-8 rounded-lg bg-indigo-950/80 border border-indigo-500/30 flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform overflow-hidden">
-                      {template.thumbnailUrl ? (
-                        <img src={template.thumbnailUrl} alt={template.cleanName} className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="material-symbols-outlined text-sm text-indigo-400">
-                          {template.icon}
-                        </span>
-                      )}
+                      <Model3DThumbnail
+                        modelUrl={template.url}
+                        fallbackImageUrl={template.thumbnailUrl}
+                        category={template.category}
+                        subcategory={template.subcategory}
+                        cleanName={template.cleanName}
+                        className="w-full h-full"
+                        badge={false}
+                        interactiveOnHover={false}
+                      />
                     </div>
                     <div className="min-w-0">
                       <div className="text-xs font-semibold text-slate-200 truncate group-hover:text-white">
@@ -449,18 +453,17 @@ export default function MeshTemplateBrowser({
                         </span>
                       </div>
 
-                      {/* Icon / Image Preview Area */}
+                      {/* 3D Model Preview Area */}
                       <div className="h-28 rounded-xl bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-800/80 flex items-center justify-center mb-3 group-hover:border-indigo-500/40 transition-colors relative overflow-hidden">
-                        {template.thumbnailUrl ? (
-                          <img src={template.thumbnailUrl} alt={template.cleanName} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                        ) : (
-                          <>
-                            <div className="absolute inset-0 bg-indigo-600/5 group-hover:bg-indigo-600/15 transition-colors"></div>
-                            <span className="material-symbols-outlined text-5xl text-indigo-400 group-hover:scale-115 transition-transform duration-300">
-                              {template.icon}
-                            </span>
-                          </>
-                        )}
+                        <Model3DThumbnail
+                          modelUrl={template.url}
+                          fallbackImageUrl={template.thumbnailUrl}
+                          category={template.category}
+                          subcategory={template.subcategory}
+                          cleanName={template.cleanName}
+                          className="w-full h-full"
+                          badge={false}
+                        />
                       </div>
 
                       {/* Model title */}
@@ -688,13 +691,16 @@ export default function MeshTemplateBrowser({
                     </div>
 
                     <div className="h-14 rounded-lg bg-slate-900 border border-slate-800/80 flex items-center justify-center mb-2 group-hover:border-indigo-500/40 transition-colors overflow-hidden">
-                      {template.thumbnailUrl ? (
-                        <img src={template.thumbnailUrl} alt={template.cleanName} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
-                      ) : (
-                        <span className="material-symbols-outlined text-2xl text-indigo-400 group-hover:scale-115 transition-transform">
-                          {template.icon}
-                        </span>
-                      )}
+                      <Model3DThumbnail
+                        modelUrl={template.url}
+                        fallbackImageUrl={template.thumbnailUrl}
+                        category={template.category}
+                        subcategory={template.subcategory}
+                        cleanName={template.cleanName}
+                        className="w-full h-full"
+                        badge={false}
+                        interactiveOnHover={false}
+                      />
                     </div>
 
                     <div className="text-xs font-bold text-white truncate group-hover:text-indigo-300 transition-colors">

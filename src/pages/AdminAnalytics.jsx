@@ -263,8 +263,8 @@ const AdminAnalytics = () => {
         {/* Total Revenue */}
         <div className="glass-panel p-6 rounded-xl border border-outline-variant/20 hover:border-primary/40 transition-all shadow-sm">
           <div className="flex justify-between items-start mb-3">
-            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase">TOTAL REVENUE</span>
-            <span className="material-symbols-outlined text-primary bg-primary/10 p-2 rounded-full text-base">
+            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase font-semibold">TOTAL REVENUE</span>
+            <span className="material-symbols-outlined text-primary bg-primary/15 dark:bg-primary/25 p-2 rounded-full text-base">
               payments
             </span>
           </div>
@@ -274,10 +274,10 @@ const AdminAnalytics = () => {
           <div className="flex items-center gap-2 text-xs font-mono">
             <span
               className={`flex items-center font-bold ${
-                data.revenueTrend >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                data.revenueTrend >= 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'
               }`}
             >
-              <span className="material-symbols-outlined text-sm">
+              <span className="material-symbols-outlined text-sm font-bold">
                 {data.revenueTrend >= 0 ? 'trending_up' : 'trending_down'}
               </span>
               <span>
@@ -292,8 +292,8 @@ const AdminAnalytics = () => {
         {/* Total Orders */}
         <div className="glass-panel p-6 rounded-xl border border-outline-variant/20 hover:border-primary/40 transition-all shadow-sm">
           <div className="flex justify-between items-start mb-3">
-            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase">TOTAL ORDERS</span>
-            <span className="material-symbols-outlined text-purple-400 bg-purple-500/10 p-2 rounded-full text-base">
+            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase font-semibold">TOTAL ORDERS</span>
+            <span className="material-symbols-outlined text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-950/60 p-2 rounded-full text-base">
               local_mall
             </span>
           </div>
@@ -303,10 +303,10 @@ const AdminAnalytics = () => {
           <div className="flex items-center gap-2 text-xs font-mono">
             <span
               className={`flex items-center font-bold ${
-                data.ordersTrend >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                data.ordersTrend >= 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'
               }`}
             >
-              <span className="material-symbols-outlined text-sm">
+              <span className="material-symbols-outlined text-sm font-bold">
                 {data.ordersTrend >= 0 ? 'trending_up' : 'trending_down'}
               </span>
               <span>
@@ -321,8 +321,8 @@ const AdminAnalytics = () => {
         {/* Conversion Rate */}
         <div className="glass-panel p-6 rounded-xl border border-outline-variant/20 hover:border-primary/40 transition-all shadow-sm">
           <div className="flex justify-between items-start mb-3">
-            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase">CONVERSION RATE</span>
-            <span className="material-symbols-outlined text-amber-400 bg-amber-500/10 p-2 rounded-full text-base">
+            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase font-semibold">CONVERSION RATE</span>
+            <span className="material-symbols-outlined text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/60 p-2 rounded-full text-base">
               swap_horiz
             </span>
           </div>
@@ -332,10 +332,10 @@ const AdminAnalytics = () => {
           <div className="flex items-center gap-2 text-xs font-mono">
             <span
               className={`flex items-center font-bold ${
-                data.conversionTrend >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                data.conversionTrend >= 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'
               }`}
             >
-              <span className="material-symbols-outlined text-sm">
+              <span className="material-symbols-outlined text-sm font-bold">
                 {data.conversionTrend >= 0 ? 'trending_up' : 'trending_down'}
               </span>
               <span>
@@ -350,8 +350,8 @@ const AdminAnalytics = () => {
         {/* Average Order Value */}
         <div className="glass-panel p-6 rounded-xl border border-outline-variant/20 hover:border-primary/40 transition-all shadow-sm">
           <div className="flex justify-between items-start mb-3">
-            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase">AVG ORDER VALUE</span>
-            <span className="material-symbols-outlined text-emerald-400 bg-emerald-500/10 p-2 rounded-full text-base">
+            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase font-semibold">AVG ORDER VALUE</span>
+            <span className="material-symbols-outlined text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/60 p-2 rounded-full text-base">
               receipt_long
             </span>
           </div>
@@ -361,10 +361,10 @@ const AdminAnalytics = () => {
           <div className="flex items-center gap-2 text-xs font-mono">
             <span
               className={`flex items-center font-bold ${
-                data.aovTrend >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                data.aovTrend >= 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'
               }`}
             >
-              <span className="material-symbols-outlined text-sm">
+              <span className="material-symbols-outlined text-sm font-bold">
                 {data.aovTrend >= 0 ? 'trending_up' : 'trending_down'}
               </span>
               <span>
@@ -473,7 +473,7 @@ const AdminAnalytics = () => {
           </div>
           <div className="pt-4 border-t border-outline-variant/20 text-xs font-mono text-secondary flex justify-between">
             <span>Verified Paid:</span>
-            <span className="font-bold text-emerald-400">{data.paidOrdersCount}</span>
+            <span className="font-bold text-emerald-700 dark:text-emerald-300">{data.paidOrdersCount}</span>
           </div>
         </div>
       </section>
@@ -508,11 +508,13 @@ const AdminAnalytics = () => {
                   <tr key={index} className="hover:bg-white/[0.02] transition-colors">
                     <td className="py-3 px-6 font-bold">{row.label}</td>
                     <td className="py-3 px-6">{row.orders} orders</td>
-                    <td className="py-3 px-6 font-bold text-cyan-400">{formatCurrency(row.revenue, 2)}</td>
+                    <td className="py-3 px-6 font-bold text-cyan-700 dark:text-cyan-300">{formatCurrency(row.revenue, 2)}</td>
                     <td className="py-3 px-6 text-secondary">{formatCurrency(aov, 2)}</td>
                     <td className="py-3 px-6 text-right">
                       <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
-                        row.revenue > 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-surface-variant text-secondary'
+                        row.revenue > 0 
+                          ? 'bg-emerald-100 text-emerald-950 border border-emerald-300 dark:bg-emerald-950/80 dark:text-emerald-200 dark:border-emerald-800' 
+                          : 'bg-slate-200 text-slate-800 border border-slate-300 dark:bg-surface-variant dark:text-secondary dark:border-outline-variant/30'
                       }`}>
                         {row.revenue > 0 ? 'ACTIVE' : 'IDLE'}
                       </span>

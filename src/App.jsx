@@ -22,6 +22,7 @@ import Contact from './pages/Contact';
 
 import ProtectedRoute from './components/ProtectedRoute';
 import AdminLogin from './pages/AdminLogin';
+import AdminDocumentation from './pages/AdminDocumentation';
 
 // Lazy load AR components to prevent aframe/mind-ar from polluting the global scope on other pages
 const ARExperience = lazy(() => import('./pages/ARExperience'));
@@ -73,6 +74,8 @@ function App() {
               <Route path="team" element={<AdminTeam />} />
               <Route path="roles" element={<AdminTeam />} />
               <Route path="settings" element={<AdminSettings />} />
+              <Route path="docs" element={<AdminDocumentation />} />
+              <Route path="documentation" element={<AdminDocumentation />} />
             </Route>
           </Route>
         </Routes>

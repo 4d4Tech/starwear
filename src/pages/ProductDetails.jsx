@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
 import { ref, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../firebase';
 import Header from '../components/Header';
 import ProductViewer from '../components/ProductViewer';
+import Model3DThumbnail from '../components/Model3DThumbnail';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { usePaymentEnvironment } from '../context/PaymentEnvironmentContext';
@@ -15,7 +16,7 @@ function ProductDetails() {
   const navigate = useNavigate();
   const { addToCart } = useCart();
   const { isAdmin, isSuperAdmin } = useAuth();
-  const { isSandboxMode, activeGateway, isPayPalEnabled, isStripeEnabled } = usePaymentEnvironment();
+  const { isSandboxMode, activeGateway } = usePaymentEnvironment();
 
   // Resolve target asset ID from URL path or query string
   const routeAssetId = params.id || searchParams.get('id') || searchParams.get('batchId') || '';
@@ -27,7 +28,7 @@ function ProductDetails() {
   const [arConfig, setArConfig] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [selectedSize, setSelectedSize] = useState('M');
+  const [selectedSize, setSelectedSize] = useState('M'); // eslint-disable-line no-unused-vars
   const [addedToast, setAddedToast] = useState(false);
 
   // 1. Fetch asset details & all inventory items
@@ -151,10 +152,14 @@ function ProductDetails() {
     const price = asset.price !== undefined ? Number(asset.price) : 99.00;
     addToCart({
       id: asset.id,
+      baseId: asset.id,
       name: (asset.name || asset.id).toUpperCase(),
       price: price,
       size: selectedSize,
-      image: asset.imageUrl || asset.image || '',
+      image: asset.thumbnailUrl || asset.imageUrl || asset.image || '',
+      thumbnailUrl: asset.thumbnailUrl || '',
+      modelUrl: modelUrl || asset.gltf_url || asset.modelUrl || asset.gltf_file_path || '',
+      category: asset.category || 'Apparel',
       description: asset.description || ''
     });
 
@@ -297,15 +302,17 @@ function ProductDetails() {
                       Video Texture
                     </span>
                   )}
-                  <div className="w-full md:w-1/2 mobile-product-viewer h-[450px] md:h-full relative bg-[#0d1117] group">
-                    <ProductViewer
-                      modelUrl={modelUrl}
-                      videoUrl={videoUrl}
-                      config={arConfig}
-                      assetName={asset?.name || asset?.id || 'Digital Asset'}
-                      assetId={asset?.id || ''}
-                    />
-                  </div>
+                </div>
+
+                {/* Mobile-Only 3D Interactive Model Viewer */}
+                <div className="block md:hidden w-full mobile-product-viewer h-[400px] sm:h-[450px] relative bg-[#0d1117] rounded-xl overflow-hidden group mb-6">
+                  <ProductViewer
+                    modelUrl={modelUrl}
+                    videoUrl={videoUrl}
+                    config={arConfig}
+                    assetName={asset?.name || asset?.id || 'Digital Asset'}
+                    assetId={asset?.id || ''}
+                  />
                 </div>
 
                 <h1 className="font-headline-lg text-headline-lg-mobile md:text-[44px] md:leading-[50px] text-on-background mb-3 uppercase tracking-wide">
@@ -585,9 +592,16 @@ function ProductDetails() {
                           }`}
                       >
                         <div className="w-full aspect-square rounded bg-black/40 mb-2 flex items-center justify-center border border-white/5 overflow-hidden">
-                          <span className="material-symbols-outlined text-2xl text-outline-variant group-hover:scale-110 transition-transform">
-                            view_in_ar
-                          </span>
+                          <Model3DThumbnail
+                            modelUrl={item.gltf_url || item.modelUrl || item.gltf_file_path}
+                            fallbackImageUrl={item.imageUrl || item.image}
+                            category={item.category}
+                            cleanName={item.name || item.id}
+                            className="w-full h-full"
+                            aspectRatio="aspect-square"
+                            badge={false}
+                            interactiveOnHover={false}
+                          />
                         </div>
                         <div className="font-label-caps text-[10px] font-bold text-on-background truncate uppercase">
                           {item.name || item.id}

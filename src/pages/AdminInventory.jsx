@@ -3,6 +3,7 @@ import { collection, getDocs, query, doc, setDoc, updateDoc, deleteDoc } from 'f
 import { ref, uploadBytes, deleteObject, getDownloadURL } from 'firebase/storage';
 import { httpsCallable } from 'firebase/functions';
 import { db, storage, functions } from '../firebase';
+import Model3DThumbnail from '../components/Model3DThumbnail';
 
 const AdminInventory = () => {
   const [search, setSearch] = useState('');
@@ -522,7 +523,22 @@ const AdminInventory = () => {
                 </tr>
               ) : filteredInventory.map((item) => (
                 <tr key={item.id} className="border-b border-outline-variant/10 hover:bg-surface-variant/20 transition-colors">
-                  <td className="p-6 font-bold">{item.name || 'Unnamed Asset'}</td>
+                  <td className="p-6 font-bold">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg overflow-hidden bg-black/40 border border-white/10 flex-shrink-0">
+                        <Model3DThumbnail
+                          modelUrl={item.gltf_url || item.modelUrl || item.gltf_file_path}
+                          fallbackImageUrl={item.imageUrl || item.image || item.target_image_url}
+                          category={item.category}
+                          cleanName={item.name || item.id}
+                          className="w-full h-full"
+                          badge={false}
+                          interactiveOnHover={false}
+                        />
+                      </div>
+                      <span className="truncate max-w-[180px]">{item.name || 'Unnamed Asset'}</span>
+                    </div>
+                  </td>
                   <td className="p-6 text-secondary font-mono text-xs">{item.id}</td>
                   <td className="p-6 font-semibold text-primary font-mono">
                     ${item.price !== undefined ? Number(item.price).toFixed(2) : '99.00'}
@@ -680,7 +696,15 @@ const AdminInventory = () => {
                 {glbFile ? (
                   <div className="flex items-center justify-between p-3.5 bg-surface-variant/50 border border-primary/30 rounded-lg">
                     <div className="flex items-center gap-3 overflow-hidden">
-                      <span className="material-symbols-outlined text-primary text-2xl">view_in_ar</span>
+                      <div className="w-12 h-12 rounded-lg overflow-hidden bg-black/50 border border-primary/30 flex-shrink-0">
+                        <Model3DThumbnail
+                          modelUrl={glbFile}
+                          cleanName={glbFile.name}
+                          className="w-full h-full"
+                          badge={false}
+                          interactiveOnHover={false}
+                        />
+                      </div>
                       <div className="overflow-hidden">
                         <p className="text-sm font-medium text-on-background truncate">{glbFile.name}</p>
                         <p className="text-xs text-secondary">{formatFileSize(glbFile.size)}</p>

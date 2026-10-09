@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+/* eslint-disable react/no-unknown-property, react/prop-types */
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { Canvas, useThree, useFrame } from '@react-three/fiber';
+import { OrbitControls, Html } from '@react-three/drei';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
 import { computeGeometrySurfaceFrame } from '../utils/aframe-components';
 
 // YouTube URL parser & ID extractor
@@ -28,8 +29,463 @@ export function extractYouTubeId(url) {
   return match ? match[1] : '';
 }
 
-export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetName = '3D Digital Asset', assetId = '' }) {
-  const mountRef = useRef(null);
+// Helper: Apply video texture, OLED screens, and material overrides to loaded 3D scene
+export function applyMeshStyling(rootObject, config = {}, videoUrl = '', videoTexture = null) {
+  let totalMeshes = 0;
+  const targetMeshKey = config.videoTargetMesh || config.video_target_mesh || 'auto';
+
+  let dedicatedNode = null;
+  let discoveredYtId = '';
+  let discoveredVidUrl = '';
+
+  rootObject.traverse((node) => {
+    if (node.isMesh) {
+      totalMeshes++;
+      const lowerName = (node.name || '').toLowerCase();
+      const isStudioYt = node.name === 'YouTube_3D_Screen' || node.userData?.isCSS3D || node.userData?.archetype === 'CSS3D_YOUTUBE';
+      const isStudioVid = node.name.startsWith('Video_') || node.userData?.archetype === 'VIDEO_SCREEN' || node.userData?.hasVideo;
+
+      if (isStudioYt || isStudioVid) {
+        dedicatedNode = node;
+        if (node.userData?.youtubeId) discoveredYtId = node.userData.youtubeId;
+        if (node.userData?.videoUrl) discoveredVidUrl = node.userData.videoUrl;
+      } else if (!dedicatedNode && (lowerName.includes('screen') || lowerName.includes('display') || lowerName.includes('video'))) {
+        dedicatedNode = node;
+      }
+    }
+  });
+
+  const currentVideoUrl = (videoUrl || config.videoUrl || config.video_url || discoveredVidUrl || '').trim();
+  const ytId = extractYouTubeId(currentVideoUrl) || discoveredYtId;
+
+  let targetNode = dedicatedNode;
+  if (!targetNode && targetMeshKey !== 'auto') {
+    rootObject.traverse((n) => {
+      if (n.isMesh && (n.name === targetMeshKey || n.uuid === targetMeshKey)) targetNode = n;
+    });
+  }
+  if (!targetNode) {
+    rootObject.traverse((n) => {
+      if (n.isMesh && !targetNode) targetNode = n;
+    });
+  }
+
+  rootObject.traverse((node) => {
+    if (node.isMesh) {
+      const isTargetForVideo = (
+        (dedicatedNode && node === dedicatedNode) ||
+        (targetMeshKey === 'all') ||
+        (targetMeshKey !== 'auto' && (node.name === targetMeshKey || node.uuid === targetMeshKey)) ||
+        (targetMeshKey === 'auto' && !dedicatedNode && (
+          node.name.toLowerCase().includes('screen') ||
+          node.name.toLowerCase().includes('video') ||
+          node.name.toLowerCase().includes('display') ||
+          totalMeshes === 1
+        ))
+      );
+
+      // Apply WebGL Video Texture if active
+      if (videoTexture && isTargetForVideo && node.material) {
+        const applyToMat = (m) => {
+          m.map = videoTexture;
+          if (m.color) m.color.set(0xffffff);
+          m.roughness = 0.3;
+          m.metalness = 0.1;
+          m.needsUpdate = true;
+        };
+        if (Array.isArray(node.material)) {
+          node.material.forEach(applyToMat);
+        } else {
+          applyToMat(node.material);
+        }
+      }
+
+      // If YouTube screen is overlaid on this mesh, set high-tech dark OLED screen styling underneath
+      if (ytId && isTargetForVideo && node.material) {
+        const applyScreenMat = (m) => {
+          if (m.color) m.color.set(0x05070e);
+          m.roughness = 0.15;
+          m.metalness = 0.9;
+          if (m.emissive) {
+            m.emissive.set(0x1e1b4b);
+            m.emissiveIntensity = 0.25;
+          }
+          m.needsUpdate = true;
+        };
+        if (Array.isArray(node.material)) {
+          node.material.forEach(applyScreenMat);
+        } else {
+          applyScreenMat(node.material);
+        }
+      }
+
+      // Apply Material PBR configs if defined (skip color override on video mesh)
+      if (node.material && !isTargetForVideo) {
+        const mats = Array.isArray(node.material) ? node.material : [node.material];
+        mats.forEach((mat) => {
+          if (config.matMetalness !== undefined && config.matMetalness >= 0) {
+            mat.metalness = config.matMetalness;
+          }
+          if (config.matRoughness !== undefined && config.matRoughness >= 0) {
+            mat.roughness = config.matRoughness;
+          }
+          if (config.matEmissive && mat.emissive) {
+            mat.emissive.set(config.matEmissive);
+            if (config.matEmissiveIntensity !== undefined && config.matEmissiveIntensity >= 0) {
+              mat.emissiveIntensity = config.matEmissiveIntensity;
+            }
+          }
+          if (config.matOpacity !== undefined) {
+            mat.opacity = config.matOpacity;
+            mat.transparent = mat.opacity < 1.0;
+          }
+          mat.needsUpdate = true;
+        });
+      }
+
+      // Apply custom meshOverrides if saved from ARTest (skip color override on video mesh)
+      if (config.meshOverrides) {
+        const ovr = config.meshOverrides[node.name] || config.meshOverrides[node.uuid];
+        if (ovr) {
+          if (ovr.deleted || ovr.visible === false) {
+            node.visible = false;
+            if (ovr.deleted && node.parent) {
+              node.parent.remove(node);
+            }
+            return;
+          }
+          if (ovr.position) node.position.set(ovr.position.x, ovr.position.y, ovr.position.z);
+          if (ovr.scale) node.scale.set(ovr.scale.x, ovr.scale.y, ovr.scale.z);
+          if (ovr.material && node.material && !isTargetForVideo) {
+            const mat = Array.isArray(node.material) ? node.material[0] : node.material;
+            if (ovr.material.color && mat.color) mat.color.set(ovr.material.color);
+            if (ovr.material.metalness !== undefined) mat.metalness = ovr.material.metalness;
+            if (ovr.material.roughness !== undefined) mat.roughness = ovr.material.roughness;
+            if (ovr.material.emissive && mat.emissive) mat.emissive.set(ovr.material.emissive);
+
+            const applyTexTransform = (tex) => {
+              if (!tex) return;
+              tex.wrapS = THREE.RepeatWrapping;
+              tex.wrapT = THREE.RepeatWrapping;
+              if (tex.center) tex.center.set(0.5, 0.5);
+              const repX = ovr.material.textureRepeatX !== undefined && ovr.material.textureRepeatX !== null ? Number(ovr.material.textureRepeatX) : 1.0;
+              const repY = ovr.material.textureRepeatY !== undefined && ovr.material.textureRepeatY !== null ? Number(ovr.material.textureRepeatY) : 1.0;
+              const flipX = Boolean(ovr.material.textureFlipX);
+              const flipY = Boolean(ovr.material.textureFlipY);
+              const offX = ovr.material.textureOffsetX !== undefined && ovr.material.textureOffsetX !== null ? Number(ovr.material.textureOffsetX) : 0.0;
+              const offY = ovr.material.textureOffsetY !== undefined && ovr.material.textureOffsetY !== null ? Number(ovr.material.textureOffsetY) : 0.0;
+              const rotDeg = ovr.material.textureRotation !== undefined && ovr.material.textureRotation !== null ? Number(ovr.material.textureRotation) : 0.0;
+
+              if (tex.repeat) tex.repeat.set(flipX ? -repX : repX, flipY ? -repY : repY);
+              if (tex.offset) tex.offset.set(offX, offY);
+              tex.rotation = (rotDeg * Math.PI) / 180;
+              tex.matrixAutoUpdate = true;
+              if (typeof tex.updateMatrix === 'function') tex.updateMatrix();
+              tex.needsUpdate = true;
+            };
+
+            if (ovr.material.textureUrl) {
+              const tLoader = new THREE.TextureLoader();
+              tLoader.load(ovr.material.textureUrl, (tex) => {
+                if (THREE.SRGBColorSpace !== undefined) {
+                  tex.colorSpace = THREE.SRGBColorSpace;
+                }
+                tex.flipY = false;
+                applyTexTransform(tex);
+                mat.map = tex;
+                mat.needsUpdate = true;
+              });
+            } else if (mat.map) {
+              applyTexTransform(mat.map);
+            }
+            mat.needsUpdate = true;
+          }
+        }
+      }
+    }
+  });
+
+  return {
+    totalMeshes,
+    detectedTargetNode: targetNode,
+    ytId,
+    resolvedUrl: currentVideoUrl
+  };
+}
+
+// 3D YouTube Interactive Screen rendered in React Fiber space
+function YouTube3DScreen({
+  targetNode,
+  ytId,
+  config = {},
+  currentVideoUrl = '',
+  iframeRef,
+  isMuted
+}) {
+  const groupRef = useRef(null);
+  const tempWorldPos = useMemo(() => new THREE.Vector3(), []);
+  const tempWorldQuat = useMemo(() => new THREE.Quaternion(), []);
+  const tempWorldScale = useMemo(() => new THREE.Vector3(), []);
+
+  const targetAspect =
+    config?.aspectRatio ||
+    config?.videoAspectRatio ||
+    targetNode?.userData?.aspectRatio ||
+    (isYouTubeShortUrl(currentVideoUrl) ? '9:16' : '16:9');
+
+  let iframeW = 640;
+  let iframeH = 360;
+  if (targetAspect === '9:16') {
+    iframeW = 360;
+    iframeH = 640;
+  } else if (targetAspect === '21:9') {
+    iframeW = 840;
+    iframeH = 360;
+  }
+
+  let baseCssScale = 0.005;
+  if (targetNode?.geometry) {
+    const slotIdx =
+      typeof config.videoTargetMaterialIndex === 'number'
+        ? config.videoTargetMaterialIndex
+        : typeof targetNode.userData?.videoTargetMaterialIndex === 'number'
+        ? targetNode.userData.videoTargetMaterialIndex
+        : 0;
+    const frame = computeGeometrySurfaceFrame(targetNode, slotIdx);
+    baseCssScale = Math.max(frame.size.x, 0.05) / iframeW;
+  }
+
+  useFrame(() => {
+    if (!targetNode || !groupRef.current) return;
+    targetNode.getWorldPosition(tempWorldPos);
+    targetNode.getWorldQuaternion(tempWorldQuat);
+    targetNode.getWorldScale(tempWorldScale);
+
+    if (targetNode.geometry) {
+      const slotIdx =
+        typeof config.videoTargetMaterialIndex === 'number'
+          ? config.videoTargetMaterialIndex
+          : typeof targetNode.userData?.videoTargetMaterialIndex === 'number'
+          ? targetNode.userData.videoTargetMaterialIndex
+          : 0;
+      const frame = computeGeometrySurfaceFrame(targetNode, slotIdx);
+
+      const uScale = Number(config.videoScale ?? targetNode.userData?.videoScale ?? 1.0);
+      const uOffsetX = Number(config.videoOffsetX ?? targetNode.userData?.videoOffsetX ?? 0.0);
+      const uOffsetY = Number(config.videoOffsetY ?? targetNode.userData?.videoOffsetY ?? 0.0);
+      const uOffsetZ = Number(config.videoOffsetZ ?? targetNode.userData?.videoOffsetZ ?? 0.0);
+      const uRot = Number(config.videoRotation ?? targetNode.userData?.videoRotation ?? 0.0);
+
+      const localPos = frame.localCenter
+        .clone()
+        .addScaledVector(frame.localNormal, 0.005 + uOffsetZ);
+      localPos.addScaledVector(frame.localRight, uOffsetX);
+      localPos.addScaledVector(frame.localUp, uOffsetY);
+      localPos.applyMatrix4(targetNode.matrixWorld);
+      tempWorldPos.copy(localPos);
+
+      let quat = frame.worldQuat.clone();
+      if (uRot !== 0) {
+        const rotQ = new THREE.Quaternion().setFromAxisAngle(
+          frame.worldNormal,
+          (uRot * Math.PI) / 180
+        );
+        quat = rotQ.multiply(quat);
+      }
+
+      groupRef.current.position.copy(tempWorldPos);
+      groupRef.current.quaternion.copy(quat);
+
+      const effScale = baseCssScale * uScale;
+      groupRef.current.scale.set(
+        effScale * Math.abs(tempWorldScale.x || 1),
+        effScale * Math.abs(tempWorldScale.y || 1),
+        effScale * Math.abs(tempWorldScale.z || 1)
+      );
+    } else {
+      groupRef.current.position.copy(tempWorldPos);
+      groupRef.current.quaternion.copy(tempWorldQuat);
+      groupRef.current.scale.set(
+        baseCssScale * Math.abs(tempWorldScale.x || 1),
+        baseCssScale * Math.abs(tempWorldScale.y || 1),
+        baseCssScale * Math.abs(tempWorldScale.z || 1)
+      );
+    }
+  });
+
+  const originParam =
+    typeof window !== 'undefined'
+      ? `&origin=${encodeURIComponent(window.location.origin)}`
+      : '';
+
+  return (
+    <group ref={groupRef}>
+      <Html
+        transform
+        center
+        distanceFactor={400}
+        pointerEvents="auto"
+        zIndexRange={[15, 0]}
+        style={{
+          width: `${iframeW}px`,
+          height: `${iframeH}px`,
+          userSelect: 'none'
+        }}
+      >
+        <div
+          style={{
+            width: `${iframeW}px`,
+            height: `${iframeH}px`,
+            background: '#030712',
+            borderRadius: '12px',
+            overflow: 'hidden',
+            boxShadow: '0 0 50px rgba(99, 102, 241, 0.4)',
+            border: '2px solid rgba(129, 140, 248, 0.6)',
+            pointerEvents: 'auto'
+          }}
+        >
+          <iframe
+            ref={iframeRef}
+            style={{ width: '100%', height: '100%', border: '0' }}
+            src={`https://www.youtube-nocookie.com/embed/${ytId}?enablejsapi=1&autoplay=1&mute=${
+              isMuted ? 1 : 0
+            }&controls=1&loop=1&playlist=${ytId}${originParam}`}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowFullScreen
+            title="3D YouTube Player"
+          />
+        </div>
+      </Html>
+    </group>
+  );
+}
+
+// Stylized Torus Knot placeholder when no 3D asset is available
+function StylizedPlaceholder({ isWireframe }) {
+  return (
+    <group>
+      <mesh>
+        <torusKnotGeometry args={[0.7, 0.22, 120, 16, 2, 3]} />
+        <meshStandardMaterial
+          color="#6366f1"
+          metalness={0.7}
+          roughness={0.2}
+          wireframe={isWireframe}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+// Declarative Fiber Scene Content
+function SceneContent({
+  modelGroup,
+  modelBoundingData,
+  isWireframe,
+  config,
+  autoRotate,
+  controlsRef,
+  cameraRef,
+  defaultCamPosRef,
+  activeVideoType,
+  targetNode,
+  youTubeId,
+  resolvedVideoUrl,
+  iframeRef,
+  isMuted
+}) {
+  const { camera } = useThree();
+
+  useEffect(() => {
+    cameraRef.current = camera;
+  }, [camera, cameraRef]);
+
+  // Dynamically frame camera to fit the loaded 3D asset dimensions
+  useEffect(() => {
+    if (!modelBoundingData) return;
+    const { maxDim } = modelBoundingData;
+    const fovRad = camera.fov * (Math.PI / 180);
+    let cameraDistance = Math.abs(maxDim / 2 / Math.tan(fovRad / 2)) * 1.5;
+    cameraDistance = Math.max(cameraDistance, 1.0);
+
+    camera.position.set(0, maxDim * 0.15, cameraDistance);
+    defaultCamPosRef.current.set(0, maxDim * 0.15, cameraDistance);
+    camera.lookAt(0, 0, 0);
+
+    if (controlsRef.current) {
+      controlsRef.current.target.set(0, 0, 0);
+      controlsRef.current.update();
+    }
+  }, [modelBoundingData, camera, controlsRef, defaultCamPosRef]);
+
+  const gridY = modelBoundingData ? -modelBoundingData.maxDim / 2 - 0.05 : -0.5;
+
+  return (
+    <>
+      <color attach="background" args={['#0d1117']} />
+
+      {/* Lighting Setup */}
+      <ambientLight
+        color={config.ambientColor || 0xffffff}
+        intensity={config.ambientIntensity !== undefined ? config.ambientIntensity : 1.4}
+      />
+      <directionalLight
+        position={[2, 4, 3]}
+        color={config.dir1Color || 0xffffff}
+        intensity={config.dir1Intensity !== undefined ? config.dir1Intensity : 2.2}
+      />
+      <directionalLight
+        position={[-2, -1, -2]}
+        color={config.dir2Color || 0xffffff}
+        intensity={config.dir2Intensity !== undefined ? config.dir2Intensity : 1.2}
+      />
+      <directionalLight position={[0, 3, -3]} color={0x818cf8} intensity={1.0} />
+
+      {/* Floor Grid */}
+      <gridHelper args={[4, 16, 0x312e81, 0x1e293b]} position={[0, gridY, 0]} />
+
+      {/* Declarative OrbitControls */}
+      <OrbitControls
+        ref={controlsRef}
+        makeDefault
+        enableDamping
+        dampingFactor={0.05}
+        autoRotate={autoRotate}
+        autoRotateSpeed={1.2}
+        maxDistance={20}
+        minDistance={0.2}
+      />
+
+      {/* 3D Asset or Stylized Placeholder */}
+      {modelGroup ? (
+        <primitive object={modelGroup} />
+      ) : (
+        <StylizedPlaceholder isWireframe={isWireframe} />
+      )}
+
+      {/* 3D YouTube Screen Overlay via Drei Html */}
+      {activeVideoType === 'youtube' && targetNode && youTubeId && (
+        <YouTube3DScreen
+          targetNode={targetNode}
+          ytId={youTubeId}
+          config={config}
+          currentVideoUrl={resolvedVideoUrl}
+          iframeRef={iframeRef}
+          isMuted={isMuted}
+        />
+      )}
+    </>
+  );
+}
+
+// React Three Fiber Interactive Product Viewer
+export default function ProductViewer({
+  modelUrl,
+  videoUrl,
+  config = {},
+  assetName = '3D Digital Asset',
+  assetId = ''
+}) {
   const [loading, setLoading] = useState(true);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [loadError, setLoadError] = useState(null);
@@ -39,10 +495,16 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
   const [meshCount, setMeshCount] = useState(0);
   const [isMuted, setIsMuted] = useState(true);
   const [showPip, setShowPip] = useState(false);
-  const [activeVideoType, setActiveVideoType] = useState(null); // 'webgl' | 'youtube' | null
-  const [resolvedVideoUrl, setResolvedVideoUrl] = useState(videoUrl || config.videoUrl || config.video_url || '');
+  const [activeVideoType, setActiveVideoType] = useState(null);
+  const [resolvedVideoUrl, setResolvedVideoUrl] = useState(
+    videoUrl || config.videoUrl || config.video_url || ''
+  );
+  const [modelGroup, setModelGroup] = useState(null);
+  const [modelBoundingData, setModelBoundingData] = useState(null);
+  const [targetNode, setTargetNode] = useState(null);
+  const [youTubeId, setYouTubeId] = useState('');
 
-  const configKey = React.useMemo(() => {
+  const configKey = useMemo(() => {
     try {
       return JSON.stringify(config || {});
     } catch {
@@ -50,28 +512,18 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
     }
   }, [config]);
 
-  // References to allow UI buttons to communicate with Three.js render loop
+  // Controls & Camera References
   const controlsRef = useRef(null);
   const cameraRef = useRef(null);
-  const sceneRef = useRef(null);
-  const cssSceneRef = useRef(null);
   const modelRef = useRef(null);
   const defaultCamPosRef = useRef(new THREE.Vector3(0, 1.2, 2.5));
   const videoElRef = useRef(null);
   const videoTextureRef = useRef(null);
-  const cssTargetNodeRef = useRef(null);
-  const cssObjectRef = useRef(null);
   const iframeRef = useRef(null);
 
   // Toggle Auto-Rotate
   const toggleAutoRotate = () => {
-    setAutoRotate(prev => {
-      const next = !prev;
-      if (controlsRef.current) {
-        controlsRef.current.autoRotate = next;
-      }
-      return next;
-    });
+    setAutoRotate((prev) => !prev);
   };
 
   // Reset Camera View
@@ -86,13 +538,15 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
 
   // Toggle Wireframe across model
   const toggleWireframe = () => {
-    setIsWireframe(prev => {
+    setIsWireframe((prev) => {
       const next = !prev;
       if (modelRef.current) {
-        modelRef.current.traverse(node => {
+        modelRef.current.traverse((node) => {
           if (node.isMesh && node.material) {
             if (Array.isArray(node.material)) {
-              node.material.forEach(m => m.wireframe = next);
+              node.material.forEach((m) => {
+                m.wireframe = next;
+              });
             } else {
               node.material.wireframe = next;
             }
@@ -105,14 +559,12 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
 
   // Toggle Audio Mute / Unmute
   const toggleMute = () => {
-    setIsMuted(prev => {
+    setIsMuted((prev) => {
       const next = !prev;
-      // HTML5 video element audio
       if (videoElRef.current) {
         videoElRef.current.muted = next;
         if (!next) videoElRef.current.volume = 1.0;
       }
-      // YouTube iframe postMessage commands
       if (iframeRef.current?.contentWindow) {
         try {
           iframeRef.current.contentWindow.postMessage(
@@ -131,124 +583,34 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
     });
   };
 
-  useEffect(() => {
-    if (!mountRef.current) return;
+  // Unlock video autoplay on user interaction
+  const handleUserUnlock = () => {
+    if (videoElRef.current && videoElRef.current.paused) {
+      videoElRef.current.play().catch(() => {});
+    }
+  };
 
-    let scene, cssScene, camera, renderer, cssRenderer, controls, animationFrameId;
+  // Asynchronous Asset and Video Loader
+  useEffect(() => {
     let isMounted = true;
     let videoEl = null;
     let videoTexture = null;
-    let cssObject = null;
-    let targetNode = null;
-    let baseCssScale = 0.005;
 
-    const width = mountRef.current.clientWidth || 600;
-    const height = mountRef.current.clientHeight || 600;
-
-    // 1. WebGL Three.js Scene Setup
-    scene = new THREE.Scene();
-    sceneRef.current = scene;
-    scene.background = new THREE.Color('#0d1117');
-
-    // 2. Camera Setup
-    camera = new THREE.PerspectiveCamera(45, width / height, 0.05, 100);
-    camera.position.set(0, 1.2, 2.5);
-    cameraRef.current = camera;
-
-    // 3. WebGL Renderer Setup
-    try {
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'default' });
-    } catch (webglErr) {
-      console.warn("Failed to create WebGLRenderer:", webglErr);
-      if (isMounted) {
-        setWebglUnavailable(true);
-        setLoadError("WebGL context could not be created or was blocked by the browser. Please reload the page to reset the WebGL context.");
-        setLoading(false);
-      }
-      return;
-    }
-
-    const handleContextLost = (event) => {
-      event.preventDefault();
-      cancelAnimationFrame(animationFrameId);
-      if (isMounted) {
-        setWebglUnavailable(true);
-        setLoadError("WebGL graphics context was lost and blocked by the browser. Please reload the tab.");
-      }
-    };
-    renderer.domElement.addEventListener('webglcontextlost', handleContextLost, false);
-
-    renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.1;
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.domElement.style.position = 'absolute';
-    renderer.domElement.style.top = '0';
-    renderer.domElement.style.left = '0';
-    renderer.domElement.style.width = '100%';
-    renderer.domElement.style.height = '100%';
-    mountRef.current.appendChild(renderer.domElement);
-
-    // 4. CSS3D Renderer Setup (for YouTube 3D screen overlay)
-    cssRenderer = new CSS3DRenderer();
-    cssRenderer.setSize(width, height);
-    cssRenderer.domElement.style.position = 'absolute';
-    cssRenderer.domElement.style.top = '0';
-    cssRenderer.domElement.style.left = '0';
-    cssRenderer.domElement.style.width = '100%';
-    cssRenderer.domElement.style.height = '100%';
-    cssRenderer.domElement.style.pointerEvents = 'none'; // allow mouse to drag through to OrbitControls
-    cssRenderer.domElement.style.zIndex = '5';
-    mountRef.current.appendChild(cssRenderer.domElement);
-
-    cssScene = new THREE.Scene();
-    cssSceneRef.current = cssScene;
-
-    // 5. OrbitControls Setup on WebGL canvas
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.autoRotate = autoRotate;
-    controls.autoRotateSpeed = 1.2;
-    controls.maxDistance = 20;
-    controls.minDistance = 0.2;
-    controlsRef.current = controls;
-
-    // 6. Lighting Setup
-    const ambientLight = new THREE.AmbientLight(
-      config.ambientColor || 0xffffff,
-      config.ambientIntensity !== undefined ? config.ambientIntensity : 1.4
-    );
-    scene.add(ambientLight);
-
-    const mainDirLight = new THREE.DirectionalLight(config.dir1Color || 0xffffff, config.dir1Intensity || 2.2);
-    mainDirLight.position.set(2, 4, 3);
-    scene.add(mainDirLight);
-
-    const fillDirLight = new THREE.DirectionalLight(config.dir2Color || 0xffffff, config.dir2Intensity || 1.2);
-    fillDirLight.position.set(-2, -1, -2);
-    scene.add(fillDirLight);
-
-    const rimLight = new THREE.DirectionalLight(0x818cf8, 1.0);
-    rimLight.position.set(0, 3, -3);
-    scene.add(rimLight);
-
-    // Subtle Grid Floor
-    const gridHelper = new THREE.GridHelper(4, 16, 0x312e81, 0x1e293b);
-    gridHelper.position.y = -0.5;
-    scene.add(gridHelper);
-
-    // Initial Effective Video URL Check
     const effectiveVideoUrl = (videoUrl || config.videoUrl || config.video_url || '').trim();
     const isYt = isYouTubeUrl(effectiveVideoUrl);
 
     if (effectiveVideoUrl) {
       setResolvedVideoUrl(effectiveVideoUrl);
       setActiveVideoType(isYt ? 'youtube' : 'webgl');
+      if (isYt) {
+        setYouTubeId(extractYouTubeId(effectiveVideoUrl));
+      }
+    } else {
+      setActiveVideoType(null);
+      setYouTubeId('');
     }
 
-    // 7. Initialize WebGL Video Texture if HTML5 Video
+    // Initialize WebGL Video Texture if HTML5 Video
     if (effectiveVideoUrl && !isYt) {
       try {
         videoEl = document.createElement('video');
@@ -267,7 +629,9 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
 
         const playPromise = videoEl.play();
         if (playPromise !== undefined) {
-          playPromise.catch(err => console.warn('ProductViewer video autoplay prevented:', err));
+          playPromise.catch((err) =>
+            console.warn('ProductViewer video autoplay prevented:', err)
+          );
         }
         videoElRef.current = videoEl;
 
@@ -301,443 +665,102 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
       }
     }
 
-    // 8. Helper: Apply video texture, CSS3D screens, and material overrides
-    const applyMeshStyling = (rootObject) => {
-      let totalMeshes = 0;
-      const targetMeshKey = config.videoTargetMesh || config.video_target_mesh || 'auto';
-
-      // 8a. Find dedicated video screen node if created by Studio44
-      let dedicatedNode = null;
-      let discoveredYtId = '';
-      let discoveredVidUrl = '';
-
-      rootObject.traverse(node => {
-        if (node.isMesh) {
-          totalMeshes++;
-          const lowerName = (node.name || '').toLowerCase();
-          const isStudioYt = node.name === 'YouTube_3D_Screen' || node.userData?.isCSS3D || node.userData?.archetype === 'CSS3D_YOUTUBE';
-          const isStudioVid = node.name.startsWith('Video_') || node.userData?.archetype === 'VIDEO_SCREEN' || node.userData?.hasVideo;
-
-          if (isStudioYt || isStudioVid) {
-            dedicatedNode = node;
-            if (node.userData?.youtubeId) discoveredYtId = node.userData.youtubeId;
-            if (node.userData?.videoUrl) discoveredVidUrl = node.userData.videoUrl;
-          } else if (!dedicatedNode && (lowerName.includes('screen') || lowerName.includes('display') || lowerName.includes('video'))) {
-            dedicatedNode = node;
-          }
-        }
-      });
-
-      // 8b. Determine YouTube video ID (from prop, config, or embedded GLTF extras)
-      const currentVideoUrl = (videoUrl || config.videoUrl || config.video_url || discoveredVidUrl || '').trim();
-      const ytId = extractYouTubeId(currentVideoUrl) || discoveredYtId;
-
-      if (ytId) {
-        setActiveVideoType('youtube');
-        setResolvedVideoUrl(currentVideoUrl || `https://www.youtube.com/watch?v=${ytId}`);
-
-        // Setup CSS3D YouTube screen
-        targetNode = dedicatedNode;
-        if (!targetNode && targetMeshKey !== 'auto') {
-          rootObject.traverse(n => {
-            if (n.isMesh && (n.name === targetMeshKey || n.uuid === targetMeshKey)) targetNode = n;
-          });
-        }
-        if (!targetNode) {
-          rootObject.traverse(n => {
-            if (n.isMesh && !targetNode) targetNode = n;
-          });
-        }
-
-        if (targetNode) {
-          cssTargetNodeRef.current = targetNode;
-
-          // Build YouTube iframe container
-          const targetAspect = config?.aspectRatio || config?.videoAspectRatio || targetNode.userData?.aspectRatio || (isYouTubeShortUrl(currentVideoUrl) ? '9:16' : '16:9');
-          let iframeW = 640;
-          let iframeH = 360;
-          if (targetAspect === '9:16') {
-            iframeW = 360;
-            iframeH = 640;
-          } else if (targetAspect === '21:9') {
-            iframeW = 840;
-            iframeH = 360;
-          }
-          const containerDiv = document.createElement('div');
-          containerDiv.style.width = `${iframeW}px`;
-          containerDiv.style.height = `${iframeH}px`;
-          containerDiv.style.background = '#030712';
-          containerDiv.style.borderRadius = '12px';
-          containerDiv.style.overflow = 'hidden';
-          containerDiv.style.boxShadow = '0 0 50px rgba(99, 102, 241, 0.4)';
-          containerDiv.style.border = '2px solid rgba(129, 140, 248, 0.6)';
-          containerDiv.style.pointerEvents = 'auto'; // allow user to click inside player if needed
-
-          const iframe = document.createElement('iframe');
-          iframe.style.width = '100%';
-          iframe.style.height = '100%';
-          iframe.style.border = '0';
-          const originParam = typeof window !== 'undefined' ? `&origin=${encodeURIComponent(window.location.origin)}` : '';
-          iframe.src = `https://www.youtube-nocookie.com/embed/${ytId}?enablejsapi=1&autoplay=1&mute=1&controls=1&loop=1&playlist=${ytId}${originParam}`;
-          iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
-          iframe.allowFullscreen = true;
-          containerDiv.appendChild(iframe);
-          iframeRef.current = iframe;
-
-          // Remove any existing CSS3D object before creating new one
-          if (cssObject && cssScene) {
-            cssScene.remove(cssObject);
-          }
-
-          cssObject = new CSS3DObject(containerDiv);
-          cssObjectRef.current = cssObject;
-
-          // Calculate scale from geometry surface frame - defaults to fill specified geometry
-          if (targetNode.geometry) {
-            const slotIdx = typeof config.videoTargetMaterialIndex === 'number'
-              ? config.videoTargetMaterialIndex
-              : (typeof targetNode.userData?.videoTargetMaterialIndex === 'number'
-                ? targetNode.userData.videoTargetMaterialIndex
-                : 0);
-            const frame = computeGeometrySurfaceFrame(targetNode, slotIdx);
-            baseCssScale = Math.max(frame.size.x, 0.05) / iframeW;
-          }
-          cssObject.scale.set(baseCssScale, baseCssScale, baseCssScale);
-          cssScene.add(cssObject);
-        }
-      }
-
-      // 8c. Iterate meshes to apply WebGL video texture, OLED styling, and material configs
-      rootObject.traverse(node => {
-        if (node.isMesh) {
-          const isTargetForVideo = (
-            (dedicatedNode && node === dedicatedNode) ||
-            (targetMeshKey === 'all') ||
-            (targetMeshKey !== 'auto' && (node.name === targetMeshKey || node.uuid === targetMeshKey)) ||
-            (targetMeshKey === 'auto' && !dedicatedNode && (
-              node.name.toLowerCase().includes('screen') ||
-              node.name.toLowerCase().includes('video') ||
-              node.name.toLowerCase().includes('display') ||
-              totalMeshes === 1
-            ))
-          );
-
-          // Apply WebGL Video Texture if active
-          if (videoTexture && isTargetForVideo && node.material) {
-            const applyToMat = (m) => {
-              m.map = videoTexture;
-              // Reset base color to pure white so video texture shines without dark tinting
-              if (m.color) m.color.set(0xffffff);
-              m.roughness = 0.3;
-              m.metalness = 0.1;
-              m.needsUpdate = true;
-            };
-            if (Array.isArray(node.material)) {
-              node.material.forEach(applyToMat);
-            } else {
-              applyToMat(node.material);
-            }
-          }
-
-          // If YouTube screen is overlaid on this mesh, set high-tech dark OLED screen styling underneath
-          if (ytId && isTargetForVideo && node.material) {
-            const applyScreenMat = (m) => {
-              if (m.color) m.color.set(0x05070e);
-              m.roughness = 0.15;
-              m.metalness = 0.9;
-              if (m.emissive) {
-                m.emissive.set(0x1e1b4b);
-                m.emissiveIntensity = 0.25;
-              }
-              m.needsUpdate = true;
-            };
-            if (Array.isArray(node.material)) {
-              node.material.forEach(applyScreenMat);
-            } else {
-              applyScreenMat(node.material);
-            }
-          }
-
-          // Apply Material PBR configs if defined (skip color override on video mesh)
-          if (node.material && !isTargetForVideo) {
-            const mats = Array.isArray(node.material) ? node.material : [node.material];
-            mats.forEach(mat => {
-              if (config.matMetalness !== undefined && config.matMetalness >= 0) {
-                mat.metalness = config.matMetalness;
-              }
-              if (config.matRoughness !== undefined && config.matRoughness >= 0) {
-                mat.roughness = config.matRoughness;
-              }
-              if (config.matEmissive && mat.emissive) {
-                mat.emissive.set(config.matEmissive);
-                if (config.matEmissiveIntensity !== undefined && config.matEmissiveIntensity >= 0) {
-                  mat.emissiveIntensity = config.matEmissiveIntensity;
-                }
-              }
-              if (config.matOpacity !== undefined) {
-                mat.opacity = config.matOpacity;
-                mat.transparent = mat.opacity < 1.0;
-              }
-              mat.needsUpdate = true;
-            });
-          }
-
-          // Apply custom meshOverrides if saved from ARTest (skip color override on video mesh)
-          if (config.meshOverrides) {
-            const ovr = config.meshOverrides[node.name] || config.meshOverrides[node.uuid];
-            if (ovr) {
-              if (ovr.deleted || ovr.visible === false) {
-                node.visible = false;
-                if (ovr.deleted && node.parent) {
-                  node.parent.remove(node);
-                }
-                return;
-              }
-              if (ovr.position) node.position.set(ovr.position.x, ovr.position.y, ovr.position.z);
-              if (ovr.scale) node.scale.set(ovr.scale.x, ovr.scale.y, ovr.scale.z);
-              if (ovr.material && node.material && !isTargetForVideo) {
-                const mat = Array.isArray(node.material) ? node.material[0] : node.material;
-                if (ovr.material.color && mat.color) mat.color.set(ovr.material.color);
-                if (ovr.material.metalness !== undefined) mat.metalness = ovr.material.metalness;
-                if (ovr.material.roughness !== undefined) mat.roughness = ovr.material.roughness;
-                if (ovr.material.emissive && mat.emissive) mat.emissive.set(ovr.material.emissive);
-                const applyTexTransform = (tex) => {
-                  if (!tex) return;
-                  tex.wrapS = THREE.RepeatWrapping;
-                  tex.wrapT = THREE.RepeatWrapping;
-                  if (tex.center) tex.center.set(0.5, 0.5);
-                  const repX = ovr.material.textureRepeatX !== undefined && ovr.material.textureRepeatX !== null ? Number(ovr.material.textureRepeatX) : 1.0;
-                  const repY = ovr.material.textureRepeatY !== undefined && ovr.material.textureRepeatY !== null ? Number(ovr.material.textureRepeatY) : 1.0;
-                  const flipX = Boolean(ovr.material.textureFlipX);
-                  const flipY = Boolean(ovr.material.textureFlipY);
-                  const offX = ovr.material.textureOffsetX !== undefined && ovr.material.textureOffsetX !== null ? Number(ovr.material.textureOffsetX) : 0.0;
-                  const offY = ovr.material.textureOffsetY !== undefined && ovr.material.textureOffsetY !== null ? Number(ovr.material.textureOffsetY) : 0.0;
-                  const rotDeg = ovr.material.textureRotation !== undefined && ovr.material.textureRotation !== null ? Number(ovr.material.textureRotation) : 0.0;
-
-                  if (tex.repeat) tex.repeat.set(flipX ? -repX : repX, flipY ? -repY : repY);
-                  if (tex.offset) tex.offset.set(offX, offY);
-                  tex.rotation = (rotDeg * Math.PI) / 180;
-                  tex.matrixAutoUpdate = true;
-                  if (typeof tex.updateMatrix === 'function') tex.updateMatrix();
-                  tex.needsUpdate = true;
-                };
-
-                if (ovr.material.textureUrl) {
-                  const tLoader = new THREE.TextureLoader();
-                  tLoader.load(ovr.material.textureUrl, (tex) => {
-                    if (THREE.SRGBColorSpace !== undefined) {
-                      tex.colorSpace = THREE.SRGBColorSpace;
-                    }
-                    tex.flipY = false;
-                    applyTexTransform(tex);
-                    mat.map = tex;
-                    mat.needsUpdate = true;
-                  });
-                } else if (mat.map) {
-                  applyTexTransform(mat.map);
-                }
-                mat.needsUpdate = true;
-              }
-            }
-          }
-        }
-      });
-
-      setMeshCount(totalMeshes);
-    };
-
-    // 9. Load 3D Asset
-    if (modelUrl) {
-      setLoading(true);
-      setLoadError(null);
-
-      const dracoLoader = new DRACOLoader();
-      dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
-
-      const loader = new GLTFLoader();
-      loader.setDRACOLoader(dracoLoader);
-
-      loader.load(
-        modelUrl,
-        (gltf) => {
-          if (!isMounted) return;
-          const model = gltf.scene;
-          modelRef.current = model;
-
-          // Compute Bounding Box and Center
-          const box = new THREE.Box3().setFromObject(model);
-          const center = box.getCenter(new THREE.Vector3());
-          const size = box.getSize(new THREE.Vector3());
-
-          // Center the model at origin
-          model.position.x = -center.x;
-          model.position.y = -center.y;
-          model.position.z = -center.z;
-
-          // Create an anchor group to rotate cleanly
-          const modelGroup = new THREE.Group();
-          modelGroup.add(model);
-          scene.add(modelGroup);
-
-          // Apply materials, video textures & CSS3D YouTube screens
-          applyMeshStyling(model);
-
-          // Frame Camera to fit the entire model nicely in view
-          const maxDim = Math.max(size.x, size.y, size.z) || 1;
-          const fov = camera.fov * (Math.PI / 180);
-          let cameraDistance = Math.abs(maxDim / 2 / Math.tan(fov / 2)) * 1.5;
-          cameraDistance = Math.max(cameraDistance, 1.0);
-
-          camera.position.set(0, maxDim * 0.15, cameraDistance);
-          defaultCamPosRef.current.set(0, maxDim * 0.15, cameraDistance);
-          camera.lookAt(0, 0, 0);
-          controls.target.set(0, 0, 0);
-          controls.update();
-
-          // Reposition grid floor directly beneath model
-          gridHelper.position.y = -maxDim / 2 - 0.05;
-
-          setLoading(false);
-        },
-        (xhr) => {
-          if (xhr.lengthComputable && isMounted) {
-            const percent = Math.round((xhr.loaded / xhr.total) * 100);
-            setLoadingProgress(percent);
-          }
-        },
-        (error) => {
-          console.error("Error loading 3D model in ProductViewer:", error);
-          if (isMounted) {
-            setLoadError("Could not load 3D GLB model. Displaying stylized preview.");
-            setLoading(false);
-            createStylizedPlaceholder();
-          }
-        }
-      );
-    } else {
-      createStylizedPlaceholder();
+    if (!modelUrl) {
       setLoading(false);
-    }
-
-    function createStylizedPlaceholder() {
-      const group = new THREE.Group();
-      const geom = new THREE.TorusKnotGeometry(0.7, 0.22, 120, 16, 2, 3);
-      const mat = new THREE.MeshStandardMaterial({
-        color: 0x6366f1,
-        metalness: 0.7,
-        roughness: 0.2,
-        wireframe: isWireframe
-      });
-      const placeholderMesh = new THREE.Mesh(geom, mat);
-      group.add(placeholderMesh);
-      scene.add(group);
-      modelRef.current = group;
+      setModelGroup(null);
       setMeshCount(1);
+      return;
     }
 
-    // 10. Temporary Vectors for CSS3D target tracking
-    const tempWorldPos = new THREE.Vector3();
-    const tempWorldQuat = new THREE.Quaternion();
-    const tempWorldScale = new THREE.Vector3();
+    setLoading(true);
+    setLoadingProgress(0);
+    setLoadError(null);
 
-    // 11. Render & Animation Loop
-    const animate = () => {
-      animationFrameId = requestAnimationFrame(animate);
-      controls.update();
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
 
-      // Synchronize CSS3D YouTube screen position and rotation with target 3D mesh
-      if (cssObject && cssTargetNodeRef.current) {
-        const tNode = cssTargetNodeRef.current;
-        tNode.getWorldPosition(tempWorldPos);
-        tNode.getWorldQuaternion(tempWorldQuat);
-        tNode.getWorldScale(tempWorldScale);
+    const loader = new GLTFLoader();
+    loader.setDRACOLoader(dracoLoader);
 
-        if (tNode.geometry) {
-          const slotIdx = typeof config.videoTargetMaterialIndex === 'number'
-            ? config.videoTargetMaterialIndex
-            : (typeof tNode.userData?.videoTargetMaterialIndex === 'number'
-              ? tNode.userData.videoTargetMaterialIndex
-              : 0);
-          const frame = computeGeometrySurfaceFrame(tNode, slotIdx);
+    loader.load(
+      modelUrl,
+      (gltf) => {
+        if (!isMounted) return;
+        const model = gltf.scene;
 
-          const uScale = Number(config.videoScale ?? tNode.userData?.videoScale ?? 1.0);
-          const uOffsetX = Number(config.videoOffsetX ?? tNode.userData?.videoOffsetX ?? 0.0);
-          const uOffsetY = Number(config.videoOffsetY ?? tNode.userData?.videoOffsetY ?? 0.0);
-          const uOffsetZ = Number(config.videoOffsetZ ?? tNode.userData?.videoOffsetZ ?? 0.0);
-          const uRot = Number(config.videoRotation ?? tNode.userData?.videoRotation ?? 0.0);
+        // Compute Bounding Box and Center
+        const box = new THREE.Box3().setFromObject(model);
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z) || 1;
 
-          const localPos = frame.localCenter.clone().addScaledVector(frame.localNormal, 0.005 + uOffsetZ);
-          localPos.addScaledVector(frame.localRight, uOffsetX);
-          localPos.addScaledVector(frame.localUp, uOffsetY);
-          localPos.applyMatrix4(tNode.matrixWorld);
-          tempWorldPos.copy(localPos);
+        // Center the model at origin
+        model.position.x = -center.x;
+        model.position.y = -center.y;
+        model.position.z = -center.z;
 
-          let quat = frame.worldQuat.clone();
-          if (uRot !== 0) {
-            const rotQ = new THREE.Quaternion().setFromAxisAngle(frame.worldNormal, (uRot * Math.PI) / 180);
-            quat = rotQ.multiply(quat);
-          }
+        const anchorGroup = new THREE.Group();
+        anchorGroup.add(model);
 
-          cssObject.position.copy(tempWorldPos);
-          cssObject.quaternion.copy(quat);
+        // Apply materials, video textures & overrides
+        const { totalMeshes, detectedTargetNode, ytId: discoveredYtId, resolvedUrl } =
+          applyMeshStyling(model, config, effectiveVideoUrl, videoTexture);
 
-          const effScale = baseCssScale * uScale;
-          cssObject.scale.set(
-            effScale * Math.abs(tempWorldScale.x || 1),
-            effScale * Math.abs(tempWorldScale.y || 1),
-            effScale * Math.abs(tempWorldScale.z || 1)
+        if (discoveredYtId) {
+          setActiveVideoType('youtube');
+          setResolvedVideoUrl(
+            resolvedUrl || `https://www.youtube.com/watch?v=${discoveredYtId}`
           );
+          setYouTubeId(discoveredYtId);
+          setTargetNode(detectedTargetNode);
+        } else if (effectiveVideoUrl && !isYt) {
+          setActiveVideoType('webgl');
+          setTargetNode(detectedTargetNode);
         } else {
-          cssObject.position.copy(tempWorldPos);
-          cssObject.quaternion.copy(tempWorldQuat);
-          cssObject.scale.set(
-            baseCssScale * Math.abs(tempWorldScale.x || 1),
-            baseCssScale * Math.abs(tempWorldScale.y || 1),
-            baseCssScale * Math.abs(tempWorldScale.z || 1)
-          );
+          setTargetNode(detectedTargetNode);
+        }
+
+        // Apply wireframe if active
+        if (isWireframe) {
+          model.traverse((node) => {
+            if (node.isMesh && node.material) {
+              if (Array.isArray(node.material)) {
+                node.material.forEach((m) => {
+                  m.wireframe = true;
+                });
+              } else {
+                node.material.wireframe = true;
+              }
+            }
+          });
+        }
+
+        modelRef.current = anchorGroup;
+        setModelGroup(anchorGroup);
+        setModelBoundingData({ center, size, maxDim });
+        setMeshCount(totalMeshes);
+        setLoading(false);
+      },
+      (xhr) => {
+        if (xhr.lengthComputable && isMounted) {
+          const percent = Math.round((xhr.loaded / xhr.total) * 100);
+          setLoadingProgress(percent);
+        }
+      },
+      (error) => {
+        console.error('Error loading 3D model in ProductViewer:', error);
+        if (isMounted) {
+          setLoadError('Could not load 3D GLB model. Displaying stylized preview.');
+          setLoading(false);
+          setModelGroup(null);
+          setMeshCount(1);
         }
       }
+    );
 
-      // Render WebGL 3D scene
-      renderer.render(scene, camera);
-
-      // Render CSS3D screen overlay
-      if (cssRenderer && cssScene) {
-        cssRenderer.render(cssScene, camera);
-      }
-    };
-    animate();
-
-    // 12. Unlock video autoplay on user interaction
-    const handleUserUnlock = () => {
-      if (videoEl && videoEl.paused) {
-        videoEl.play().catch(() => { });
-      }
-    };
-    const mountEl = mountRef.current;
-    mountEl?.addEventListener('pointerdown', handleUserUnlock, { passive: true });
-
-    // 13. Responsive Resize Observer
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width: newW, height: newH } = entry.contentRect;
-        if (newW > 0 && newH > 0) {
-          camera.aspect = newW / newH;
-          camera.updateProjectionMatrix();
-          renderer.setSize(newW, newH);
-          cssRenderer.setSize(newW, newH);
-        }
-      }
-    });
-    resizeObserver.observe(mountRef.current);
-
-    // Cleanup
     return () => {
       isMounted = false;
-      cancelAnimationFrame(animationFrameId);
-      resizeObserver.disconnect();
-      mountEl?.removeEventListener('pointerdown', handleUserUnlock);
-
+      dracoLoader.dispose();
       if (videoElRef.current) {
         videoElRef.current.pause();
         videoElRef.current.src = '';
@@ -746,28 +769,8 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
       if (videoTextureRef.current) {
         videoTextureRef.current.dispose();
       }
-
-      if (renderer) {
-        if (renderer.domElement) {
-          renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
-          if (mountRef.current && mountRef.current.contains(renderer.domElement)) {
-            mountRef.current.removeChild(renderer.domElement);
-          }
-        }
-        if (typeof renderer.forceContextLoss === 'function') {
-          renderer.forceContextLoss();
-        }
-        renderer.dispose();
-      }
-
-      if (cssRenderer && cssRenderer.domElement) {
-        if (mountRef.current && mountRef.current.contains(cssRenderer.domElement)) {
-          mountRef.current.removeChild(cssRenderer.domElement);
-        }
-      }
-
-      if (scene) {
-        scene.traverse((obj) => {
+      if (modelRef.current) {
+        modelRef.current.traverse((obj) => {
           if (obj.geometry && typeof obj.geometry.dispose === 'function') {
             obj.geometry.dispose();
           }
@@ -783,21 +786,57 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
             });
           }
         });
-        scene.clear();
-      }
-      if (cssScene) {
-        cssScene.clear();
       }
     };
   }, [modelUrl, videoUrl, configKey]);
 
   const hasActiveVideo = !!activeVideoType;
-  const ytVideoId = activeVideoType === 'youtube' ? extractYouTubeId(resolvedVideoUrl) : '';
+  const ytVideoId = activeVideoType === 'youtube' ? youTubeId || extractYouTubeId(resolvedVideoUrl) : '';
 
   return (
-    <div className="w-full h-full relative overflow-hidden bg-slate-950 flex flex-col items-center justify-center select-none">
-      {/* Three.js Canvas Container */}
-      <div ref={mountRef} className="w-full h-full cursor-grab active:cursor-grabbing relative" />
+    <div
+      onPointerDown={handleUserUnlock}
+      className="w-full h-full relative overflow-hidden bg-slate-950 flex flex-col items-center justify-center select-none"
+    >
+      {/* React Three Fiber Canvas */}
+      <div className="w-full h-full cursor-grab active:cursor-grabbing relative">
+        <Canvas
+          gl={{ antialias: true, alpha: true, powerPreference: 'default' }}
+          camera={{ fov: 45, near: 0.05, far: 100, position: [0, 1.2, 2.5] }}
+          onCreated={({ gl }) => {
+            gl.toneMapping = THREE.ACESFilmicToneMapping;
+            gl.toneMappingExposure = 1.1;
+            gl.outputColorSpace = THREE.SRGBColorSpace;
+
+            const handleContextLost = (event) => {
+              event.preventDefault();
+              setWebglUnavailable(true);
+              setLoadError(
+                'WebGL graphics context was lost and blocked by the browser. Please reload the tab.'
+              );
+            };
+            gl.domElement.addEventListener('webglcontextlost', handleContextLost, false);
+          }}
+          className="w-full h-full"
+        >
+          <SceneContent
+            modelGroup={modelGroup}
+            modelBoundingData={modelBoundingData}
+            isWireframe={isWireframe}
+            config={config}
+            autoRotate={autoRotate}
+            controlsRef={controlsRef}
+            cameraRef={cameraRef}
+            defaultCamPosRef={defaultCamPosRef}
+            activeVideoType={activeVideoType}
+            targetNode={targetNode}
+            youTubeId={youTubeId}
+            resolvedVideoUrl={resolvedVideoUrl}
+            iframeRef={iframeRef}
+            isMuted={isMuted}
+          />
+        </Canvas>
+      </div>
 
       {/* Top Floating Badge Bar */}
       <div className="absolute top-5 left-5 right-5 flex items-center justify-between pointer-events-none z-20">
@@ -817,10 +856,13 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
 
           {hasActiveVideo && (
             <div className="flex items-center gap-1.5">
-              <span className={`backdrop-blur-md px-2.5 py-1 rounded text-[10px] font-mono font-bold border flex items-center gap-1 ${activeVideoType === 'youtube'
-                  ? 'bg-red-950/80 text-red-300 border-red-500/40'
-                  : 'bg-purple-950/80 text-purple-300 border-purple-500/40'
-                }`}>
+              <span
+                className={`backdrop-blur-md px-2.5 py-1 rounded text-[10px] font-mono font-bold border flex items-center gap-1 ${
+                  activeVideoType === 'youtube'
+                    ? 'bg-red-950/80 text-red-300 border-red-500/40'
+                    : 'bg-purple-950/80 text-purple-300 border-purple-500/40'
+                }`}
+              >
                 <span className="material-symbols-outlined text-xs">
                   {activeVideoType === 'youtube' ? 'smart_display' : 'play_circle'}
                 </span>
@@ -831,10 +873,11 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
               <button
                 type="button"
                 onClick={toggleMute}
-                className={`backdrop-blur-md px-2.5 py-1 rounded text-[10px] font-mono font-bold border flex items-center gap-1 transition-all cursor-pointer shadow-md ${!isMuted
+                className={`backdrop-blur-md px-2.5 py-1 rounded text-[10px] font-mono font-bold border flex items-center gap-1 transition-all cursor-pointer shadow-md ${
+                  !isMuted
                     ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60'
                     : 'bg-neutral-900/80 text-neutral-400 hover:text-white border-white/10'
-                  }`}
+                }`}
                 title={isMuted ? 'Unmute Audio' : 'Mute Audio'}
               >
                 <span className="material-symbols-outlined text-xs">
@@ -846,11 +889,12 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
               {/* Picture-In-Picture Monitor Button */}
               <button
                 type="button"
-                onClick={() => setShowPip(prev => !prev)}
-                className={`backdrop-blur-md px-2 py-1 rounded text-[10px] font-mono border flex items-center gap-1 transition-all cursor-pointer ${showPip
+                onClick={() => setShowPip((prev) => !prev)}
+                className={`backdrop-blur-md px-2 py-1 rounded text-[10px] font-mono border flex items-center gap-1 transition-all cursor-pointer ${
+                  showPip
                     ? 'bg-cyan-950 text-cyan-300 border-cyan-500/50'
                     : 'bg-black/60 text-neutral-400 hover:text-white border-white/10'
-                  }`}
+                }`}
                 title="Toggle Picture-In-Picture Monitor"
               >
                 <span className="material-symbols-outlined text-xs">picture_in_picture_alt</span>
@@ -877,10 +921,20 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
               ✕
             </button>
           </div>
-          <div className={`${(config?.aspectRatio === '9:16' || config?.videoAspectRatio === '9:16' || isYouTubeShortUrl(resolvedVideoUrl)) ? 'aspect-[9/16] max-h-72' : 'aspect-video'} w-full bg-black relative flex items-center justify-center`}>
+          <div
+            className={`${
+              config?.aspectRatio === '9:16' ||
+              config?.videoAspectRatio === '9:16' ||
+              isYouTubeShortUrl(resolvedVideoUrl)
+                ? 'aspect-[9/16] max-h-72'
+                : 'aspect-video'
+            } w-full bg-black relative flex items-center justify-center`}
+          >
             {activeVideoType === 'youtube' && ytVideoId ? (
               <iframe
-                src={`https://www.youtube-nocookie.com/embed/${ytVideoId}?autoplay=1&mute=${isMuted ? '1' : '0'}&controls=1`}
+                src={`https://www.youtube-nocookie.com/embed/${ytVideoId}?autoplay=1&mute=${
+                  isMuted ? '1' : '0'
+                }&controls=1`}
                 className="w-full h-full border-0"
                 title="PIP Monitor"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -953,67 +1007,6 @@ export default function ProductViewer({ modelUrl, videoUrl, config = {}, assetNa
           <span>{loadError}</span>
         </div>
       )}
-
-      {/* Bottom Floating Interactive Control Pill */}
-      {/* <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-black/80 backdrop-blur-lg px-3 py-1.5 rounded-full border border-white/15 shadow-2xl">
-        <button
-          type="button"
-          onClick={toggleAutoRotate}
-          className={`px-3 py-1.5 rounded-full text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-            autoRotate
-              ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-              : 'text-neutral-400 hover:text-white hover:bg-white/10'
-          }`}
-          title="Toggle 360 Auto-Rotation"
-        >
-          <span className={`material-symbols-outlined text-sm ${autoRotate ? 'animate-spin' : ''}`} style={{ animationDuration: '6s' }}>
-            sync
-          </span>
-          <span>{autoRotate ? 'Rotating' : 'Paused'}</span>
-        </button>
-
-        <div className="w-px h-4 bg-white/20"></div>
-
-        <button
-          type="button"
-          onClick={resetCamera}
-          className="px-2.5 py-1.5 rounded-full text-[11px] font-mono text-neutral-300 hover:text-white hover:bg-white/10 flex items-center gap-1 transition-all cursor-pointer"
-          title="Reset Front Center Framing"
-        >
-          <span className="material-symbols-outlined text-sm">center_focus_strong</span>
-          <span>Reset</span>
-        </button>
-
-        <div className="w-px h-4 bg-white/20"></div>
-
-        <button
-          type="button"
-          onClick={toggleWireframe}
-          className={`px-2.5 py-1.5 rounded-full text-[11px] font-mono flex items-center gap-1 transition-all cursor-pointer ${
-            isWireframe
-              ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
-              : 'text-neutral-400 hover:text-white hover:bg-white/10'
-          }`}
-          title="Toggle Wireframe Mesh"
-        >
-          <span className="material-symbols-outlined text-sm">grid_view</span>
-          <span>Wireframe</span>
-        </button>
-
-        {assetId && (
-          <>
-            <div className="w-px h-4 bg-white/20"></div>
-            <a
-              href={`/ar/${assetId}`}
-              className="px-3 py-1.5 rounded-full text-[11px] font-mono font-bold bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-500 hover:to-indigo-500 text-white flex items-center gap-1 shadow-md transition-all cursor-pointer"
-              title="Launch Live WebAR Camera on Mobile"
-            >
-              <span className="material-symbols-outlined text-sm">view_in_ar</span>
-              <span>Try In AR</span>
-            </a>
-          </>
-        )}
-      </div> */}
 
       {/* Subtle Bottom Drag Hint */}
       <div className="absolute bottom-16 left-1/2 -translate-x-1/2 pointer-events-none opacity-40 hover:opacity-100 transition-opacity">

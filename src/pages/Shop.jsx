@@ -1,23 +1,24 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { collection, getDocs } from 'firebase/firestore';
 import { ref, getDownloadURL } from 'firebase/storage';
 import { ReactLenis, useLenis } from 'lenis/react';
 import { db, storage } from '../firebase';
 import Header from '../components/Header';
 import ProductViewer from '../components/ProductViewer';
+import Model3DThumbnail from '../components/Model3DThumbnail';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { usePaymentEnvironment } from '../context/PaymentEnvironmentContext';
 
-// Curated Collection with punchy, plain-English descriptions
+// Curated Collection with grounded, relatable copy from verbiage.md
 export const CURATED_COLLECTION = [
   {
     id: 'aether-chrono-trench',
     name: 'Aether Trench',
-    edition: 'PRO EDITION',
-    tagline: 'Waterproof carbon twill. Floating 3D light rings.',
-    heroDescription: 'An architectural trench coat tailored from waterproof carbon twill. Volumetric light rings float around your body the instant you open your camera.',
+    edition: 'OPEN CHOTHING ITEM • PRO EDITION',
+    tagline: 'Waterproof carbon twill chothing item. Volumetric light rings.',
+    heroDescription: 'An architectural coat tailored from waterproof carbon twill. Volumetric light rings float around your frame the moment someone looks through a browser camera—no apps, no hurdles.',
     price: 280.00,
     colors: [
       { name: 'Titanium Silver', hex: '#d1d5db', border: '#9ca3af' },
@@ -25,15 +26,22 @@ export const CURATED_COLLECTION = [
       { name: 'Aether Cyan', hex: '#38bdf8', border: '#0284c7' }
     ],
     imageUrl: 'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=1200&q=85',
+    thumbnailUrl: '/thumbnails/clothes-jackets-hoodie_v2.png',
+    model_url: 'https://storage.googleapis.com/3dtemplates/clothes/jackets/hoodie_v2.glb',
     detailImages: [
       'https://images.unsplash.com/photo-1509631179647-0177331693ae?auto=format&fit=crop&w=800&q=80',
       'https://images.unsplash.com/photo-1539109136881-3be0616acf4b?auto=format&fit=crop&w=800&q=80'
     ],
     highlights: [
-      { title: 'Floating 3D Rings', desc: 'Glowing visual rings follow your movement in camera view.' },
-      { title: 'Waterproof Carbon Twill', desc: 'Heavyweight 480 GSM fabric built to last for years.' },
-      { title: 'No App Needed', desc: 'Works instantly in mobile Safari and Chrome.' }
+      { title: 'Swappable Frequency', desc: 'Floating light rings track your natural motion in real time.' },
+      { title: 'Waterproof Carbon Twill', desc: 'Heavyweight 480 GSM fabric foundation built to endure years of wear.' },
+      { title: 'Zero-Friction Web Delivery', desc: 'Renders instantly in mobile Safari and Chrome without an app install.' }
     ],
+    featureBadge: {
+      title: 'Browser-Native Freedom',
+      copy: 'No app stores. No hurdles. Just open your camera and watch your style unfold directly on screen.',
+      cli: '$ antigravity preview --zero-friction'
+    },
     category: 'WEBAR',
     mind_file_path: 'anchors/merch_4d4/test_jacket.mind',
     ar_config: {
@@ -48,23 +56,30 @@ export const CURATED_COLLECTION = [
   {
     id: 'obsidian-vortex-hoodie',
     name: 'Vortex Hoodie',
-    edition: 'STUDIO EDITION',
-    tagline: 'Heavyweight black fleece. Glowing fluid effects.',
-    heroDescription: 'Ultra-dense 500 GSM organic cotton hoodie. The chest comes alive with glowing fluid light when viewed through your phone camera.',
+    edition: 'OPEN CLOTHES ITEM • STUDIO DROP',
+    tagline: 'Ultra-dense black fleece. Living fluid skin.',
+    heroDescription: 'Heavyweight 500 GSM organic cotton clothes item. The chest transforms into a living, swappable canvas with dynamic fluid light directly in your phone camera.',
     price: 195.00,
     colors: [
       { name: 'Space Black', hex: '#09090b', border: '#27272a' },
       { name: 'Deep Ultraviolet', hex: '#581c87', border: '#7e22ce' }
     ],
     imageUrl: 'https://images.unsplash.com/photo-1509631179647-0177331693ae?auto=format&fit=crop&w=1200&q=85',
+    thumbnailUrl: '/thumbnails/clothes-jackets-hoodie.png',
+    model_url: 'https://storage.googleapis.com/3dtemplates/clothes/jackets/hoodie.glb',
     detailImages: [
       'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?auto=format&fit=crop&w=800&q=80'
     ],
     highlights: [
-      { title: 'Living Chest Graphics', desc: 'Fluid animations mapped right onto your chest.' },
-      { title: 'Heavyweight French Terry', desc: 'Thick, velvety organic cotton that holds its shape.' },
-      { title: 'Changeable Styles', desc: 'Swap out new visual effects directly from your phone.' }
+      { title: 'Living Visual Surface', desc: 'Dynamic fluid visual skins projected directly onto the chest.' },
+      { title: 'Heavyweight French Terry', desc: 'Durable, velvety organic cotton that holds its structure and drape.' },
+      { title: 'Swappable at Will', desc: 'Switch artwork from your Digital Closet whenever your mood shifts.' }
     ],
+    featureBadge: {
+      title: 'Swappable Frequency',
+      copy: 'Never get tired of a piece. Switch out artwork from your personal Digital Closet whenever you want a fresh vibe.',
+      cli: '$ antigravity closet --equip "ACTIVE_VIBE"'
+    },
     category: 'VIDEO',
     video_url: 'https://firebasestorage.googleapis.com/v0/b/star-wear-ecb39.firebasestorage.app/o/assets%2Fshirt%2Fkeep-it-going.mov?alt=media&token=cad5f38d-e4c0-4a7f-bf4a-1f2b4849518a',
     ar_config: {
@@ -77,21 +92,28 @@ export const CURATED_COLLECTION = [
   {
     id: 'kinetic-cyber-kimono',
     name: 'Kinetic Kimono',
-    edition: 'COUTURE EDITION',
-    tagline: 'Japanese origami cut. Weightless light ribbons.',
-    heroDescription: 'Modern oversized robe combining origami folds with floating light ribbons along your shoulders. Works seamlessly in your phone camera.',
+    edition: 'OPEN CLOTHES ITEM • COUTURE DROP',
+    tagline: 'Japanese origami folds. Floating light ribbons.',
+    heroDescription: 'A modern oversized robe combining architectural folds with floating dynamic light ribbons that trail your movement through the browser camera.',
     price: 340.00,
     colors: [
       { name: 'Pure Chalk', hex: '#f4f4f5', border: '#e4e4e7' },
       { name: 'Obsidian Slate', hex: '#1e293b', border: '#334155' }
     ],
     imageUrl: 'https://images.unsplash.com/photo-1539109136881-3be0616acf4b?auto=format&fit=crop&w=1200&q=85',
+    thumbnailUrl: '/thumbnails/clothes-shirts-casual_shirt.png',
+    model_url: 'https://storage.googleapis.com/3dtemplates/clothes/shirts/casual_shirt.glb',
     detailImages: [],
     highlights: [
-      { title: 'Floating Ribbons', desc: 'Light ribbons follow your shoulders as you walk.' },
-      { title: '1-of-1 Custom Option', desc: 'Add personalized animations unique to you.' },
-      { title: 'Limited Run of 500', desc: 'Each piece includes a verified digital certificate.' }
+      { title: 'Dynamic Light Trails', desc: 'Weightless light ribbons contour your movement as you walk.' },
+      { title: 'Bespoke Asterisk (*) Override', desc: 'Your custom 1-of-1 aesthetic supersedes generic batch visuals.' },
+      { title: 'Numbered Artisan Run', desc: 'Small-batch clothes item accompanied by cryptographically verified provenance.' }
     ],
+    featureBadge: {
+      title: 'Bespoke Asterisk Override',
+      copy: 'Your private 1-of-1 signature. When the camera reads your custom marker, batch templates yield to your personal expression.',
+      cli: '$ antigravity override --target bespoke'
+    },
     category: 'WEBAR',
     mind_file_path: 'anchors/merch_4d4/test_jacket.mind',
     ar_config: {
@@ -104,21 +126,28 @@ export const CURATED_COLLECTION = [
   {
     id: 'quantum-shift-bomber',
     name: 'Shift Bomber',
-    edition: 'TECH EDITION',
-    tagline: 'Ballistic nylon shell. Color-shifting light.',
-    heroDescription: 'Windproof ballistic bomber jacket with magnetic hardware. Shimmering colors adapt automatically to sunlight and room lighting.',
+    edition: 'OPEN CLOTHES ITEM • TECHNICAL FOUNDATION',
+    tagline: 'Ballistic nylon clothes item. Reactive color skin.',
+    heroDescription: 'Windproof ballistic shell with magnetic hardware. Shimmering color-reactive skins shift in real time with ambient sunlight and street illumination.',
     price: 220.00,
     colors: [
       { name: 'Stealth Noir', hex: '#111827', border: '#1f2937' },
       { name: 'Tactical Olive', hex: '#365314', border: '#4d7c0f' }
     ],
     imageUrl: 'https://images.unsplash.com/photo-1576995853123-5a10305d93c0?auto=format&fit=crop&w=1200&q=85',
+    thumbnailUrl: '/thumbnails/clothes-jackets-hoodie-1.png',
+    model_url: 'https://storage.googleapis.com/3dtemplates/clothes/jackets/hoodie%20(1).glb',
     detailImages: [],
     highlights: [
-      { title: 'Color-Shifting Glow', desc: 'Reacts dynamically to daylight and night city lights.' },
-      { title: 'Tough Ballistic Shell', desc: 'Windproof, weather-resistant, built for the city.' },
-      { title: 'Share in 1 Tap', desc: 'Friends can see your 3D effects on their own phones.' }
+      { title: 'Living Color Shift', desc: 'Dynamic skins that adapt to daylight and neon street illumination.' },
+      { title: 'Ballistic Fabric Foundation', desc: 'Rugged weather-resistant nylon engineered for everyday street wear.' },
+      { title: 'Zero-Friction Sharing', desc: 'Anyone pointing a camera sees your live skin unfold without downloading an app.' }
     ],
+    featureBadge: {
+      title: 'Zero-Guesswork Preview',
+      copy: 'Check the fit and dynamic movement in real time on your own frame before checking out.',
+      cli: '$ antigravity preview --realtime-mesh'
+    },
     category: 'HYBRID',
     mind_file_path: 'anchors/merch_4d4/test_jacket.mind',
     ar_config: {
@@ -131,21 +160,28 @@ export const CURATED_COLLECTION = [
   {
     id: 'synth-drape-gown',
     name: 'Synth Gown',
-    edition: 'ATELIER EDITION',
-    tagline: 'Flowing cyber-mesh. Rainbow light prisms.',
-    heroDescription: 'Zero-gravity liquid cyber-mesh that refracts rainbow light filaments as you walk. Turns every room into a runway.',
+    edition: 'OPEN CLOTHES ITEM • ATELIER DROP',
+    tagline: 'Liquid cyber-mesh. Refractive light prisms.',
+    heroDescription: 'Zero-gravity drape that refracts radiant light filaments as you move. A liberated clothes item that turns every street and venue into a dynamic runway.',
     price: 410.00,
     colors: [
       { name: 'Liquid Opal', hex: '#e0f2fe', border: '#bae6fd' },
       { name: 'Midnight Onyx', hex: '#09090b', border: '#27272a' }
     ],
     imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1200&q=85',
+    thumbnailUrl: '/thumbnails/clothes-shirts-white_t-shirt_with_print.png',
+    model_url: 'https://storage.googleapis.com/3dtemplates/clothes/shirts/white_t-shirt_with_print.glb',
     detailImages: [],
     highlights: [
-      { title: 'Rainbow Prisms', desc: 'Refracts virtual light across your natural movement.' },
-      { title: 'Smooth 60 FPS Flow', desc: 'Cloth physics run like water on your phone screen.' },
-      { title: 'Apple Vision Pro Ready', desc: 'Wear it in real life, or equip your 3D avatar.' }
+      { title: 'Prismatic Light Refraction', desc: 'Casts living light filaments responsive to real-world movement.' },
+      { title: 'Smooth 60 FPS Fluidity', desc: 'Real-time spatial cloth dynamics running natively in any mobile browser.' },
+      { title: 'Dual Spatial Presence', desc: 'Wear the physical piece in real life, or project your clone in spatial environments.' }
     ],
+    featureBadge: {
+      title: 'Swappable Frequency',
+      copy: 'Never get tired of a piece. Switch out artwork from your personal Digital Closet whenever you want a fresh vibe.',
+      cli: '$ antigravity closet --equip "ACTIVE_VIBE"'
+    },
     category: 'WEBAR',
     mind_file_path: 'anchors/merch_4d4/test_jacket.mind',
     ar_config: {
@@ -158,21 +194,28 @@ export const CURATED_COLLECTION = [
   {
     id: 'prism-matrix-vest',
     name: 'Matrix Vest',
-    edition: 'MODULAR EDITION',
-    tagline: 'Tactical utility harness. Holographic badge.',
-    heroDescription: 'Modular utility vest with magnetic quick-release buckles. Projects holographic gridlines and your personalized emblem in camera view.',
+    edition: 'OPEN CLOTHES ITEM • MODULAR FOUNDATION',
+    tagline: 'Tactical utility harness. Floating holographic emblem.',
+    heroDescription: 'Modular utility vest with magnetic quick-release hardware. Projects floating geometric matrix skins and your personal 1-of-1 emblem in camera view.',
     price: 165.00,
     colors: [
       { name: 'Titanium Graphite', hex: '#27272a', border: '#52525b' },
       { name: 'Alpine White', hex: '#f8fafc', border: '#cbd5e1' }
     ],
     imageUrl: 'https://images.unsplash.com/photo-1558769132-cb1aea458c5e?auto=format&fit=crop&w=1200&q=85',
+    thumbnailUrl: '/thumbnails/clothes-shirts-standard_t-shirt.png',
+    model_url: 'https://storage.googleapis.com/3dtemplates/clothes/shirts/standard_t-shirt.glb',
     detailImages: [],
     highlights: [
-      { title: 'Magnetic Buckles', desc: 'Quick-release magnetic hardware that clicks tight.' },
-      { title: 'Holographic Badge', desc: 'Clean, futuristic 3D badge floating in front of you.' },
-      { title: 'Built Tough', desc: 'Weatherproof construction made for daily wear.' }
+      { title: 'Magnetic Hardware', desc: 'Quick-release magnetic closures secured to high-tensile webbing.' },
+      { title: 'Floating Holographic Emblem', desc: 'Sharp geometric insignia hovering cleanly in phone camera view.' },
+      { title: 'Weatherproof Canvas', desc: 'Reinforced ballistic textile clothes item crafted for long-haul durability.' }
     ],
+    featureBadge: {
+      title: 'Browser-Native Freedom',
+      copy: 'No app stores. No hurdles. Just open your camera and watch your style unfold directly on screen.',
+      cli: '$ antigravity preview --zero-friction'
+    },
     category: 'VIDEO',
     video_url: 'https://firebasestorage.googleapis.com/v0/b/star-wear-ecb39.firebasestorage.app/o/assets%2Fshirt%2Fkeep-it-going.mov?alt=media&token=cad5f38d-e4c0-4a7f-bf4a-1f2b4849518a',
     ar_config: {
@@ -196,7 +239,6 @@ export default function Shop() {
   const { addToCart, getCartCount } = useCart();
   const { isAdmin, isSuperAdmin } = useAuth();
   const { isSandboxMode, activeGateway } = usePaymentEnvironment();
-  const navigate = useNavigate();
 
   // Section references for sectioned-out cover parallax (at least 500px height)
   const heroSectionRef = useRef(null);
@@ -228,7 +270,7 @@ export default function Shop() {
   const lenis = useLenis();
 
   // Unified Lenis Smooth Parallax Loop
-  useLenis(({ scroll }) => {
+  useLenis(() => {
     const windowH = window.innerHeight;
 
     // 1. Section 1 (Hero) Cover Parallax: 3dart/video-background-2.png
@@ -359,7 +401,10 @@ export default function Shop() {
       name: product.name || product.id,
       price: price,
       size: `${size} • ${color}`,
-      image: product.imageUrl || product.image || product.target_image_url || '',
+      image: product.thumbnailUrl || product.imageUrl || product.image || product.target_image_url || '',
+      thumbnailUrl: product.thumbnailUrl || '',
+      modelUrl: product.model_url || product.glb_url || product.modelUrl || product.gltf_file_path || '',
+      category: product.category || 'Apparel',
       description: product.heroDescription || product.description || ''
     });
 
@@ -472,7 +517,7 @@ export default function Shop() {
         )}
 
         {/* ========================================================================= */}
-        {/* APPLE-STYLE CLEAN STICKY SUB-NAVIGATION BAR                               */}
+        {/* CLI ACCENT STICKY SUB-NAVIGATION BAR                                      */}
         {/* ========================================================================= */}
         <div
           ref={subNavRef}
@@ -480,17 +525,24 @@ export default function Shop() {
         >
           <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="font-bold text-sm tracking-tight text-white">Star weAR</span>
-              <span className="text-xs text-[#86868b] hidden sm:inline">• Smart Streetwear</span>
+              <span className="font-bold text-sm tracking-tight text-white font-mono">$ antigravity</span>
+              <span className="text-xs text-[#86868b] hidden sm:inline font-mono">• open-canvas</span>
             </div>
 
-            <div className="flex items-center gap-6 text-xs text-[#86868b]">
+            <div className="flex items-center gap-3 sm:gap-6 text-xs text-[#86868b]">
               <a
                 href="#overview"
                 onClick={(e) => scrollToSection(e, '#overview')}
                 className={`transition-colors hover:text-white ${activeSubTab === 'overview' ? 'text-white font-medium' : ''}`}
               >
                 Overview
+              </a>
+              <a
+                href="#canvas-explainer"
+                onClick={(e) => scrollToSection(e, '#canvas-explainer')}
+                className={`transition-colors hover:text-white ${activeSubTab === 'canvas-explainer' ? 'text-white font-medium' : ''}`}
+              >
+                Living Canvas
               </a>
               <a
                 href="#experience"
@@ -511,22 +563,22 @@ export default function Shop() {
                 onClick={(e) => scrollToSection(e, '#collection')}
                 className={`transition-colors hover:text-white ${activeSubTab === 'collection' ? 'text-white font-medium' : ''}`}
               >
-                Collection
+                clothes item Drops
               </a>
 
               <a
                 href="#collection"
                 onClick={(e) => scrollToSection(e, '#collection')}
-                className="bg-[#2997ff] hover:bg-[#0077ed] text-white px-3.5 py-1.5 rounded-full font-semibold transition-all shadow-sm flex items-center gap-1 cursor-pointer"
+                className="bg-[#2997ff] hover:bg-[#0077ed] text-white px-3.5 py-1.5 rounded-full font-semibold transition-all shadow-sm flex items-center gap-1 cursor-pointer font-mono"
               >
-                <span>Buy</span>
+                <span>[ CLAIM ]</span>
               </a>
             </div>
           </div>
         </div>
 
         {/* ========================================================================= */}
-        {/* SECTION 1: HERO - CONCISE, PUNCHY, PUNCH-LINE                              */}
+        {/* SECTION 1: HERO - GROUNDED CLARITY & HIGH-AGENCY EXPRESSION               */}
         {/* Full-Bleed Cover Parallax Background: 3dart/video-background-2.png         */}
         {/* ========================================================================= */}
         <section
@@ -561,48 +613,52 @@ export default function Shop() {
 
           {/* Section Hero Content */}
           <div className="max-w-4xl mx-auto space-y-6 relative z-10">
-            {/* Punchy Eyebrow */}
-            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/[0.08] backdrop-blur-md border border-white/[0.12] text-xs font-semibold text-[#38bdf8] uppercase tracking-wider">
-              <span className="w-2 h-2 rounded-full bg-[#38bdf8] animate-pulse"></span>
-              <span>NO APPS NEEDED • WORKS IN YOUR CAMERA</span>
+            {/* CLI Accent Syntax Header from verbiage.md Section 3.1 */}
+            <div className="inline-flex flex-col sm:flex-row items-center gap-2 px-4 py-2 rounded-full bg-white/[0.06] backdrop-blur-xl border border-white/[0.12] text-xs font-mono text-neutral-300 shadow-xl">
+              <span className="text-[#38bdf8] font-bold">$ antigravity run --mode open-canvas</span>
+              <span className="hidden sm:inline text-white/30">•</span>
+              <span className="text-emerald-400 font-semibold flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                [STATUS: READY] YOUR WARDROBE IS NOW LIVE.
+              </span>
             </div>
 
-            {/* Bold punchline heading */}
+            {/* Bold Headline from verbiage.md Section 3.1 */}
             <h1 className="text-5xl sm:text-7xl md:text-8xl font-extrabold tracking-tight text-white leading-[1.05]">
-              Touch the fabric.<br />
+              Clothes that move as fast as <br className="hidden sm:inline" />
               <span className="bg-gradient-to-r from-[#38bdf8] via-[#a855f7] to-[#ec4899] bg-clip-text text-transparent">
-                Wear the future.
+                your mood.
               </span>
             </h1>
 
-            {/* Concise layman's proposition */}
+            {/* Subhead from verbiage.md Section 3.1 */}
             <p className="text-lg sm:text-2xl text-[#d4d4d8] max-w-2xl mx-auto font-normal leading-relaxed drop-shadow-md">
-              High-end luxury streetwear that comes alive on your phone. Change your look anytime without buying new clothes.
+              Static graphics freeze who you were the day you bought them. We build garments that stay open—giving you a living, boundary-free canvas to swap artwork, drop 3D visuals, and project whatever version of yourself you want to show the world today.
             </p>
 
-            {/* Punchy Action Buttons */}
+            {/* Action CTAs from verbiage.md Section 3.1 */}
             <div className="flex flex-wrap items-center justify-center gap-4 pt-4">
               <a
                 href="#collection"
                 onClick={(e) => scrollToSection(e, '#collection')}
-                className="px-7 py-3.5 rounded-full bg-white text-black font-bold text-sm hover:bg-[#f5f5f7]/90 transition-all shadow-[0_0_30px_rgba(255,255,255,0.25)] flex items-center gap-2 cursor-pointer"
+                className="px-8 py-3.5 rounded-full bg-white text-black font-bold text-sm hover:bg-[#f5f5f7]/90 transition-all shadow-[0_0_30px_rgba(255,255,255,0.25)] flex items-center gap-2 cursor-pointer font-mono"
               >
-                <span>Shop the Collection</span>
+                <span>[ BROWSE CLOTHES ITEM PIECES ]</span>
                 <span className="material-symbols-outlined text-base">arrow_forward</span>
               </a>
 
               <a
                 href="#studio"
                 onClick={(e) => scrollToSection(e, '#studio')}
-                className="px-7 py-3.5 rounded-full border border-white/[0.25] text-white font-semibold text-sm hover:bg-white/[0.1] backdrop-blur-md transition-all flex items-center gap-2 cursor-pointer"
+                className="px-8 py-3.5 rounded-full border border-white/[0.25] text-white font-semibold text-sm hover:bg-white/[0.1] backdrop-blur-md transition-all flex items-center gap-2 cursor-pointer font-mono"
               >
-                <span>See in 3D</span>
-                <span className="material-symbols-outlined text-base">3d_rotation</span>
+                <span>[ OPEN DIGITAL CLOSET ]</span>
+                <span className="material-symbols-outlined text-base">view_in_ar</span>
               </a>
             </div>
           </div>
 
-          {/* Hero Featured Visual Frame (at least 500px height) */}
+          {/* Hero Featured Visual Frame */}
           <div className="w-full max-w-6xl mx-auto mt-16 relative z-10 px-4">
             <div className="relative min-h-[500px] h-[520px] md:h-[560px] rounded-3xl overflow-hidden border border-white/[0.15] bg-[#0d0d10]/85 backdrop-blur-2xl shadow-[0_40px_100px_rgba(0,0,0,0.9)] group">
               <img
@@ -613,38 +669,43 @@ export default function Shop() {
 
               {/* Floating caption card */}
               <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/55 to-transparent p-8 sm:p-12 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-6">
-                <div className="space-y-1">
-                  <span className="text-xs font-semibold uppercase tracking-widest text-[#38bdf8]">
-                    FLAGSHIP PIECE
-                  </span>
+                <div className="space-y-1 text-left">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono font-semibold uppercase tracking-widest text-[#38bdf8]">
+                      FLAGSHIP PHYSICAL CLOTHES ITEM
+                    </span>
+                    <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-500/30">
+                      $ antigravity preview --zero-friction
+                    </span>
+                  </div>
                   <h3 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
                     Aether Trench in Titanium
                   </h3>
                   <p className="text-sm text-[#a1a1aa] max-w-lg leading-relaxed">
-                    Heavyweight waterproof carbon twill with floating 3D rings in your phone camera.
+                    Heavyweight waterproof carbon twill fabric foundation equipped with swappable volumetric light rings. No app store downloads required.
                   </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3">
                   <a
                     href="/ar/aether-chrono-trench"
-                    className="px-5 py-2.5 rounded-full bg-white/15 hover:bg-white/25 backdrop-blur-xl border border-white/20 text-white text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+                    className="px-5 py-2.5 rounded-full bg-white/15 hover:bg-white/25 backdrop-blur-xl border border-white/20 text-white text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer font-mono"
                   >
                     <span className="material-symbols-outlined text-sm">view_in_ar</span>
-                    <span>Try on in Camera</span>
+                    <span>Camera Try-On</span>
                   </a>
                   <button
                     type="button"
                     onClick={() => handleAddToBag(CURATED_COLLECTION[0])}
-                    className="px-5 py-2.5 rounded-full bg-[#2997ff] hover:bg-[#0077ed] text-white text-xs font-semibold transition-all shadow-md cursor-pointer"
+                    className="px-5 py-2.5 rounded-full bg-[#2997ff] hover:bg-[#0077ed] text-white text-xs font-semibold transition-all shadow-md cursor-pointer font-mono"
                   >
-                    Add to Bag
+                    Claim clothes item
                   </button>
                   {isSandboxMode && (
                     <button
                       type="button"
                       onClick={() => handleSandboxBuy(CURATED_COLLECTION[0])}
-                      className="px-5 py-2.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95"
+                      className="px-5 py-2.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95 font-mono"
                       title={`Send a ${activeGateway === 'stripe' ? 'Stripe' : 'PayPal'} Sandbox purchase for ${CURATED_COLLECTION[0].name} at $${CURATED_COLLECTION[0].price.toFixed(2)}`}
                     >
                       <span className="material-symbols-outlined text-sm">shopping_cart_checkout</span>
@@ -658,12 +719,13 @@ export default function Shop() {
         </section>
 
         {/* ========================================================================= */}
-        {/* DEDICATED COVER-STYLE PARALLAX BACKGROUND SECTION 1 (at least 500px height) */}
-        {/* Punchy Statement: One jacket, infinite looks (Asset: 3dart/1.jpg)          */}
+        {/* DEDICATED COVER-STYLE PARALLAX SECTION 1: THE BIG PICTURE EXPLAINER       */}
+        {/* Implements verbiage.md Section 3.2 (Asset: 3dart/1.jpg - min-h-[500px])    */}
         {/* ========================================================================= */}
         <section
           ref={cover1SectionRef}
-          className="relative min-h-[500px] h-[520px] md:h-[580px] flex items-center justify-center text-center px-6 overflow-hidden border-b border-white/[0.08]"
+          id="canvas-explainer"
+          className="relative min-h-[500px] py-28 md:py-36 flex items-center justify-center px-6 overflow-hidden border-b border-white/[0.08]"
         >
           {/* Background Layer (at least 500px height) */}
           <div
@@ -673,29 +735,84 @@ export default function Shop() {
             <img
               src="/3dart/1.jpg"
               alt="Live 3D Lighting"
-              className="w-full h-full object-cover object-center scale-105 filter brightness-[0.45] contrast-[1.2]"
+              className="w-full h-full object-cover object-center scale-105 filter brightness-[0.38] contrast-[1.2]"
             />
-            <div className="absolute inset-0 bg-gradient-to-b from-black via-black/35 to-black" />
+            <div className="absolute inset-0 bg-gradient-to-b from-black via-black/55 to-black" />
             <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,rgba(0,0,0,0.65)_100%)]" />
           </div>
 
-          <div className="max-w-3xl mx-auto space-y-4 relative z-10">
-            <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/[0.08] backdrop-blur-md border border-white/[0.15] text-xs font-semibold tracking-wider uppercase text-[#38bdf8]">
+          <div className="max-w-4xl mx-auto space-y-8 relative z-10 text-center">
+            {/* CLI Accent Badge */}
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/[0.08] backdrop-blur-md border border-white/[0.15] text-xs font-mono text-[#38bdf8]">
               <span className="w-1.5 h-1.5 rounded-full bg-[#38bdf8] animate-pulse"></span>
-              YOUR STYLE, YOUR RULES
-            </span>
-            <h2 className="text-4xl sm:text-6xl font-bold tracking-tight text-white leading-tight">
-              One jacket.<br />
-              <span className="text-[#a1a1aa]">Infinite looks.</span>
+              <span>$ antigravity explain --philosophy &quot;open-canvas&quot;</span>
+            </div>
+
+            <h2 className="text-4xl sm:text-6xl font-extrabold tracking-tight text-white leading-tight">
+              One shirt.<br />
+              <span className="bg-gradient-to-r from-white via-[#d4d4d8] to-[#9ca3af] bg-clip-text text-transparent">
+                Endless expressions.
+              </span>
             </h2>
-            <p className="text-base sm:text-lg text-[#d4d4d8] max-w-lg mx-auto font-normal leading-relaxed">
-              Change what your clothing displays anytime from your phone. No apps to install. Just open your camera.
-            </p>
+
+            <div className="space-y-4 max-w-2xl mx-auto text-[#d4d4d8] text-base sm:text-lg leading-relaxed">
+              <p className="font-medium text-white/95">
+                Think about regular clothes: once the ink dries on cotton, that design is locked in until you throw the shirt away.
+              </p>
+              <p className="text-[#a1a1aa] text-sm sm:text-base">
+                We design our pieces around an open, flexible foundation. Using lightweight spatial tracking right through your phone&apos;s browser, your garment transforms into an active frequency—a dynamic surface that responds to whatever skin, animated visual, or digital piece you decide to equip that morning.
+              </p>
+            </div>
+
+            {/* 3 Pillars from verbiage.md Section 3.2 */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-6 text-left">
+              <div className="p-6 rounded-2xl bg-black/60 backdrop-blur-xl border border-white/[0.12] space-y-2.5">
+                <div className="flex items-center gap-2 text-xs font-mono text-[#38bdf8]">
+                  <span className="material-symbols-outlined text-sm">bolt</span>
+                  <span>NO DOWNLOADS, EVER</span>
+                </div>
+                <h4 className="text-white font-bold text-sm">Browser-Native Magic</h4>
+                <p className="text-xs text-[#a1a1aa] leading-relaxed">
+                  You or anyone around you just point a phone camera at the piece to see the art come alive directly in the browser—no third-party apps, accounts, or friction required.
+                </p>
+                <div className="text-[10px] font-mono text-[#38bdf8]/80 pt-1">
+                  $ antigravity preview --zero-friction
+                </div>
+              </div>
+
+              <div className="p-6 rounded-2xl bg-black/60 backdrop-blur-xl border border-white/[0.12] space-y-2.5">
+                <div className="flex items-center gap-2 text-xs font-mono text-[#a855f7]">
+                  <span className="material-symbols-outlined text-sm">view_in_ar</span>
+                  <span>TRY BEFORE YOU COMMIT</span>
+                </div>
+                <h4 className="text-white font-bold text-sm">Zero-Guesswork Preview</h4>
+                <p className="text-xs text-[#a1a1aa] leading-relaxed">
+                  Use our mirror preview to see exactly how the 3D graphic drapes, folds, and moves across the fabric before you claim it.
+                </p>
+                <div className="text-[10px] font-mono text-[#a855f7]/80 pt-1">
+                  $ antigravity preview --realtime-mesh
+                </div>
+              </div>
+
+              <div className="p-6 rounded-2xl bg-black/60 backdrop-blur-xl border border-white/[0.12] space-y-2.5">
+                <div className="flex items-center gap-2 text-xs font-mono text-[#10b981]">
+                  <span className="material-symbols-outlined text-sm">stars</span>
+                  <span>1-OF-1 INDIVIDUALITY</span>
+                </div>
+                <h4 className="text-white font-bold text-sm">Asterisk (*) Override</h4>
+                <p className="text-xs text-[#a1a1aa] leading-relaxed">
+                  When our system spots your bespoke asterisk marker, generic crowd defaults step aside—your custom aesthetic takes center stage.
+                </p>
+                <div className="text-[10px] font-mono text-[#10b981]/80 pt-1">
+                  $ antigravity override --target bespoke
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
         {/* ========================================================================= */}
-        {/* SECTION 2: HOW IT WORKS (BENTO GRID - CONCISE & LAYMANS)                  */}
+        {/* SECTION 2: HOW IT WORKS (BENTO GRID - GROUNDED NARRATIVE PILLARS)          */}
         {/* Full-Bleed Cover Parallax Background: 3dart/1.jpg (at least 500px height)  */}
         {/* ========================================================================= */}
         <section
@@ -721,32 +838,37 @@ export default function Shop() {
 
           <div className="max-w-7xl mx-auto space-y-16 relative z-10">
             <div className="text-center max-w-3xl mx-auto space-y-3">
-              <span className="text-xs font-semibold tracking-widest uppercase text-[#2997ff]">
-                HOW IT WORKS
-              </span>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.08] text-xs font-mono text-[#2997ff] uppercase">
+                <span>$ antigravity flow --inspect architecture</span>
+              </div>
               <h2 className="text-4xl sm:text-6xl font-bold tracking-tight text-white">
-                Physical luxury.<br />
-                <span className="text-[#a1a1aa]">Digital magic.</span>
+                Physical clothes item.<br />
+                <span className="text-[#a1a1aa]">Living medium.</span>
               </h2>
               <p className="text-base sm:text-lg text-[#a1a1aa]">
-                Premium streetwear that connects to your phone camera in real time.
+                An open fabric foundation that connects to your phone camera in real time—no apps, no middlemen, zero friction.
               </p>
             </div>
 
-            {/* Apple Bento Feature Cards with Clear Layman's Explanations */}
+            {/* Apple Bento Feature Cards with Grounded Metaphors from verbiage.md */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
 
-              {/* Bento Card 1: Change on the fly */}
+              {/* Bento Card 1: Pillar I - Swappable Frequency */}
               <div className="md:col-span-8 rounded-3xl p-8 sm:p-12 bg-[#121214]/85 backdrop-blur-2xl border border-white/[0.12] relative overflow-hidden flex flex-col justify-between min-h-[420px] group shadow-[0_25px_60px_rgba(0,0,0,0.9)]">
                 <div className="relative z-10 max-w-lg space-y-3">
-                  <span className="text-xs font-semibold uppercase tracking-widest text-[#2997ff]">
-                    CHANGE ON THE FLY
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-widest text-[#2997ff]">
+                      PILLAR I • SWAPPABLE FREQUENCY
+                    </span>
+                    <span className="text-[11px] font-mono text-[#38bdf8] bg-[#38bdf8]/10 px-2 py-0.5 rounded">
+                      $ antigravity closet --equip &quot;ACTIVE_VIBE&quot;
+                    </span>
+                  </div>
                   <h3 className="text-3xl sm:text-4xl font-bold text-white tracking-tight">
                     Switch designs in seconds.
                   </h3>
                   <p className="text-base text-[#a1a1aa] leading-relaxed">
-                    Your jacket stays on, your style evolves. Pick new 3D visual effects directly from your phone anytime without buying another piece of clothing.
+                    Never get tired of a piece. Switch out artwork from your personal Digital Closet whenever you want a fresh vibe. Your physical clothes item stays on, your style evolves without buying another garment.
                   </p>
                 </div>
 
@@ -761,66 +883,82 @@ export default function Shop() {
 
                 <div className="relative z-10 pt-8 flex items-center gap-2 text-xs text-[#a1a1aa]">
                   <span className="w-2 h-2 rounded-full bg-[#2997ff] animate-pulse"></span>
-                  <span>Unlimited look swaps • Always in your control</span>
+                  <span>Living Medium • Unlimited Look Swaps • Always in Your Control</span>
                 </div>
               </div>
 
-              {/* Bento Card 2: Fresh Drops */}
+              {/* Bento Card 2: Pillar II - Direct Brand Sovereignty */}
               <div className="md:col-span-4 rounded-3xl p-8 bg-[#121214]/85 backdrop-blur-2xl border border-white/[0.12] flex flex-col justify-between min-h-[420px] shadow-[0_25px_60px_rgba(0,0,0,0.9)]">
                 <div className="space-y-3">
-                  <span className="text-xs font-semibold uppercase tracking-widest text-[#a855f7]">
-                    ALWAYS FRESH
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold uppercase tracking-widest text-[#a855f7]">
+                      PILLAR II • BRAND SOVEREIGNTY
+                    </span>
+                  </div>
+                  <div className="text-[11px] font-mono text-[#a855f7] bg-[#a855f7]/10 px-2 py-0.5 rounded w-fit">
+                    $ antigravity broadcast --to street
+                  </div>
                   <h3 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
-                    New drops sent to your phone.
+                    The point of sale is the starting line.
                   </h3>
                   <p className="text-sm text-[#a1a1aa] leading-relaxed">
-                    Brands push new seasonal animations directly to your clothing over the air. You get fresh styles without paying for another reprint.
+                    Broadcast your vision directly to the street. Independent labels push fresh seasonal visuals straight onto garments already out in the wild over the air—no app store middlemen.
                   </p>
                 </div>
 
                 <div className="pt-6 border-t border-white/[0.08] space-y-1">
                   <div className="text-xl font-bold text-white tracking-tight">Zero Waste</div>
-                  <p className="text-xs text-[#a1a1aa]">New collections drop straight to your existing clothes.</p>
+                  <p className="text-xs text-[#a1a1aa]">New collections drop straight to your existing clothes item pieces.</p>
                 </div>
               </div>
 
-              {/* Bento Card 3: 1-of-1 Custom */}
+              {/* Bento Card 3: Pillar IV - Bespoke Asterisk Override */}
               <div className="md:col-span-4 rounded-3xl p-8 bg-[#121214]/85 backdrop-blur-2xl border border-white/[0.12] flex flex-col justify-between min-h-[360px] shadow-[0_25px_60px_rgba(0,0,0,0.9)]">
                 <div className="space-y-3">
-                  <span className="text-xs font-semibold uppercase tracking-widest text-[#f43f5e]">
-                    MADE FOR YOU
-                  </span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold uppercase tracking-widest text-[#f43f5e]">
+                      PILLAR IV • BESPOKE AUTONOMY
+                    </span>
+                  </div>
+                  <div className="text-[11px] font-mono text-[#f43f5e] bg-[#f43f5e]/10 px-2 py-0.5 rounded w-fit">
+                    $ antigravity override --target bespoke
+                  </div>
                   <h3 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
-                    Truly one-of-a-kind.
+                    Your bespoke aesthetic overrides the crowd.
                   </h3>
                   <p className="text-sm text-[#a1a1aa] leading-relaxed">
-                    Unlock custom 1-of-1 animations made just for you that nobody else in the world has on their clothes.
+                    Your private 1-of-1 signature. When the camera reads your custom asterisk (*) marker, generic batch templates yield to your personal expression.
                   </p>
                 </div>
 
-                <div className="text-xs text-[#f43f5e] font-semibold">
-                  Personal 1-of-1 Custom Design
+                <div className="text-xs text-[#f43f5e] font-semibold flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm">stars</span>
+                  <span>Asterisk (*) Protocol • True 1-of-1 Autonomy</span>
                 </div>
               </div>
 
-              {/* Bento Card 4: Try Before You Buy */}
+              {/* Bento Card 4: Pillar IV - Zero-Guesswork Preview */}
               <div className="md:col-span-8 rounded-3xl p-8 sm:p-12 bg-[#121214]/85 backdrop-blur-2xl border border-white/[0.12] flex flex-col justify-between min-h-[360px] shadow-[0_25px_60px_rgba(0,0,0,0.9)]">
                 <div className="space-y-3 max-w-lg">
-                  <span className="text-xs font-semibold uppercase tracking-widest text-[#10b981]">
-                    TRY BEFORE YOU BUY
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-widest text-[#10b981]">
+                      PILLAR IV • ZERO GUESSWORK
+                    </span>
+                    <span className="text-[11px] font-mono text-[#10b981] bg-[#10b981]/10 px-2 py-0.5 rounded">
+                      $ antigravity preview --realtime-mesh
+                    </span>
+                  </div>
                   <h3 className="text-3xl sm:text-4xl font-bold text-white tracking-tight">
-                    See it on before you order.
+                    See how it drapes and folds before you commit.
                   </h3>
                   <p className="text-base text-[#a1a1aa] leading-relaxed">
-                    Inspect how the fabric drapes, fits, and lights up in full 3D right in your phone browser. Zero guesswork. Zero return hassle.
+                    Check the fit, weave density, and dynamic visual movement in real time on your own frame before checking out. Zero guesswork. Zero return hassle.
                   </p>
                 </div>
 
                 <div className="pt-6 flex flex-wrap gap-3 text-xs text-[#a1a1aa]">
-                  <span className="px-3 py-1.5 rounded-full bg-white/[0.08] border border-white/[0.1] text-white">Full 360° View</span>
-                  <span className="px-3 py-1.5 rounded-full bg-white/[0.08] border border-white/[0.1] text-white">Live Phone Camera Try-On</span>
+                  <span className="px-3 py-1.5 rounded-full bg-white/[0.08] border border-white/[0.1] text-white">Full 360° Studio View</span>
+                  <span className="px-3 py-1.5 rounded-full bg-white/[0.08] border border-white/[0.1] text-white">Real-Time Phone Camera Mirror</span>
                   <span className="px-3 py-1.5 rounded-full bg-white/[0.08] border border-white/[0.1] text-white">Apple Vision Pro Ready</span>
                 </div>
               </div>
@@ -830,8 +968,8 @@ export default function Shop() {
         </section>
 
         {/* ========================================================================= */}
-        {/* DEDICATED COVER-STYLE PARALLAX BACKGROUND SECTION 2 (at least 500px height) */}
-        {/* Punchy: Just point your camera (Asset: 3dart/video-background.png)         */}
+        {/* DEDICATED COVER-STYLE PARALLAX SECTION 2: BROWSER-NATIVE FREEDOM          */}
+        {/* Implements verbiage.md Section 3.3 Badge 1 & Pillar III (Asset: video-bg) */}
         {/* ========================================================================= */}
         <section
           ref={cover2SectionRef}
@@ -860,21 +998,22 @@ export default function Shop() {
           </div>
 
           <div className="max-w-3xl mx-auto space-y-4 relative z-10">
-            <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/[0.08] backdrop-blur-md border border-white/[0.15] text-xs font-semibold tracking-wider uppercase text-[#a855f7]">
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/[0.08] backdrop-blur-md border border-white/[0.15] text-xs font-mono text-[#a855f7]">
               <span className="w-1.5 h-1.5 rounded-full bg-[#a855f7] animate-pulse"></span>
-              ZERO HASSLE
-            </span>
+              <span>$ antigravity preview --zero-friction</span>
+            </div>
             <h2 className="text-4xl sm:text-6xl font-bold tracking-tight text-white leading-tight">
-              Just point your camera.
+              No app stores.<br />
+              <span className="text-[#a1a1aa]">No hurdles.</span>
             </h2>
-            <p className="text-base sm:text-lg text-[#d4d4d8] max-w-md mx-auto font-normal leading-relaxed">
-              No app store. No downloads. No sign-ups. Works instantly in your mobile web browser.
+            <p className="text-base sm:text-lg text-[#d4d4d8] max-w-lg mx-auto font-normal leading-relaxed">
+              Point your camera and watch your style unfold. No third-party apps, no accounts to register just to view art. Pure browser-native magic for anyone looking at your piece.
             </p>
           </div>
         </section>
 
         {/* ========================================================================= */}
-        {/* SECTION 3: 360° INTERACTIVE STUDIO (CONCISE & LAYMANS)                     */}
+        {/* SECTION 3: 360° INTERACTIVE STUDIO (DIGITAL CLOSET & FITTING ROOM)        */}
         {/* Full-Bleed Cover Parallax Background: 3dart/video-background.png           */}
         {/* ========================================================================= */}
         <section
@@ -908,30 +1047,41 @@ export default function Shop() {
 
           <div className="max-w-7xl mx-auto space-y-12 relative z-10">
             <div className="text-center max-w-3xl mx-auto space-y-3">
-              <span className="text-xs font-semibold tracking-widest uppercase text-[#2997ff]">
-                INTERACTIVE 3D
-              </span>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/[0.08] text-xs font-mono text-[#2997ff] uppercase">
+                <span>$ antigravity mesh --inspect 360</span>
+              </div>
               <h2 className="text-4xl sm:text-5xl font-bold tracking-tight text-white">
-                The 360° Fitting Room.
+                The 360° Digital Closet &amp; Fitting Room.
               </h2>
               <p className="text-sm sm:text-base text-[#a1a1aa]">
-                Drag to rotate. Zoom in. Inspect the fabric quality, stitching, and 3D lighting up close before you decide.
+                Drag to rotate. Zoom in. Inspect the physical clothes item, fabric weight, and dynamic skins up close before you commit.
               </p>
             </div>
 
             {/* Product Switcher Pills */}
-            <div className="flex justify-center flex-wrap gap-2">
+            <div className="flex justify-center flex-wrap gap-2.5">
               {collectionList.slice(0, 5).map((item) => (
                 <button
                   key={item.id}
                   type="button"
                   onClick={() => setSelectedProduct(item)}
-                  className={`px-4 py-2 rounded-full text-xs font-medium transition-all cursor-pointer backdrop-blur-md ${selectedProduct?.id === item.id
-                    ? 'bg-white text-black shadow-lg font-semibold'
-                    : 'bg-[#121214]/90 text-[#a1a1aa] hover:text-white border border-white/[0.1]'
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer backdrop-blur-md flex items-center gap-2 ${selectedProduct?.id === item.id
+                    ? 'bg-white text-black shadow-lg font-semibold scale-105'
+                    : 'bg-[#121214]/90 text-[#a1a1aa] hover:text-white border border-white/[0.1] hover:bg-white/[0.08]'
                     }`}
                 >
-                  {item.name || item.id}
+                  <div className="w-5 h-5 rounded-full overflow-hidden bg-black/60 border border-white/20 shrink-0 flex items-center justify-center">
+                    <Model3DThumbnail
+                      modelUrl={item.model_url || item.glb_url || item.modelUrl || item.gltf_file_path}
+                      fallbackImageUrl={item.thumbnailUrl || item.imageUrl || item.image}
+                      cleanName={item.name || item.id}
+                      category={item.category}
+                      badge={false}
+                      interactiveOnHover={false}
+                      className="w-full h-full"
+                    />
+                  </div>
+                  <span>{item.name || item.id}</span>
                 </button>
               ))}
             </div>
@@ -956,10 +1106,10 @@ export default function Shop() {
               <div className="lg:col-span-4 rounded-3xl p-8 bg-[#121214]/90 backdrop-blur-2xl border border-white/[0.12] flex flex-col justify-between h-full min-h-[540px] space-y-6 shadow-[0_30px_80px_rgba(0,0,0,0.9)]">
                 <div className="space-y-4">
                   <div className="flex justify-between items-baseline">
-                    <span className="text-xs font-semibold tracking-wider uppercase text-[#2997ff]">
-                      {selectedProduct?.edition || 'PRO EDITION'}
+                    <span className="text-xs font-mono font-semibold tracking-wider uppercase text-[#2997ff]">
+                      {selectedProduct?.edition || 'OPEN CLOTHES ITEM • PRO EDITION'}
                     </span>
-                    <span className="text-xs text-[#86868b]">Star weAR</span>
+                    <span className="text-xs text-[#86868b] font-mono">Star weAR</span>
                   </div>
 
                   <h3 className="text-3xl font-bold text-white tracking-tight">
@@ -989,7 +1139,7 @@ export default function Shop() {
                   {selectedProduct?.colors && selectedProduct.colors.length > 0 && (
                     <div className="pt-4 border-t border-white/[0.08] space-y-2">
                       <span className="text-xs text-[#a1a1aa] font-medium block">
-                        Color: <span className="text-white font-semibold">{selectedColors[selectedProduct.id] || selectedProduct.colors[0].name}</span>
+                        Clothes item Finish: <span className="text-white font-semibold">{selectedColors[selectedProduct.id] || selectedProduct.colors[0].name}</span>
                       </span>
                       <div className="flex gap-2">
                         {selectedProduct.colors.map((c) => {
@@ -1014,7 +1164,7 @@ export default function Shop() {
                 {/* Pricing & Add to Bag */}
                 <div className="pt-6 border-t border-white/[0.08] space-y-4">
                   <div className="flex justify-between items-baseline">
-                    <span className="text-xs text-[#86868b]">Price</span>
+                    <span className="text-xs text-[#86868b]">Fabric Foundation &amp; Skin</span>
                     <span className="text-2xl font-bold text-white">
                       ${(selectedProduct?.price !== undefined ? Number(selectedProduct.price) : 280.00).toFixed(2)}
                     </span>
@@ -1024,16 +1174,16 @@ export default function Shop() {
                     <button
                       type="button"
                       onClick={() => handleAddToBag(selectedProduct)}
-                      className="flex-1 py-3.5 rounded-full bg-[#2997ff] hover:bg-[#0077ed] text-white font-semibold text-sm transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                      className="flex-1 py-3.5 rounded-full bg-[#2997ff] hover:bg-[#0077ed] text-white font-semibold text-sm transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer font-mono"
                     >
                       <span className="material-symbols-outlined text-base">shopping_bag</span>
-                      <span>Add To Cart</span>
+                      <span>Claim Clothes item Piece</span>
                     </button>
 
                     <a
                       href={`/ar/${selectedProduct?.id}`}
                       className="px-4 py-3.5 rounded-full bg-white/[0.1] hover:bg-white/[0.2] border border-white/[0.15] text-white transition-all flex items-center justify-center cursor-pointer"
-                      title="Launch Phone Camera Try-On"
+                      title="Launch Camera Try-On"
                     >
                       <span className="material-symbols-outlined text-lg">view_in_ar</span>
                     </a>
@@ -1045,8 +1195,8 @@ export default function Shop() {
         </section>
 
         {/* ========================================================================= */}
-        {/* DEDICATED COVER-STYLE PARALLAX BACKGROUND SECTION 3 (at least 500px height) */}
-        {/* Punchy: Physical clothes. Digital clone. (Asset: 3dart/3.jpg)             */}
+        {/* DEDICATED COVER-STYLE PARALLAX SECTION 3: DUAL SPATIAL PRESENCE           */}
+        {/* Implements verbiage.md Pillar IV & Dual Reality (Asset: 3dart/3.jpg)       */}
         {/* ========================================================================= */}
         <section
           ref={cover3SectionRef}
@@ -1066,22 +1216,22 @@ export default function Shop() {
           </div>
 
           <div className="max-w-3xl mx-auto space-y-4 relative z-10">
-            <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/[0.08] backdrop-blur-md border border-white/[0.15] text-xs font-semibold tracking-wider uppercase text-[#10b981]">
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/[0.08] backdrop-blur-md border border-white/[0.15] text-xs font-mono text-[#10b981]">
               <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] animate-pulse"></span>
-              DUAL REALITY
-            </span>
+              <span>$ antigravity clone --sync spatial</span>
+            </div>
             <h2 className="text-4xl sm:text-6xl font-bold tracking-tight text-white leading-tight">
-              Physical clothes.<br />
-              <span className="text-[#a1a1aa]">Digital clone.</span>
+              Physical clothes item.<br />
+              <span className="text-[#a1a1aa]">Living digital skin.</span>
             </h2>
             <p className="text-base sm:text-lg text-[#d4d4d8] max-w-md mx-auto font-normal leading-relaxed">
-              Wear it in real life, and equip your 3D clone in Apple Vision Pro, video games, or your phone.
+              Wear the heavyweight fabric on the street. Project the dynamic 3D visuals through any browser, spatial headset, or avatar environment without friction.
             </p>
           </div>
         </section>
 
         {/* ========================================================================= */}
-        {/* SECTION 4: THE COLLECTION (CLEAR & DIRECT)                                */}
+        {/* SECTION 4: THE COLLECTION (LIBERATED CLOTHES ITEM DROPS)                       */}
         {/* Full-Bleed Cover Parallax Background: 3dart/3.jpg (at least 500px height)  */}
         {/* ========================================================================= */}
         <section
@@ -1106,19 +1256,19 @@ export default function Shop() {
           <div className="max-w-7xl mx-auto space-y-16 relative z-10">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 border-b border-white/[0.08] pb-8">
               <div className="space-y-2">
-                <span className="text-xs font-semibold tracking-widest uppercase text-[#2997ff]">
-                  THE 2026 LINE
-                </span>
+                <div className="inline-flex items-center gap-2 text-xs font-mono text-[#2997ff] uppercase">
+                  <span>$ antigravity catalog --mode open-canvas</span>
+                </div>
                 <h2 className="text-4xl sm:text-5xl font-bold tracking-tight text-white">
-                  Pick your piece.
+                  Claim your open canvas.
                 </h2>
                 <p className="text-sm sm:text-base text-[#a1a1aa]">
-                  Includes premium physical garment, free express shipping, and instant camera effects.
+                  Every piece pairs an enduring physical clothes item with swappable, browser-native dynamic skins. Free worldwide express delivery included.
                 </p>
               </div>
 
-              <div className="text-xs text-[#a1a1aa] font-medium">
-                Showing {collectionList.length} items
+              <div className="text-xs text-[#a1a1aa] font-mono">
+                [CATALOG: {collectionList.length} CLOTHES ITEM PIECES ACTIVE]
               </div>
             </div>
 
@@ -1128,6 +1278,11 @@ export default function Shop() {
                 const price = product.price !== undefined ? Number(product.price) : 280.00;
                 const selectedSize = selectedSizes[product.id] || 'M';
                 const currentColor = selectedColors[product.id] || product.colors?.[0]?.name;
+                const badge = product.featureBadge || {
+                  title: 'Browser-Native Freedom',
+                  copy: 'No app stores. No hurdles. Just open your camera and watch your style unfold directly on screen.',
+                  cli: '$ antigravity preview --zero-friction'
+                };
 
                 return (
                   <article
@@ -1137,16 +1292,16 @@ export default function Shop() {
                     <div className="p-6 sm:p-8 space-y-6">
                       {/* Top Eyebrow & Badges */}
                       <div className="flex justify-between items-center text-xs">
-                        <span className="text-[#86868b] uppercase tracking-wider font-semibold text-[10px]">
-                          {product.edition || 'PRO EDITION'}
+                        <span className="text-[#86868b] uppercase tracking-wider font-mono font-semibold text-[10px]">
+                          {product.edition || 'OPEN CLOTHES ITEM'}
                         </span>
-                        <span className="text-[#2997ff] font-medium text-[11px] flex items-center gap-1">
+                        <span className="text-[#2997ff] font-mono text-[11px] flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-[#2997ff]"></span>
-                          Camera Ready
+                          Browser Native
                         </span>
                       </div>
 
-                      {/* Image Preview with Subtle Hover Scale */}
+                      {/* 3D Model Thumbnail Preview with Subtle Hover Scale */}
                       <div
                         onClick={() => {
                           setSelectedProduct(product);
@@ -1155,26 +1310,38 @@ export default function Shop() {
                         }}
                         className="aspect-[4/3] rounded-2xl overflow-hidden bg-[#0d0d10] relative cursor-pointer group-hover:shadow-[0_10px_30px_rgba(0,0,0,0.6)] transition-all"
                       >
-                        {product.imageUrl || product.image || product.target_image_url ? (
-                          <img
-                            src={product.imageUrl || product.image || product.target_image_url}
-                            alt={product.name || product.id}
-                            className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-700"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-[#86868b]">
-                            <span className="material-symbols-outlined text-4xl text-[#2997ff]">view_in_ar</span>
-                            <span className="text-xs font-semibold text-white">3D Interactive</span>
-                          </div>
-                        )}
+                        <Model3DThumbnail
+                          modelUrl={product.model_url || product.glb_url || product.modelUrl || product.gltf_file_path}
+                          fallbackImageUrl={product.thumbnailUrl || product.imageUrl || product.image || product.target_image_url}
+                          category={product.category}
+                          cleanName={product.name || product.id}
+                          className="w-full h-full"
+                          aspectRatio="aspect-[4/3]"
+                          badge="3D MODEL"
+                        />
 
                         {/* Hover Overlay Hint */}
-                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-xs">
-                          <span className="px-4 py-2 rounded-full bg-white text-black text-xs font-semibold shadow-lg flex items-center gap-1.5">
-                            <span>Inspect in 360°</span>
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-xs pointer-events-none">
+                          <span className="px-4 py-2 rounded-full bg-white text-black text-xs font-semibold shadow-lg flex items-center gap-1.5 font-mono">
+                            <span>Inspect 360°</span>
                             <span className="material-symbols-outlined text-sm">3d_rotation</span>
                           </span>
                         </div>
+                      </div>
+
+                      {/* Feature Badge & CLI Microcopy from verbiage.md Section 3.3 */}
+                      <div className="p-3.5 rounded-xl bg-black/50 border border-white/[0.08] space-y-1.5 text-left">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-mono uppercase tracking-wider font-bold text-[#38bdf8]">
+                            {badge.title}
+                          </span>
+                          <span className="text-[10px] font-mono text-neutral-400">
+                            {badge.cli}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-[#a1a1aa] leading-relaxed">
+                          {badge.copy}
+                        </p>
                       </div>
 
                       {/* Color Swatch Dots */}
@@ -1217,7 +1384,7 @@ export default function Shop() {
                               e.stopPropagation();
                               setSelectedSizes(prev => ({ ...prev, [product.id]: sz }));
                             }}
-                            className={`w-8 h-8 rounded-full text-xs font-semibold transition-all cursor-pointer ${selectedSize === sz
+                            className={`w-8 h-8 rounded-full text-xs font-semibold transition-all cursor-pointer font-mono ${selectedSize === sz
                               ? 'bg-white text-black shadow-sm'
                               : 'bg-white/[0.08] text-[#a1a1aa] hover:text-white'
                               }`}
@@ -1231,7 +1398,7 @@ export default function Shop() {
                     {/* Card Bottom: Price & Buy Pill */}
                     <div className="p-6 sm:p-8 pt-0 flex items-center justify-between border-t border-white/[0.08]">
                       <div>
-                        <span className="text-[11px] text-[#86868b] block">From</span>
+                        <span className="text-[11px] text-[#86868b] block font-mono">From</span>
                         <span className="text-xl font-bold text-white">${price.toFixed(2)}</span>
                       </div>
 
@@ -1239,7 +1406,7 @@ export default function Shop() {
                         <a
                           href={`/ar/${product.id}`}
                           className="p-2.5 rounded-full bg-white/[0.08] hover:bg-white/[0.18] text-[#a1a1aa] hover:text-white transition-colors"
-                          title="Try on in Phone Camera"
+                          title="Preview in Phone Camera"
                         >
                           <span className="material-symbols-outlined text-base">view_in_ar</span>
                         </a>
@@ -1247,16 +1414,16 @@ export default function Shop() {
                         <button
                           type="button"
                           onClick={() => handleAddToBag(product)}
-                          className="px-4 py-2 rounded-full bg-[#2997ff] hover:bg-[#0077ed] text-white text-xs font-semibold transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
+                          className="px-4 py-2 rounded-full bg-[#2997ff] hover:bg-[#0077ed] text-white text-xs font-semibold transition-all shadow-md flex items-center gap-1.5 cursor-pointer font-mono"
                         >
-                          <span>Add To Cart</span>
+                          <span>Claim Piece</span>
                         </button>
 
                         {isSandboxMode && (
                           <button
                             type="button"
                             onClick={() => handleSandboxBuy(product)}
-                            className="px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-bold transition-all shadow-md flex items-center gap-1 cursor-pointer active:scale-95"
+                            className="px-3.5 py-2 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 text-xs font-bold transition-all shadow-md flex items-center gap-1 cursor-pointer active:scale-95 font-mono"
                             title={`Send a ${activeGateway === 'stripe' ? 'Stripe' : 'PayPal'} Sandbox purchase for ${product.name} at $${price.toFixed(2)}`}
                           >
                             <span className="material-symbols-outlined text-xs">shopping_cart_checkout</span>
@@ -1273,8 +1440,8 @@ export default function Shop() {
         </section>
 
         {/* ========================================================================= */}
-        {/* SECTION 5: PROMISES & GUARANTEE (CLEAR & DIRECT)                           */}
-        {/* Full-Bleed Cover Parallax Background: 3dart/2.avif (at least 500px height) */}
+        {/* SECTION 5: THE VAULT - TRANSPARENT CHECKOUT & CREATOR SUPPORT              */}
+        {/* Implements verbiage.md Section 3.4 (Asset: 3dart/2.avif)                   */}
         {/* ========================================================================= */}
         <section
           ref={valuesSectionRef}
@@ -1294,52 +1461,77 @@ export default function Shop() {
             <div className="absolute inset-0 bg-radial from-transparent via-black/50 to-black" />
           </div>
 
-          <div className="max-w-5xl mx-auto grid grid-cols-1 sm:grid-cols-3 gap-12 text-center relative z-10">
-
-            {/* Promise 1 */}
-            <div className="space-y-3 p-6 rounded-3xl bg-[#121214]/70 backdrop-blur-xl border border-white/[0.08] shadow-2xl">
-              <div className="w-12 h-12 mx-auto rounded-full bg-white/[0.08] text-[#2997ff] flex items-center justify-center shadow-lg">
-                <span className="material-symbols-outlined text-2xl">local_shipping</span>
+          <div className="max-w-5xl mx-auto space-y-12 relative z-10 text-center">
+            {/* Header & Body from verbiage.md Section 3.4 */}
+            <div className="space-y-4 max-w-3xl mx-auto">
+              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/[0.08] backdrop-blur-md border border-white/[0.15] text-xs font-mono text-emerald-400">
+                <span>$ antigravity vault --confirm</span>
               </div>
-              <h4 className="text-base font-semibold text-white">Free Express Shipping</h4>
-              <p className="text-xs text-[#a1a1aa] leading-relaxed">
-                Every piece ships free worldwide in a custom climate-sealed case via express courier.
+              <h3 className="text-3xl sm:text-5xl font-extrabold text-white tracking-tight">
+                Simple, honest support for independent design.
+              </h3>
+              <p className="text-sm sm:text-base text-[#d4d4d8] leading-relaxed">
+                When you pick up a garment or an expansion skin, your purchase routes directly between the craftspeople cutting the fabric and the 3D artists designing the visuals. No middleman cut, no corporate bloat—just an open network built to let creators create and wearers express themselves without limits.
               </p>
             </div>
 
-            {/* Promise 2 */}
-            <div className="space-y-3 p-6 rounded-3xl bg-[#121214]/70 backdrop-blur-xl border border-white/[0.08] shadow-2xl">
-              <div className="w-12 h-12 mx-auto rounded-full bg-white/[0.08] text-[#a855f7] flex items-center justify-center shadow-lg">
-                <span className="material-symbols-outlined text-2xl">bolt</span>
-              </div>
-              <h4 className="text-base font-semibold text-white">No App Required</h4>
-              <p className="text-xs text-[#a1a1aa] leading-relaxed">
-                Open your phone's camera in Safari or Chrome and it works instantly. No App Store downloads ever.
-              </p>
-            </div>
+            {/* 3 Transparent Guarantees */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-8 text-center pt-4">
 
-            {/* Promise 3 */}
-            <div className="space-y-3 p-6 rounded-3xl bg-[#121214]/70 backdrop-blur-xl border border-white/[0.08] shadow-2xl">
-              <div className="w-12 h-12 mx-auto rounded-full bg-white/[0.08] text-[#10b981] flex items-center justify-center shadow-lg">
-                <span className="material-symbols-outlined text-2xl">autorenew</span>
+              {/* Pillar 1: Direct-to-Creator */}
+              <div className="space-y-3 p-6 rounded-3xl bg-[#121214]/70 backdrop-blur-xl border border-white/[0.08] shadow-2xl">
+                <div className="w-12 h-12 mx-auto rounded-full bg-white/[0.08] text-[#2997ff] flex items-center justify-center shadow-lg">
+                  <span className="material-symbols-outlined text-2xl">handshake</span>
+                </div>
+                <h4 className="text-base font-semibold text-white">Direct-to-Creator Routing</h4>
+                <p className="text-xs text-[#a1a1aa] leading-relaxed">
+                  Your purchase routes directly to the craftspeople cutting the fabric and the independent 3D artists designing the visual skins.
+                </p>
+                <div className="text-[10px] font-mono text-[#2997ff]">
+                  $ antigravity vault --route creator-direct
+                </div>
               </div>
-              <h4 className="text-base font-semibold text-white">30-Day Easy Returns</h4>
-              <p className="text-xs text-[#a1a1aa] leading-relaxed">
-                Test the fit, feel the fabric, and try the camera effects. If you don't love it, returns are free.
-              </p>
-            </div>
 
+              {/* Pillar 2: Browser-Native Freedom */}
+              <div className="space-y-3 p-6 rounded-3xl bg-[#121214]/70 backdrop-blur-xl border border-white/[0.08] shadow-2xl">
+                <div className="w-12 h-12 mx-auto rounded-full bg-white/[0.08] text-[#a855f7] flex items-center justify-center shadow-lg">
+                  <span className="material-symbols-outlined text-2xl">bolt</span>
+                </div>
+                <h4 className="text-base font-semibold text-white">Zero-Friction Web Delivery</h4>
+                <p className="text-xs text-[#a1a1aa] leading-relaxed">
+                  No app stores, downloads, or sign-ups required to experience art. Point any standard camera at the garment to watch it come alive instantly.
+                </p>
+                <div className="text-[10px] font-mono text-[#a855f7]">
+                  $ antigravity preview --zero-friction
+                </div>
+              </div>
+
+              {/* Pillar 3: Wearer Sovereignty */}
+              <div className="space-y-3 p-6 rounded-3xl bg-[#121214]/70 backdrop-blur-xl border border-white/[0.08] shadow-2xl">
+                <div className="w-12 h-12 mx-auto rounded-full bg-white/[0.08] text-[#10b981] flex items-center justify-center shadow-lg">
+                  <span className="material-symbols-outlined text-2xl">verified</span>
+                </div>
+                <h4 className="text-base font-semibold text-white">Wearer Sovereignty Guaranteed</h4>
+                <p className="text-xs text-[#a1a1aa] leading-relaxed">
+                  Test the fit, feel the heavyweight fabric, and try your swappable skins in the mirror. If you don&apos;t love it, returns are 100% free within 30 days.
+                </p>
+                <div className="text-[10px] font-mono text-[#10b981]">
+                  $ antigravity vault --guarantee 30-day
+                </div>
+              </div>
+
+            </div>
           </div>
         </section>
 
         {/* ========================================================================= */}
-        {/* REFINED APPLE-STYLE FOOTER                                                */}
+        {/* REFINED BRAND FOOTER                                                      */}
         {/* ========================================================================= */}
         <footer className="relative z-10 py-16 px-6 max-w-7xl mx-auto border-t border-white/[0.08] text-xs text-[#86868b] space-y-8 bg-black/80 backdrop-blur-md">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               <span className="font-semibold text-sm text-white">Star weAR</span>
-              <span className="text-xs text-[#86868b]">— Smart Luxury Streetwear. Powered by 4D4 Technologies.</span>
+              <span className="text-xs text-[#86868b]">— Living Luxury Streetwear. Powered by Antigravity &amp; 4D4 Technologies.</span>
             </div>
 
             <div className="flex flex-wrap gap-6 text-xs text-[#86868b]">
@@ -1357,7 +1549,7 @@ export default function Shop() {
 
           <div className="pt-6 border-t border-white/[0.04] flex flex-col sm:flex-row justify-between items-center gap-4 text-[11px]">
             <div>
-              Copyright © 2026 Star weAR Inc. All rights reserved. 3D camera effects run natively in mobile web browsers.
+              Copyright © 2026 Star weAR Inc. All rights reserved. Open canvas spatial experiences run natively in standard mobile web browsers without third-party apps.
             </div>
             <div className="flex gap-4">
               <span className="hover:text-white cursor-pointer">Privacy Policy</span>

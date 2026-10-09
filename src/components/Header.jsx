@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
@@ -8,6 +8,19 @@ export default function Header() {
   const { getCartCount } = useCart();
   const { isAdmin, isSuperAdmin, canAccessStudio } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isBumping, setIsBumping] = useState(false);
+
+  const cartCount = getCartCount();
+  const isCartActive = location.pathname === '/cart';
+
+  // Pop animation whenever cart item count changes and is > 0
+  useEffect(() => {
+    if (cartCount > 0) {
+      setIsBumping(true);
+      const timer = setTimeout(() => setIsBumping(false), 350);
+      return () => clearTimeout(timer);
+    }
+  }, [cartCount]);
 
   // Close mobile menu whenever location changes
   useEffect(() => {
@@ -55,12 +68,12 @@ export default function Header() {
           STAR <span className="text-primary font-light">weAR</span>
         </Link>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3 sm:gap-4">
           {/* Only Authenticated Admins & Superadmins See Admin Links */}
           {(isAdmin || isSuperAdmin) && (
             <Link 
               to="/admin/dashboard" 
-              className="px-3 py-1 rounded-full border border-primary/50 bg-primary/10 text-primary text-[11px] font-bold tracking-wider hover:bg-primary hover:text-black transition-all flex items-center gap-1 shadow-sm"
+              className="px-3 py-1.5 rounded-full border border-primary/50 bg-primary/10 text-primary text-[11px] font-bold tracking-wider hover:bg-primary hover:text-white transition-all flex items-center gap-1 shadow-sm"
               title="Admin Management Suite"
             >
               <span className="material-symbols-outlined text-sm">shield_person</span>
@@ -68,8 +81,45 @@ export default function Header() {
             </Link>
           )}
 
-          <Link to="/cart" aria-label="shopping_bag" className="p-2 hover:opacity-70 transition-opacity duration-300 relative group flex items-center gap-2">
-            <span className="nav-bracket group-hover:text-primary">[ Cart: {getCartCount()} ]</span>
+          {/* Modern Capsule Cart Button */}
+          <Link
+            to="/cart"
+            aria-label={`Shopping Cart with ${cartCount} item${cartCount === 1 ? '' : 's'}`}
+            title={`Shopping Cart (${cartCount} items)`}
+            className={`group relative flex items-center gap-2 sm:gap-2.5 px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-full border transition-all duration-300 active:scale-95 cursor-pointer shadow-xs ${
+              isCartActive
+                ? 'border-primary bg-primary/15 text-primary shadow-[0_0_15px_rgba(82,99,115,0.25)]'
+                : isBumping
+                ? 'border-primary ring-2 ring-primary/30 scale-105 bg-primary/10 text-primary'
+                : 'border-on-background/15 hover:border-primary/50 bg-on-background/[0.04] hover:bg-on-background/[0.08] hover:shadow-[0_4px_18px_rgba(82,99,115,0.15)] text-on-background'
+            }`}
+          >
+            {/* Shopping Bag Icon with micro-interaction */}
+            <div className="relative flex items-center justify-center">
+              <span className="material-symbols-outlined text-[18px] sm:text-[19px] transition-transform duration-300 group-hover:scale-110 group-hover:-rotate-3">
+                shopping_bag
+              </span>
+              {/* Pulsing indicator when cart has active items */}
+              {cartCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 ring-2 ring-background animate-pulse" />
+              )}
+            </div>
+
+            {/* Responsive Text Label */}
+            <span className="hidden sm:inline font-mono text-[11px] font-bold tracking-widest uppercase transition-colors">
+              CART
+            </span>
+
+            {/* Dynamic Counter Chip */}
+            <span
+              className={`font-mono text-[10px] sm:text-[11px] font-bold rounded-full flex items-center justify-center transition-all duration-300 ${
+                cartCount > 0
+                  ? 'bg-primary text-white px-2 py-0.5 min-w-[20px] h-5 shadow-[0_2px_8px_rgba(82,99,115,0.35)]'
+                  : 'bg-on-background/10 text-on-background/50 px-1.5 py-0.5 min-w-[18px] h-4.5'
+              } ${isBumping ? 'scale-125' : 'scale-100'}`}
+            >
+              {cartCount}
+            </span>
           </Link>
         </div>
       </nav>
@@ -97,6 +147,17 @@ export default function Header() {
             <Link className={getMobileLinkClasses('/contact')} to="/contact">
               <span>CONTACT</span>
               <span className="material-symbols-outlined text-xs">arrow_forward</span>
+            </Link>
+            <Link className={getMobileLinkClasses('/cart')} to="/cart">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-base">shopping_bag</span>
+                <span>CART</span>
+              </div>
+              <span className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded-full ${
+                cartCount > 0 ? 'bg-primary text-white' : 'bg-on-background/10 text-on-background/60'
+              }`}>
+                {cartCount}
+              </span>
             </Link>
             {canAccessStudio && (
               <Link className={getMobileLinkClasses('/studio4d4')} to="/studio4d4">

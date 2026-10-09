@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { collection, getDocs } from 'firebase/firestore';
 import { ref, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../firebase';
 import Header from '../components/Header';
 import ProductViewer from '../components/ProductViewer';
+import Model3DThumbnail from '../components/Model3DThumbnail';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 
@@ -44,10 +45,14 @@ export default function StoreFront() {
     const price = item.price !== undefined ? Number(item.price) : 99.00;
     addToCart({
       id: item.id,
+      baseId: item.id,
       name: (item.name || item.id).toUpperCase(),
       price: price,
       size: 'M',
-      image: item.imageUrl || item.image || '',
+      image: item.thumbnailUrl || item.imageUrl || item.image || '',
+      thumbnailUrl: item.thumbnailUrl || '',
+      modelUrl: item.gltf_url || item.modelUrl || item.model_url || item.glb_url || item.gltf_file_path || '',
+      category: item.category || 'Apparel',
       description: item.description || ''
     });
     setCartToast(`Added "${item.name || item.id}" to cart!`);
@@ -62,7 +67,6 @@ export default function StoreFront() {
     inventory.find(i => (i.video_url || i.videoUrl || i.video_file_path)) ||
     inventory[0] ||
     null;
-  const featuredPrice = featuredAsset?.price !== undefined ? Number(featuredAsset.price) : 99.00;
 
   // Resolve 3D Model and Video Download URLs for Featured Asset
   useEffect(() => {
@@ -381,26 +385,27 @@ export default function StoreFront() {
                     >
                       {/* Top Preview Canvas Card */}
                       <div>
-                        <div className="aspect-[4/3] rounded-lg bg-gradient-to-b from-[#111827] to-[#030712] border border-white/10 relative overflow-hidden flex items-center justify-center mb-4 group-hover:border-cyan-500/40 transition-colors">
-                          <div className="flex flex-col items-center gap-2 p-4 text-center">
-                            <span className="material-symbols-outlined text-4xl text-cyan-400/70 group-hover:text-cyan-300 group-hover:scale-110 transition-transform duration-500">
-                              view_in_ar
-                            </span>
-                            <span className="font-mono text-[10px] text-cyan-300 font-bold tracking-widest uppercase">
-                              3D GLB PREVIEW
-                            </span>
-                          </div>
+                        <div className="aspect-[4/3] rounded-lg bg-gradient-to-b from-[#111827] to-[#030712] border border-white/10 relative overflow-hidden mb-4 group-hover:border-cyan-500/40 transition-colors">
+                          <Model3DThumbnail
+                            modelUrl={item.gltf_url || item.modelUrl || item.gltf_file_path}
+                            fallbackImageUrl={item.imageUrl || item.image || item.target_image_url}
+                            category={item.category}
+                            cleanName={item.name || item.id}
+                            className="w-full h-full"
+                            aspectRatio="aspect-[4/3]"
+                            badge="3D GLB"
+                          />
 
                           {/* Hover Overlay: Click To Inspect In 3D */}
-                          <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-xs">
+                          <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-xs pointer-events-none">
                             <span className="px-3 py-1.5 rounded-full bg-white text-black font-label-caps text-[10px] tracking-widest font-bold shadow-lg flex items-center gap-1">
                               <span>INSPECT IN 3D</span>
                               <span className="material-symbols-outlined text-xs">arrow_forward</span>
                             </span>
                           </div>
 
-                          {/* Top Left Format Badges */}
-                          <div className="absolute top-2.5 left-2.5 flex flex-col gap-1">
+                          {/* Top Badges */}
+                          <div className="absolute top-2.5 right-2.5 flex flex-col gap-1 z-10 pointer-events-none">
                             {hasVideo && (
                               <span className="bg-purple-950/80 border border-purple-500/50 text-purple-300 text-[9px] font-mono px-1.5 py-0.5 rounded flex items-center gap-1">
                                 <span className="material-symbols-outlined text-[10px]">play_circle</span>

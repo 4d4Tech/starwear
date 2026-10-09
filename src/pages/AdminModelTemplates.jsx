@@ -12,6 +12,7 @@ import {
   getCategoryIcon,
   TEMPLATES_BUCKET_NAME
 } from '../utils/meshTemplates';
+import Model3DThumbnail from '../components/Model3DThumbnail';
 
 const formatFileSize = (bytes) => {
   if (!bytes && bytes !== 0) return '—';
@@ -537,9 +538,9 @@ export default function AdminModelTemplates() {
               <button
                 type="button"
                 onClick={() => setSourceFilter('all')}
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
                   sourceFilter === 'all'
-                    ? 'bg-primary/20 text-primary font-bold'
+                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 shadow-xs'
                     : 'text-secondary hover:text-on-surface'
                 }`}
               >
@@ -548,21 +549,21 @@ export default function AdminModelTemplates() {
               <button
                 type="button"
                 onClick={() => setSourceFilter('uploaded')}
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer flex items-center gap-1 ${
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5 ${
                   sourceFilter === 'uploaded'
-                    ? 'bg-emerald-500/20 text-emerald-600 font-bold'
+                    ? 'bg-emerald-100 text-emerald-950 border border-emerald-300 dark:bg-emerald-950 dark:text-emerald-200 dark:border-emerald-700 shadow-xs'
                     : 'text-secondary hover:text-on-surface'
                 }`}
               >
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400"></span>
                 <span>Custom ({metrics.uploadedCount})</span>
               </button>
               <button
                 type="button"
                 onClick={() => setSourceFilter('builtin')}
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
                   sourceFilter === 'builtin'
-                    ? 'bg-indigo-500/20 text-indigo-600 font-bold'
+                    ? 'bg-indigo-100 text-indigo-950 border border-indigo-300 dark:bg-indigo-950 dark:text-indigo-200 dark:border-indigo-700 shadow-xs'
                     : 'text-secondary hover:text-on-surface'
                 }`}
               >
@@ -647,44 +648,36 @@ export default function AdminModelTemplates() {
                     </span>
 
                     <div className="flex items-center gap-1">
-                      <span className="font-bold font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                      <span className="font-bold font-mono px-1.5 py-0.5 rounded bg-slate-200 text-slate-900 dark:bg-slate-800 dark:text-slate-100 border border-slate-300 dark:border-slate-700">
                         .{template.ext}
                       </span>
                       {isUploaded ? (
-                        <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 font-semibold flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-950 border border-emerald-300 dark:bg-emerald-950 dark:text-emerald-200 dark:border-emerald-700 font-bold flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400 animate-pulse"></span>
                           Custom
                         </span>
                       ) : (
-                        <span className="px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-600 border border-indigo-500/20 font-semibold">
+                        <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-950 border border-indigo-300 dark:bg-indigo-950 dark:text-indigo-200 dark:border-indigo-700 font-bold">
                           Bucket
                         </span>
                       )}
                     </div>
                   </div>
 
-                  {/* Thumbnail / 3D Icon Graphic */}
+                  {/* Thumbnail / 3D Model Representation */}
                   <div className="h-36 rounded-xl bg-surface-container-highest/50 border border-outline-variant/20 flex items-center justify-center relative overflow-hidden group-hover:border-primary/30 transition-colors">
-                    {template.thumbnailUrl ? (
-                      <img
-                        src={template.thumbnailUrl}
-                        alt={template.cleanName}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        onError={(e) => {
-                          e.target.style.display = 'none';
-                        }}
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center justify-center text-primary/80 group-hover:text-primary transition-colors">
-                        <span className="material-symbols-outlined text-5xl group-hover:scale-110 transition-transform duration-300">
-                          {template.icon}
-                        </span>
-                        <span className="text-[10px] font-mono text-secondary mt-1">3D Mesh</span>
-                      </div>
-                    )}
+                    <Model3DThumbnail
+                      modelUrl={template.url}
+                      fallbackImageUrl={template.thumbnailUrl}
+                      category={template.category}
+                      subcategory={template.subcategory}
+                      cleanName={template.cleanName}
+                      className="w-full h-full"
+                      badge={false}
+                    />
 
                     {template.isHumanoid && (
-                      <div className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-500/40 text-[9px] font-mono flex items-center gap-1">
+                      <div className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded bg-black/90 text-indigo-200 border border-indigo-400/60 text-[9px] font-mono font-bold flex items-center gap-1 shadow-sm z-20">
                         <span className="material-symbols-outlined text-xs">accessibility_new</span>
                         <span>Rig-Ready</span>
                       </div>
@@ -794,14 +787,17 @@ export default function AdminModelTemplates() {
                     <tr key={template.id} className="hover:bg-surface-container-highest/30 transition-colors">
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-lg bg-surface-container border border-outline-variant/30 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                            {template.thumbnailUrl ? (
-                              <img src={template.thumbnailUrl} alt={template.cleanName} className="w-full h-full object-cover" />
-                            ) : (
-                              <span className="material-symbols-outlined text-base text-primary">
-                                {template.icon}
-                              </span>
-                            )}
+                          <div className="w-10 h-10 rounded-lg bg-surface-container border border-outline-variant/30 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                            <Model3DThumbnail
+                              modelUrl={template.url}
+                              fallbackImageUrl={template.thumbnailUrl}
+                              category={template.category}
+                              subcategory={template.subcategory}
+                              cleanName={template.cleanName}
+                              className="w-full h-full"
+                              badge={false}
+                              interactiveOnHover={false}
+                            />
                           </div>
                           <div className="min-w-0">
                             <div className="font-bold text-on-background truncate max-w-xs">
@@ -829,12 +825,12 @@ export default function AdminModelTemplates() {
                       </td>
                       <td className="py-3 px-4">
                         {isUploaded ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-950 border border-emerald-300 dark:bg-emerald-950 dark:text-emerald-200 dark:border-emerald-700">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400"></span>
                             Custom
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-500/10 text-indigo-600 border border-indigo-500/20">
+                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-950 border border-indigo-300 dark:bg-indigo-950 dark:text-indigo-200 dark:border-indigo-700">
                             Built-in
                           </span>
                         )}
@@ -946,8 +942,15 @@ export default function AdminModelTemplates() {
 
                   {uploadFile ? (
                     <div className="flex items-center justify-center gap-3">
-                      <div className="w-12 h-12 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center">
-                        <span className="material-symbols-outlined text-2xl">check_circle</span>
+                      <div className="w-14 h-14 rounded-xl overflow-hidden bg-black/40 border border-emerald-500/40 flex items-center justify-center flex-shrink-0 shadow-md">
+                        <Model3DThumbnail
+                          modelUrl={uploadFile}
+                          cleanName={uploadFile.name}
+                          category={templateCategory}
+                          className="w-full h-full"
+                          badge={false}
+                          interactiveOnHover={false}
+                        />
                       </div>
                       <div className="text-left">
                         <p className="text-sm font-bold text-on-background">{uploadFile.name}</p>

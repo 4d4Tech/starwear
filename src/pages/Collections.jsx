@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import Header from '../components/Header';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import { usePaymentEnvironment } from '../context/PaymentEnvironmentContext';
+import Model3DThumbnail from '../components/Model3DThumbnail';
 
 export default function Collections() {
   const [products, setProducts] = useState([]);
@@ -16,7 +17,6 @@ export default function Collections() {
   const { addToCart } = useCart();
   const { isAdmin, isSuperAdmin } = useAuth();
   const { isSandboxMode, activeGateway } = usePaymentEnvironment();
-  const navigate = useNavigate();
 
   useEffect(() => {
     async function fetchCollections() {
@@ -44,10 +44,14 @@ export default function Collections() {
     const price = product.price !== undefined ? Number(product.price) : 99.00;
     addToCart({
       id: product.id,
+      baseId: product.id,
       name: (product.name || product.id).toUpperCase(),
       price: price,
       size: 'M',
-      image: product.imageUrl || product.image || '',
+      image: product.thumbnailUrl || product.imageUrl || product.image || '',
+      thumbnailUrl: product.thumbnailUrl || '',
+      modelUrl: product.gltf_url || product.modelUrl || product.model_url || product.glb_url || product.gltf_file_path || '',
+      category: product.category || 'Apparel',
       description: product.description || ''
     });
     setCartToast(`Added "${product.name || product.id}" to cart!`);
@@ -259,18 +263,19 @@ export default function Collections() {
                   return (
                     <article key={product.id} className="group cursor-pointer">
                       <Link to={`/product/${product.id}`}>
-                        <div className="relative aspect-[3/4] mb-5 overflow-hidden bg-gradient-to-b from-[#111827] to-[#030712] rounded-xl border border-white/10 group-hover:border-primary/60 transition-all flex items-center justify-center">
-                          <div className="text-center p-4">
-                            <span className="material-symbols-outlined text-4xl text-cyan-400/80 group-hover:scale-110 group-hover:text-cyan-300 transition-all duration-500">
-                              view_in_ar
-                            </span>
-                            <span className="block font-mono text-[10px] text-cyan-300 mt-2 font-bold tracking-widest uppercase">
-                              3D INTERACTIVE
-                            </span>
-                          </div>
+                        <div className="relative aspect-[3/4] mb-5 overflow-hidden bg-gradient-to-b from-[#111827] to-[#030712] rounded-xl border border-white/10 group-hover:border-primary/60 transition-all">
+                          <Model3DThumbnail
+                            modelUrl={product.glb_url || product.model_url || product.modelUrl || product.gltf_file_path}
+                            fallbackImageUrl={product.imageUrl || product.image || product.thumbnailUrl}
+                            category={product.category}
+                            cleanName={product.name || product.id}
+                            className="w-full h-full"
+                            aspectRatio="aspect-[3/4]"
+                            badge="3D ASSET"
+                          />
 
                           {/* Hover Action Overlay */}
-                          <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-xs">
+                          <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-xs pointer-events-none">
                             <span className="px-4 py-2 rounded-full bg-white text-black font-label-caps text-xs tracking-widest font-bold shadow-xl flex items-center gap-1.5">
                               <span>INSPECT IN 3D</span>
                               <span className="material-symbols-outlined text-sm">arrow_forward</span>
@@ -278,7 +283,7 @@ export default function Collections() {
                           </div>
 
                           {/* Badges */}
-                          <div className="absolute top-3 left-3 flex flex-col gap-1">
+                          <div className="absolute top-3 right-3 flex flex-col gap-1 z-10 pointer-events-none">
                             {hasMind && (
                               <div className="bg-emerald-950/80 backdrop-blur-md px-2 py-0.5 font-mono text-[9px] font-bold text-emerald-300 border border-emerald-500/40 rounded uppercase">
                                 AR READY

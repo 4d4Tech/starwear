@@ -30,30 +30,30 @@ const AdminLayout = () => {
         <div className="px-6 mb-8">
           <div className="flex items-center justify-between">
             <h1 className="font-headline-lg text-headline-lg-mobile text-primary tracking-widest">LUXE</h1>
-            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/20 text-primary uppercase">
+            <span className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-950 uppercase tracking-wider">
               {userType ? userType.toUpperCase() : (isSuperAdmin ? 'SUPERADMIN' : 'ADMIN')}
             </span>
           </div>
           <div className="flex items-center justify-between mt-2 pt-2 border-t border-outline-variant/30">
-            <p className="text-on-surface-variant text-[11px]">Payment Env:</p>
+            <p className="text-on-surface-variant text-[11px] font-medium">Payment Env:</p>
             <Link 
               to="/admin/settings"
-              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider uppercase transition-all shadow-sm ${
+              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider uppercase transition-all shadow-xs ${
                 isSandboxMode 
-                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40 hover:bg-amber-500/30' 
-                  : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 hover:bg-emerald-500/30'
+                  ? 'bg-amber-100 text-amber-950 border border-amber-300 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-700/60 hover:bg-amber-200' 
+                  : 'bg-emerald-100 text-emerald-950 border border-emerald-300 dark:bg-emerald-950 dark:text-emerald-200 dark:border-emerald-700/60 hover:bg-emerald-200'
               }`}
               title={`Active Payment Environment: ${isSandboxMode ? 'Sandbox (Admin Only)' : 'Live Production'}. Click to configure in Settings.`}
             >
-              <span className={`w-1.5 h-1.5 rounded-full ${isSandboxMode ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'}`}></span>
+              <span className={`w-1.5 h-1.5 rounded-full ${isSandboxMode ? 'bg-amber-600 dark:bg-amber-400 animate-pulse' : 'bg-emerald-600 dark:bg-emerald-400'}`}></span>
               <span>{isSandboxMode ? 'SANDBOX' : 'LIVE'}</span>
             </Link>
           </div>
           <div className="flex items-center justify-between mt-1">
-            <p className="text-on-surface-variant text-[11px]">Gateway:</p>
+            <p className="text-on-surface-variant text-[11px] font-medium">Gateway:</p>
             <Link 
               to="/admin/settings"
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider uppercase bg-primary/10 text-primary border border-primary/30 hover:bg-primary/20 transition-all shadow-sm"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-mono font-bold tracking-wider uppercase bg-slate-200 text-slate-900 border border-slate-300 hover:bg-slate-300 dark:bg-slate-800 dark:text-slate-100 dark:border-slate-700 transition-all shadow-xs"
               title={`Active Gateway: ${activeGateway ? activeGateway.toUpperCase() : 'PAYPAL'}. Click to configure in Settings.`}
             >
               <span>{activeGateway === 'both' ? 'MULTI' : (activeGateway ? activeGateway.toUpperCase() : 'PAYPAL')}</span>
@@ -88,6 +88,10 @@ const AdminLayout = () => {
               <span>ADMIN & ROLES</span>
             </Link>
           )}
+          <Link to="/admin/docs" className={getLinkClass('/admin/docs')}>
+            <span className="material-symbols-outlined">menu_book</span>
+            <span>DOCUMENTATION</span>
+          </Link>
           <Link to="/admin/settings" className={getLinkClass('/admin/settings')}>
             <span className="material-symbols-outlined">settings</span>
             <span>SETTINGS</span>

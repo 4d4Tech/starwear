@@ -139,10 +139,12 @@ const AdminDashboard = () => {
         {/* Total Revenue */}
         <div className="glass-panel p-6 rounded-xl flex flex-col justify-between h-40 border border-outline-variant/20 hover:border-primary/40 transition-all shadow-sm">
           <div className="flex justify-between items-start">
-            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase">TOTAL REVENUE</span>
+            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase font-semibold">TOTAL REVENUE</span>
             <span
               className={`text-xs font-bold font-mono px-2 py-0.5 rounded ${
-                data.revenueTrend >= 0 ? 'text-emerald-400 bg-emerald-950/40 border border-emerald-500/30' : 'text-rose-400 bg-rose-950/40 border border-rose-500/30'
+                data.revenueTrend >= 0 
+                  ? 'bg-emerald-100 text-emerald-950 border border-emerald-300 dark:bg-emerald-950/80 dark:text-emerald-200 dark:border-emerald-700/60' 
+                  : 'bg-rose-100 text-rose-950 border border-rose-300 dark:bg-rose-950/80 dark:text-rose-200 dark:border-rose-700/60'
               }`}
             >
               {data.revenueTrend >= 0 ? '+' : ''}
@@ -162,10 +164,12 @@ const AdminDashboard = () => {
         {/* Total Orders */}
         <div className="glass-panel p-6 rounded-xl flex flex-col justify-between h-40 border border-outline-variant/20 hover:border-primary/40 transition-all shadow-sm">
           <div className="flex justify-between items-start">
-            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase">TOTAL ORDERS</span>
+            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase font-semibold">TOTAL ORDERS</span>
             <span
               className={`text-xs font-bold font-mono px-2 py-0.5 rounded ${
-                data.ordersTrend >= 0 ? 'text-emerald-400 bg-emerald-950/40 border border-emerald-500/30' : 'text-rose-400 bg-rose-950/40 border border-rose-500/30'
+                data.ordersTrend >= 0 
+                  ? 'bg-emerald-100 text-emerald-950 border border-emerald-300 dark:bg-emerald-950/80 dark:text-emerald-200 dark:border-emerald-700/60' 
+                  : 'bg-rose-100 text-rose-950 border border-rose-300 dark:bg-rose-950/80 dark:text-rose-200 dark:border-rose-700/60'
               }`}
             >
               {data.ordersTrend >= 0 ? '+' : ''}
@@ -185,10 +189,12 @@ const AdminDashboard = () => {
         {/* Conversion Rate */}
         <div className="glass-panel p-6 rounded-xl flex flex-col justify-between h-40 border border-outline-variant/20 hover:border-primary/40 transition-all shadow-sm">
           <div className="flex justify-between items-start">
-            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase">CONVERSION RATE</span>
+            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase font-semibold">CONVERSION RATE</span>
             <span
               className={`text-xs font-bold font-mono px-2 py-0.5 rounded ${
-                data.conversionTrend >= 0 ? 'text-emerald-400 bg-emerald-950/40 border border-emerald-500/30' : 'text-rose-400 bg-rose-950/40 border border-rose-500/30'
+                data.conversionTrend >= 0 
+                  ? 'bg-emerald-100 text-emerald-950 border border-emerald-300 dark:bg-emerald-950/80 dark:text-emerald-200 dark:border-emerald-700/60' 
+                  : 'bg-rose-100 text-rose-950 border border-rose-300 dark:bg-rose-950/80 dark:text-rose-200 dark:border-rose-700/60'
               }`}
             >
               {data.conversionTrend >= 0 ? '+' : ''}
@@ -208,10 +214,12 @@ const AdminDashboard = () => {
         {/* Average Order Value */}
         <div className="glass-panel p-6 rounded-xl flex flex-col justify-between h-40 border border-outline-variant/20 hover:border-primary/40 transition-all shadow-sm">
           <div className="flex justify-between items-start">
-            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase">AVG ORDER VALUE</span>
+            <span className="font-label-caps text-xs text-secondary tracking-widest uppercase font-semibold">AVG ORDER VALUE</span>
             <span
               className={`text-xs font-bold font-mono px-2 py-0.5 rounded ${
-                data.aovTrend >= 0 ? 'text-emerald-400 bg-emerald-950/40 border border-emerald-500/30' : 'text-rose-400 bg-rose-950/40 border border-rose-500/30'
+                data.aovTrend >= 0 
+                  ? 'bg-emerald-100 text-emerald-950 border border-emerald-300 dark:bg-emerald-950/80 dark:text-emerald-200 dark:border-emerald-700/60' 
+                  : 'bg-rose-100 text-rose-950 border border-rose-300 dark:bg-rose-950/80 dark:text-rose-200 dark:border-rose-700/60'
               }`}
             >
               {data.aovTrend >= 0 ? '+' : ''}
@@ -341,8 +349,8 @@ const AdminDashboard = () => {
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase font-bold ${
                               order.status === 'paid'
-                                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                                : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                                ? 'bg-emerald-100 text-emerald-950 border border-emerald-300 dark:bg-emerald-950/80 dark:text-emerald-200 dark:border-emerald-700/60'
+                                : 'bg-amber-100 text-amber-950 border border-amber-300 dark:bg-amber-950/80 dark:text-amber-200 dark:border-amber-700/60'
                             }`}
                           >
                             {order.status}
@@ -393,14 +401,14 @@ const AdminDashboard = () => {
               >
                 <div className="flex items-center gap-3.5 min-w-0">
                   <div
-                    className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                    className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 font-bold ${
                       alert.type === 'error'
-                        ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                        ? 'bg-rose-100 text-rose-900 border border-rose-300 dark:bg-rose-950/60 dark:text-rose-200 dark:border-rose-800'
                         : alert.type === 'warning'
-                        ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                        ? 'bg-amber-100 text-amber-900 border border-amber-300 dark:bg-amber-950/60 dark:text-amber-200 dark:border-amber-800'
                         : alert.type === 'success'
-                        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                        : 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30'
+                        ? 'bg-emerald-100 text-emerald-900 border border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-200 dark:border-emerald-800'
+                        : 'bg-cyan-100 text-cyan-900 border border-cyan-300 dark:bg-cyan-950/60 dark:text-cyan-200 dark:border-cyan-800'
                     }`}
                   >
                     <span className="material-symbols-outlined text-lg">
@@ -419,12 +427,12 @@ const AdminDashboard = () => {
                     <span
                       className={`inline-block mt-1 text-[10px] font-mono font-bold tracking-wider uppercase px-2 py-0.5 rounded ${
                         alert.type === 'error'
-                          ? 'bg-rose-500/20 text-rose-300'
+                          ? 'bg-rose-100 text-rose-950 border border-rose-300 dark:bg-rose-950/80 dark:text-rose-200 dark:border-rose-800'
                           : alert.type === 'warning'
-                          ? 'bg-amber-500/20 text-amber-300'
+                          ? 'bg-amber-100 text-amber-950 border border-amber-300 dark:bg-amber-950/80 dark:text-amber-200 dark:border-amber-800'
                           : alert.type === 'success'
-                          ? 'bg-emerald-500/20 text-emerald-300'
-                          : 'bg-cyan-500/20 text-cyan-300'
+                          ? 'bg-emerald-100 text-emerald-950 border border-emerald-300 dark:bg-emerald-950/80 dark:text-emerald-200 dark:border-emerald-800'
+                          : 'bg-cyan-100 text-cyan-950 border border-cyan-300 dark:bg-cyan-950/80 dark:text-cyan-200 dark:border-cyan-800'
                       }`}
                     >
                       {alert.badge}

@@ -89,13 +89,13 @@ const AdminSettings = () => {
 
             {/* Current Environment Badge */}
             <div className="flex items-center gap-2">
-              <span className={`px-3 py-1.5 rounded-full text-xs font-mono font-bold tracking-wider uppercase border flex items-center gap-1.5 shadow-sm ${
+              <span className={`px-3 py-1.5 rounded-full text-xs font-mono font-bold tracking-wider uppercase border flex items-center gap-1.5 shadow-xs ${
                 adminSettingEnv === 'sandbox'
-                  ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
-                  : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                  ? 'bg-amber-100 text-amber-950 border-amber-300 dark:bg-amber-950/80 dark:text-amber-200 dark:border-amber-700/60'
+                  : 'bg-emerald-100 text-emerald-950 border-emerald-300 dark:bg-emerald-950/80 dark:text-emerald-200 dark:border-emerald-700/60'
               }`}>
                 <span className={`w-2 h-2 rounded-full ${
-                  adminSettingEnv === 'sandbox' ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400'
+                  adminSettingEnv === 'sandbox' ? 'bg-amber-600 dark:bg-amber-400 animate-pulse' : 'bg-emerald-600 dark:bg-emerald-400'
                 }`}></span>
                 <span>{adminSettingEnv === 'sandbox' ? 'SANDBOX ACTIVE' : 'LIVE PRODUCTION'}</span>
               </span>
@@ -111,21 +111,21 @@ const AdminSettings = () => {
               onClick={() => handleEnvironmentChange('sandbox')}
               className={`p-6 rounded-xl border text-left transition-all cursor-pointer relative overflow-hidden group ${
                 adminSettingEnv === 'sandbox'
-                  ? 'bg-amber-950/20 border-amber-500 text-amber-200 ring-1 ring-amber-500/40 shadow-lg'
+                  ? 'bg-amber-50 border-amber-500 text-amber-950 dark:bg-amber-950/40 dark:border-amber-500 dark:text-amber-100 ring-2 ring-amber-500/40 shadow-lg'
                   : 'bg-surface-variant/20 border-outline-variant/30 hover:border-outline-variant/60 text-secondary hover:text-on-background'
               }`}
             >
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2.5">
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-                    adminSettingEnv === 'sandbox' ? 'bg-amber-500/20 text-amber-400' : 'bg-surface-variant text-secondary'
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold ${
+                    adminSettingEnv === 'sandbox' ? 'bg-amber-200 text-amber-950 dark:bg-amber-900/60 dark:text-amber-200' : 'bg-surface-variant text-secondary'
                   }`}>
                     <span className="material-symbols-outlined text-lg">science</span>
                   </div>
                   <span className="font-bold text-base text-on-background font-mono">SANDBOX</span>
                 </div>
                 {adminSettingEnv === 'sandbox' && (
-                  <span className="material-symbols-outlined text-amber-400 text-xl">check_circle</span>
+                  <span className="material-symbols-outlined text-amber-600 dark:text-amber-400 text-xl font-bold">check_circle</span>
                 )}
               </div>
               <p className="text-xs text-secondary leading-relaxed">
@@ -140,21 +140,21 @@ const AdminSettings = () => {
               onClick={() => handleEnvironmentChange('live')}
               className={`p-6 rounded-xl border text-left transition-all cursor-pointer relative overflow-hidden group ${
                 adminSettingEnv === 'live'
-                  ? 'bg-emerald-950/20 border-emerald-500 text-emerald-200 ring-1 ring-emerald-500/40 shadow-lg'
+                  ? 'bg-emerald-50 border-emerald-500 text-emerald-950 dark:bg-emerald-950/40 dark:border-emerald-500 dark:text-emerald-100 ring-2 ring-emerald-500/40 shadow-lg'
                   : 'bg-surface-variant/20 border-outline-variant/30 hover:border-outline-variant/60 text-secondary hover:text-on-background'
               }`}
             >
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2.5">
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-                    adminSettingEnv === 'live' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-surface-variant text-secondary'
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold ${
+                    adminSettingEnv === 'live' ? 'bg-emerald-200 text-emerald-950 dark:bg-emerald-900/60 dark:text-emerald-200' : 'bg-surface-variant text-secondary'
                   }`}>
                     <span className="material-symbols-outlined text-lg">verified</span>
                   </div>
                   <span className="font-bold text-base text-on-background font-mono">LIVE PRODUCTION</span>
                 </div>
                 {adminSettingEnv === 'live' && (
-                  <span className="material-symbols-outlined text-emerald-400 text-xl">check_circle</span>
+                  <span className="material-symbols-outlined text-emerald-600 dark:text-emerald-400 text-xl font-bold">check_circle</span>
                 )}
               </div>
               <p className="text-xs text-secondary leading-relaxed">
@@ -164,13 +164,13 @@ const AdminSettings = () => {
           </div>
 
           {/* Role Security Callout */}
-          <div className="p-4 rounded-xl bg-blue-950/20 border border-blue-500/30 flex items-start gap-3.5 text-xs text-blue-200">
-            <span className="material-symbols-outlined text-blue-400 text-xl flex-shrink-0 mt-0.5">shield</span>
+          <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-950 dark:bg-blue-950/40 dark:border-blue-800/60 dark:text-blue-100 flex items-start gap-3.5 text-xs">
+            <span className="material-symbols-outlined text-blue-700 dark:text-blue-400 text-xl flex-shrink-0 mt-0.5">shield</span>
             <div className="space-y-1">
-              <p className="font-bold text-blue-300 font-mono uppercase tracking-wide">
+              <p className="font-bold text-blue-900 dark:text-blue-200 font-mono uppercase tracking-wide">
                 Role-Based Sandbox Isolation
               </p>
-              <p className="text-blue-200/80 leading-relaxed font-body-sm">
+              <p className="text-blue-950 dark:text-blue-100/90 leading-relaxed font-body-sm">
                 Only authenticated <strong>Admin</strong> and <strong>Superadmin</strong> accounts can activate and view Sandbox mode. Every other user, including all guest visitors and regular customer accounts, stays strictly locked in <strong>Live</strong> mode so customer checkout is never interrupted.
               </p>
             </div>
@@ -195,8 +195,8 @@ const AdminSettings = () => {
 
             {/* Current Gateway Badge */}
             <div className="flex items-center gap-2">
-              <span className="px-3 py-1.5 rounded-full text-xs font-mono font-bold tracking-wider uppercase border border-primary/30 bg-primary/10 text-primary flex items-center gap-1.5 shadow-sm">
-                <span className="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+              <span className="px-3 py-1.5 rounded-full text-xs font-mono font-bold tracking-wider uppercase border border-slate-300 dark:border-slate-700 bg-slate-100 text-slate-900 dark:bg-slate-900 dark:text-slate-100 flex items-center gap-1.5 shadow-xs">
+                <span className="w-2 h-2 rounded-full bg-slate-700 dark:bg-slate-300 animate-pulse"></span>
                 <span>
                   {activeGateway === 'both' ? 'MULTI-GATEWAY (PAYPAL + STRIPE)' : `${activeGateway.toUpperCase()} ACTIVE`}
                 </span>
@@ -213,24 +213,24 @@ const AdminSettings = () => {
               onClick={() => handleGatewayChange('paypal')}
               className={`p-6 rounded-xl border text-left transition-all cursor-pointer relative overflow-hidden group ${
                 activeGateway === 'paypal'
-                  ? 'bg-blue-950/25 border-blue-500 text-blue-200 ring-1 ring-blue-500/40 shadow-lg'
+                  ? 'bg-blue-50 border-blue-500 text-blue-950 dark:bg-blue-950/40 dark:border-blue-500 dark:text-blue-100 ring-2 ring-blue-500/40 shadow-lg'
                   : 'bg-surface-variant/20 border-outline-variant/30 hover:border-outline-variant/60 text-secondary hover:text-on-background'
               }`}
             >
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2.5">
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-                    activeGateway === 'paypal' ? 'bg-blue-500/20 text-blue-400' : 'bg-surface-variant text-secondary'
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold ${
+                    activeGateway === 'paypal' ? 'bg-blue-200 text-blue-950 dark:bg-blue-900/60 dark:text-blue-200' : 'bg-surface-variant text-secondary'
                   }`}>
                     <span className="material-symbols-outlined text-xl">account_balance_wallet</span>
                   </div>
                   <div>
                     <h4 className="font-bold text-base text-on-background font-mono">PAYPAL</h4>
-                    <span className="text-[10px] font-mono text-emerald-400">CREDENTIALS IN .ENV</span>
+                    <span className="text-[10px] font-mono text-emerald-800 dark:text-emerald-300 font-bold">CREDENTIALS IN .ENV</span>
                   </div>
                 </div>
                 {activeGateway === 'paypal' && (
-                  <span className="material-symbols-outlined text-blue-400 text-xl">check_circle</span>
+                  <span className="material-symbols-outlined text-blue-600 dark:text-blue-400 text-xl font-bold">check_circle</span>
                 )}
               </div>
               <p className="text-xs text-secondary leading-relaxed">
@@ -245,24 +245,24 @@ const AdminSettings = () => {
               onClick={() => handleGatewayChange('stripe')}
               className={`p-6 rounded-xl border text-left transition-all cursor-pointer relative overflow-hidden group ${
                 activeGateway === 'stripe'
-                  ? 'bg-indigo-950/25 border-indigo-500 text-indigo-200 ring-1 ring-indigo-500/40 shadow-lg'
+                  ? 'bg-indigo-50 border-indigo-500 text-indigo-950 dark:bg-indigo-950/40 dark:border-indigo-500 dark:text-indigo-100 ring-2 ring-indigo-500/40 shadow-lg'
                   : 'bg-surface-variant/20 border-outline-variant/30 hover:border-outline-variant/60 text-secondary hover:text-on-background'
               }`}
             >
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2.5">
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-                    activeGateway === 'stripe' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-surface-variant text-secondary'
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold ${
+                    activeGateway === 'stripe' ? 'bg-indigo-200 text-indigo-950 dark:bg-indigo-900/60 dark:text-indigo-200' : 'bg-surface-variant text-secondary'
                   }`}>
                     <span className="material-symbols-outlined text-xl">credit_card</span>
                   </div>
                   <div>
                     <h4 className="font-bold text-base text-on-background font-mono">STRIPE</h4>
-                    <span className="text-[10px] font-mono text-emerald-400">CREDENTIALS IN .ENV</span>
+                    <span className="text-[10px] font-mono text-emerald-800 dark:text-emerald-300 font-bold">CREDENTIALS IN .ENV</span>
                   </div>
                 </div>
                 {activeGateway === 'stripe' && (
-                  <span className="material-symbols-outlined text-indigo-400 text-xl">check_circle</span>
+                  <span className="material-symbols-outlined text-indigo-600 dark:text-indigo-400 text-xl font-bold">check_circle</span>
                 )}
               </div>
               <p className="text-xs text-secondary leading-relaxed">
@@ -277,24 +277,24 @@ const AdminSettings = () => {
               onClick={() => handleGatewayChange('both')}
               className={`p-6 rounded-xl border text-left transition-all cursor-pointer relative overflow-hidden group ${
                 activeGateway === 'both'
-                  ? 'bg-purple-950/25 border-purple-500 text-purple-200 ring-1 ring-purple-500/40 shadow-lg'
+                  ? 'bg-purple-50 border-purple-500 text-purple-950 dark:bg-purple-950/40 dark:border-purple-500 dark:text-purple-100 ring-2 ring-purple-500/40 shadow-lg'
                   : 'bg-surface-variant/20 border-outline-variant/30 hover:border-outline-variant/60 text-secondary hover:text-on-background'
               }`}
             >
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2.5">
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
-                    activeGateway === 'both' ? 'bg-purple-500/20 text-purple-400' : 'bg-surface-variant text-secondary'
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold ${
+                    activeGateway === 'both' ? 'bg-purple-200 text-purple-950 dark:bg-purple-900/60 dark:text-purple-200' : 'bg-surface-variant text-secondary'
                   }`}>
                     <span className="material-symbols-outlined text-xl">hub</span>
                   </div>
                   <div>
                     <h4 className="font-bold text-base text-on-background font-mono">MULTI-GATEWAY</h4>
-                    <span className="text-[10px] font-mono text-purple-300">PAYPAL & STRIPE</span>
+                    <span className="text-[10px] font-mono text-purple-800 dark:text-purple-300 font-bold">PAYPAL & STRIPE</span>
                   </div>
                 </div>
                 {activeGateway === 'both' && (
-                  <span className="material-symbols-outlined text-purple-400 text-xl">check_circle</span>
+                  <span className="material-symbols-outlined text-purple-600 dark:text-purple-400 text-xl font-bold">check_circle</span>
                 )}
               </div>
               <p className="text-xs text-secondary leading-relaxed">
@@ -313,10 +313,10 @@ const AdminSettings = () => {
               <div className="p-4 rounded-xl bg-surface-variant/20 border border-outline-variant/20 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-on-background flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-blue-400 text-sm">account_balance_wallet</span>
+                    <span className="material-symbols-outlined text-blue-600 dark:text-blue-400 text-sm">account_balance_wallet</span>
                     <span>PayPal Gateway</span>
                   </span>
-                  <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-950 dark:bg-emerald-950 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700/60">
                     Connected
                   </span>
                 </div>
@@ -327,11 +327,11 @@ const AdminSettings = () => {
                   </div>
                   <div className="flex justify-between">
                     <span>Secret Key:</span>
-                    <span className="text-emerald-400">•••••••• Configured (.env)</span>
+                    <span className="text-emerald-700 dark:text-emerald-400 font-semibold">•••••••• Configured (.env)</span>
                   </div>
                   <div className="flex justify-between">
                     <span>Default Mode:</span>
-                    <span className="text-amber-400 uppercase font-bold">Sandbox</span>
+                    <span className="text-amber-800 dark:text-amber-300 uppercase font-bold">Sandbox</span>
                   </div>
                 </div>
               </div>
@@ -340,10 +340,10 @@ const AdminSettings = () => {
               <div className="p-4 rounded-xl bg-surface-variant/20 border border-outline-variant/20 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-on-background flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-indigo-400 text-sm">credit_card</span>
+                    <span className="material-symbols-outlined text-indigo-600 dark:text-indigo-400 text-sm">credit_card</span>
                     <span>Stripe Gateway</span>
                   </span>
-                  <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-950 dark:bg-emerald-950 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-700/60">
                     Connected
                   </span>
                 </div>
@@ -354,7 +354,7 @@ const AdminSettings = () => {
                   </div>
                   <div className="flex justify-between">
                     <span>Secret Key:</span>
-                    <span className="text-emerald-400">•••••••• Configured (.env)</span>
+                    <span className="text-emerald-700 dark:text-emerald-400 font-semibold">•••••••• Configured (.env)</span>
                   </div>
                   <div className="flex justify-between">
                     <span>Default Currency:</span>

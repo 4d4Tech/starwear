@@ -456,10 +456,10 @@ export default function SuperadminUserManager() {
                         <div className="flex items-center gap-3">
                           <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs uppercase ${
                             role === 'superadmin'
-                              ? 'bg-purple-500/20 text-purple-400 border border-purple-500/40'
+                              ? 'bg-purple-100 text-purple-950 border border-purple-300 dark:bg-purple-950 dark:text-purple-200 dark:border-purple-800'
                               : role === 'creator' || role === 'creater'
-                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                              : 'bg-sky-500/20 text-sky-400 border border-sky-500/40'
+                              ? 'bg-emerald-100 text-emerald-950 border border-emerald-300 dark:bg-emerald-950 dark:text-emerald-200 dark:border-emerald-800'
+                              : 'bg-sky-100 text-sky-950 border border-sky-300 dark:bg-sky-950 dark:text-sky-200 dark:border-sky-800'
                           }`}>
                             {(u.displayName || u.email || 'A').charAt(0)}
                           </div>
@@ -467,7 +467,7 @@ export default function SuperadminUserManager() {
                             <div className="font-bold text-on-background truncate flex items-center gap-1.5">
                               <span>{u.displayName || u.email?.split('@')[0]}</span>
                               {isOwner && (
-                                <span className="px-1.5 py-0.2 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[9px] uppercase font-bold">
+                                <span className="px-1.5 py-0.5 rounded bg-amber-100 border border-amber-300 text-amber-950 dark:bg-amber-950 dark:border-amber-800 dark:text-amber-200 text-[9px] uppercase font-extrabold">
                                   Owner
                                 </span>
                               )}
@@ -482,7 +482,7 @@ export default function SuperadminUserManager() {
                       {/* Role Selector Badge */}
                       <td className="py-3.5 px-4">
                         {isOwner ? (
-                          <span className="px-2.5 py-1 rounded-full bg-purple-950/60 border border-purple-500/50 text-purple-300 font-bold text-[10px] uppercase">
+                          <span className="px-2.5 py-1 rounded-full bg-purple-100 border border-purple-300 text-purple-950 dark:bg-purple-950 dark:border-purple-800 dark:text-purple-200 font-bold text-[10px] uppercase">
                             SUPERADMIN (LOCKED)
                           </span>
                         ) : (
@@ -491,12 +491,12 @@ export default function SuperadminUserManager() {
                             onChange={(e) => handleRoleChange(u, e.target.value)}
                             className={`px-2.5 py-1 rounded-lg border font-bold text-[10px] uppercase outline-none cursor-pointer transition-colors ${
                               role === 'superadmin'
-                                ? 'bg-purple-950/40 border-purple-500/50 text-purple-300'
+                                ? 'bg-purple-100 border-purple-300 text-purple-950 dark:bg-purple-950/80 dark:border-purple-700 dark:text-purple-200'
                                 : role === 'creator' || role === 'creater'
-                                ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300'
+                                ? 'bg-emerald-100 border-emerald-300 text-emerald-950 dark:bg-emerald-950/80 dark:border-emerald-700 dark:text-emerald-200'
                                 : role === 'admin'
-                                ? 'bg-sky-950/40 border-sky-500/50 text-sky-300'
-                                : 'bg-surface-variant border-outline-variant text-secondary'
+                                ? 'bg-sky-100 border-sky-300 text-sky-950 dark:bg-sky-950/80 dark:border-sky-700 dark:text-sky-200'
+                                : 'bg-surface-variant border-outline-variant text-on-surface'
                             }`}
                           >
                             <option value="superadmin">Superadmin</option>
@@ -518,12 +518,12 @@ export default function SuperadminUserManager() {
                       {/* Studio 4D4 & AR Access Indicator */}
                       <td className="py-3.5 px-4">
                         {canStudio ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 border border-emerald-300 text-emerald-950 dark:bg-emerald-950 dark:border-emerald-700 dark:text-emerald-200 text-[10px] font-bold">
                             <span className="material-symbols-outlined text-[11px]">check_circle</span>
                             <span>Enabled</span>
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 text-[10px]">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-200 border border-slate-300 text-slate-800 dark:bg-zinc-800 dark:border-zinc-700 dark:text-zinc-300 text-[10px] font-semibold">
                             <span className="material-symbols-outlined text-[11px]">block</span>
                             <span>Hidden</span>
                           </span>
