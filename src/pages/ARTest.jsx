@@ -13,7 +13,7 @@ if (typeof THREE !== 'undefined' && THREE.Cache) {
 }
 import { httpsCallable } from 'firebase/functions';
 import { logEvent } from 'firebase/analytics';
-import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfaceFrame, purgeAllSceneVideoLayers } from '../utils/aframe-components';
+import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfaceFrame, purgeAllSceneVideoLayers, PORTAL_PRESETS } from '../utils/aframe-components';
 
 // =========================================================================
 // 1. REUSABLE TYPED SLIDER CONTROL WITH DUAL-WAY DATA BINDING
@@ -772,6 +772,7 @@ const ARTest = () => {
   const [uploadProgress, setUploadProgress] = useState('');
   const [saveSuccessMsg, setSaveSuccessMsg] = useState('');
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [isLaunchingAR, setIsLaunchingAR] = useState(false);
 
   // Camera Target Tracking & Precision States (MindAR)
   const [trackingFilterMinCF, setTrackingFilterMinCF] = useState(0.0005);
@@ -816,6 +817,202 @@ const ARTest = () => {
       setTrackingWarmupTolerance(2);
       setTrackingMaxTrack(1);
     }
+  };
+
+  // =========================================================================
+  // AR PORTAL & VIRTUAL WINDOW CONFIGURATION STATES
+  // =========================================================================
+  const [portalEnabled, setPortalEnabled] = useState(false);
+  const [portalPreset, setPortalPreset] = useState('cosmic-nebula');
+  const [portalShape, setPortalShape] = useState('arch'); // 'arch' | 'rectangle' | 'circle' | 'hexagon'
+  const [portalWidth, setPortalWidth] = useState(1.1);
+  const [portalHeight, setPortalHeight] = useState(1.8);
+  const [portalRadius, setPortalRadius] = useState(0.7);
+  const [portalDepth, setPortalDepth] = useState(3.5);
+
+  // Portal Frame & Window Trim
+  const [portalFrameColor, setPortalFrameColor] = useState('#38bdf8');
+  const [portalFrameWidth, setPortalFrameWidth] = useState(0.08);
+  const [portalFrameEmissive, setPortalFrameEmissive] = useState('#0284c7');
+  const [portalFrameEmissiveIntensity, setPortalFrameEmissiveIntensity] = useState(1.5);
+  const [portalFrameGlow, setPortalFrameGlow] = useState(true);
+  const [portalGlassTint, setPortalGlassTint] = useState('#38bdf8');
+  const [portalGlassOpacity, setPortalGlassOpacity] = useState(0.05);
+
+  // Portal 3D Transform (Placement & Orientation)
+  const [portalPosX, setPortalPosX] = useState(0.0);
+  const [portalPosY, setPortalPosY] = useState(0.0);
+  const [portalPosZ, setPortalPosZ] = useState(0.0);
+  const [portalRotX, setPortalRotX] = useState(0);
+  const [portalRotY, setPortalRotY] = useState(0);
+  const [portalRotZ, setPortalRotZ] = useState(0);
+
+  // Portal Interior Environment (What goes inside the virtual window)
+  const [portalInteriorType, setPortalInteriorType] = useState('nebula'); // 'nebula' | 'starfield' | 'grid-room' | 'matrix' | 'skybox' | 'void'
+  const [portalSkyboxUrl, setPortalSkyboxUrl] = useState('');
+  const [portalInteriorColor, setPortalInteriorColor] = useState('#050714');
+  const [portalWallColor, setPortalWallColor] = useState('#0f172a');
+  const [portalFloorColor, setPortalFloorColor] = useState('#020617');
+  const [portalGridColor, setPortalGridColor] = useState('#38bdf8');
+  const [portalLightColor, setPortalLightColor] = useState('#e0f2fe');
+  const [portalLightIntensity, setPortalLightIntensity] = useState(2.0);
+
+  // Portal Interior 3D Object / Content
+  const [portalModelType, setPortalModelType] = useState('artifact'); // 'artifact' | 'current-product' | 'custom-glb' | 'none'
+  const [portalArtifactType, setPortalArtifactType] = useState('crystal'); // 'crystal' | 'cyber-core' | 'star-emblem' | 'pedestal'
+  const [portalCustomModelUrl, setPortalCustomModelUrl] = useState('');
+  const [portalModelScale, setPortalModelScale] = useState(0.4);
+  const [portalModelPosX, setPortalModelPosX] = useState(0.0);
+  const [portalModelPosY, setPortalModelPosY] = useState(0.0);
+  const [portalModelPosZ, setPortalModelPosZ] = useState(-1.3);
+  const [portalModelRotSpeed, setPortalModelRotSpeed] = useState(6000);
+  const [portalModelRotX, setPortalModelRotX] = useState(0);
+  const [portalModelRotY, setPortalModelRotY] = useState(0);
+  const [portalModelRotZ, setPortalModelRotZ] = useState(0);
+
+  // Portal Interior Floating Video Screen
+  const [portalShowVideo, setPortalShowVideo] = useState(false);
+  const [portalVideoUrl, setPortalVideoUrl] = useState('');
+  const [portalVideoScale, setPortalVideoScale] = useState(1.0);
+  const [portalVideoPosY, setPortalVideoPosY] = useState(0.0);
+  const [portalVideoPosZ, setPortalVideoPosZ] = useState(-1.8);
+
+  // Portal Interior Particle FX
+  const [portalParticles, setPortalParticles] = useState('stars'); // 'stars' | 'embers' | 'cyber' | 'none'
+  const [portalParticleCount, setPortalParticleCount] = useState(180);
+  const [portalParticleColor, setPortalParticleColor] = useState('#38bdf8');
+  const [portalParticleSpeed, setPortalParticleSpeed] = useState(1.0);
+
+  // Portal Floating 3D Text Banner
+  const [portalFloatingText, setPortalFloatingText] = useState('STAR weAR');
+  const [portalTextColor, setPortalTextColor] = useState('#38bdf8');
+  const [portalTextScale, setPortalTextScale] = useState(1.0);
+  const [portalTextPosY, setPortalTextPosY] = useState(0.65);
+  const [portalTextPosZ, setPortalTextPosZ] = useState(-1.2);
+
+  // Base Outside Model Visibility
+  const [portalHideOutsideModel, setPortalHideOutsideModel] = useState(false);
+
+  // Staged Local Files for Portal
+  const [selectedPortalSkyboxFile, setSelectedPortalSkyboxFile] = useState(null);
+  const [selectedPortalGlbFile, setSelectedPortalGlbFile] = useState(null);
+
+  const applyPortalPreset = (presetKey) => {
+    setPortalPreset(presetKey);
+    const p = PORTAL_PRESETS[presetKey];
+    if (!p) return;
+    if (p.shape !== undefined) setPortalShape(p.shape);
+    if (p.width !== undefined) setPortalWidth(p.width);
+    if (p.height !== undefined) setPortalHeight(p.height);
+    if (p.radius !== undefined) setPortalRadius(p.radius);
+    if (p.depth !== undefined) setPortalDepth(p.depth);
+    if (p.frameColor !== undefined) setPortalFrameColor(p.frameColor);
+    if (p.frameWidth !== undefined) setPortalFrameWidth(p.frameWidth);
+    if (p.frameEmissive !== undefined) setPortalFrameEmissive(p.frameEmissive);
+    if (p.frameEmissiveIntensity !== undefined) setPortalFrameEmissiveIntensity(p.frameEmissiveIntensity);
+    if (p.frameGlow !== undefined) setPortalFrameGlow(p.frameGlow);
+    if (p.interiorType !== undefined) setPortalInteriorType(p.interiorType);
+    if (p.skyboxUrl !== undefined) setPortalSkyboxUrl(p.skyboxUrl);
+    if (p.interiorColor !== undefined) setPortalInteriorColor(p.interiorColor);
+    if (p.wallColor !== undefined) setPortalWallColor(p.wallColor);
+    if (p.floorColor !== undefined) setPortalFloorColor(p.floorColor);
+    if (p.gridColor !== undefined) setPortalGridColor(p.gridColor);
+    if (p.interiorLightColor !== undefined) setPortalLightColor(p.interiorLightColor);
+    if (p.interiorLightIntensity !== undefined) setPortalLightIntensity(p.interiorLightIntensity);
+    if (p.interiorModelType !== undefined) setPortalModelType(p.interiorModelType);
+    if (p.artifactType !== undefined) setPortalArtifactType(p.artifactType);
+    if (p.modelScale !== undefined) setPortalModelScale(p.modelScale);
+    if (p.modelPosX !== undefined) setPortalModelPosX(p.modelPosX);
+    if (p.modelPosY !== undefined) setPortalModelPosY(p.modelPosY);
+    if (p.modelPosZ !== undefined) setPortalModelPosZ(p.modelPosZ);
+    if (p.modelRotSpeed !== undefined) setPortalModelRotSpeed(p.modelRotSpeed);
+    if (p.showVideo !== undefined) setPortalShowVideo(p.showVideo);
+    if (p.particles !== undefined) setPortalParticles(p.particles);
+    if (p.particleCount !== undefined) setPortalParticleCount(p.particleCount);
+    if (p.particleColor !== undefined) setPortalParticleColor(p.particleColor);
+    if (p.particleSpeed !== undefined) setPortalParticleSpeed(p.particleSpeed);
+    if (p.floatingText !== undefined) setPortalFloatingText(p.floatingText);
+    if (p.textColor !== undefined) setPortalTextColor(p.textColor);
+  };
+
+  const handleTogglePortal = (enable) => {
+    setPortalEnabled(enable);
+    if (enable) {
+      const hasSceneModel = Boolean(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath);
+      // When an existing model is already loaded in the scene and portal is at origin, offset it behind the model as a backdrop addition
+      if (hasSceneModel && portalPosX === 0 && portalPosY === 0 && portalPosZ === 0) {
+        setPortalPosX(Number(modelPosX) || 0);
+        setPortalPosY(Number((modelPosY + 0.1).toFixed(2)) || 0.1);
+        setPortalPosZ(Number((modelPosZ - Math.max(0.6, modelScale * 0.8)).toFixed(2)) || -0.9);
+        setPortalWidth(Math.max(1.1, Number((modelScale * 1.5).toFixed(2))));
+        setPortalHeight(Math.max(1.8, Number((modelScale * 2.2).toFixed(2))));
+      }
+      setPortalHideOutsideModel(false);
+    }
+  };
+
+  const handleApplyPortalPlacementPreset = (presetKey) => {
+    if (!portalEnabled) setPortalEnabled(true);
+
+    if (presetKey === 'behind') {
+      setPortalHideOutsideModel(false);
+      setPortalPosX(Number(modelPosX) || 0);
+      setPortalPosY(Number((modelPosY + 0.1).toFixed(2)) || 0.1);
+      setPortalPosZ(Number((modelPosZ - Math.max(0.6, modelScale * 0.8)).toFixed(2)) || -0.9);
+      setPortalRotX(0);
+      setPortalRotY(0);
+      setPortalRotZ(0);
+    } else if (presetKey === 'left') {
+      setPortalHideOutsideModel(false);
+      setPortalPosX(Number((modelPosX - Math.max(0.8, modelScale * 1.2)).toFixed(2)) || -0.95);
+      setPortalPosY(Number((modelPosY + 0.05).toFixed(2)) || 0.05);
+      setPortalPosZ(Number(modelPosZ) || 0.0);
+      setPortalRotX(0);
+      setPortalRotY(25);
+      setPortalRotZ(0);
+    } else if (presetKey === 'right') {
+      setPortalHideOutsideModel(false);
+      setPortalPosX(Number((modelPosX + Math.max(0.8, modelScale * 1.2)).toFixed(2)) || 0.95);
+      setPortalPosY(Number((modelPosY + 0.05).toFixed(2)) || 0.05);
+      setPortalPosZ(Number(modelPosZ) || 0.0);
+      setPortalRotX(0);
+      setPortalRotY(-25);
+      setPortalRotZ(0);
+    } else if (presetKey === 'ground') {
+      setPortalHideOutsideModel(false);
+      setPortalPosX(Number(modelPosX) || 0);
+      setPortalPosY(Number((modelPosY - Math.max(0.4, modelScale * 0.5)).toFixed(2)) || -0.45);
+      setPortalPosZ(Number(modelPosZ) || 0);
+      setPortalRotX(-90);
+      setPortalRotY(0);
+      setPortalRotZ(0);
+    } else if (presetKey === 'center') {
+      setPortalHideOutsideModel(false);
+      setPortalPosX(Number(modelPosX) || 0);
+      setPortalPosY(Number(modelPosY) || 0);
+      setPortalPosZ(Number(modelPosZ) || 0);
+      setPortalRotX(0);
+      setPortalRotY(0);
+      setPortalRotZ(0);
+    } else if (presetKey === 'inside') {
+      setPortalHideOutsideModel(true);
+      setPortalModelType('current-product');
+      setPortalPosX(0);
+      setPortalPosY(0);
+      setPortalPosZ(0);
+      setPortalModelPosZ(-1.3);
+    }
+  };
+
+  const handleApplyPresetWithSceneCheck = (presetKey) => {
+    setPortalEnabled(true);
+    applyPortalPreset(presetKey);
+    const hasSceneModel = Boolean(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath);
+    if (hasSceneModel && portalPosZ === 0 && portalPosX === 0) {
+      setPortalPosZ(-0.9);
+      setPortalPosY(0.1);
+    }
+    setPortalHideOutsideModel(false);
   };
 
   // Helper: Scan and detect all individual meshes inside the 3D model
@@ -2651,6 +2848,67 @@ const ARTest = () => {
         if (tCfg.uiError !== undefined) setTrackingUiError(tCfg.uiError);
       }
 
+      // Populate AR Portal & Virtual Window Settings if configured on batch
+      const pCfg = cfg.portalConfig || cfg.portal || null;
+      if (pCfg) {
+        if (pCfg.enabled !== undefined) setPortalEnabled(Boolean(pCfg.enabled));
+        if (pCfg.preset) setPortalPreset(pCfg.preset);
+        if (pCfg.shape) setPortalShape(pCfg.shape);
+        if (pCfg.width !== undefined) setPortalWidth(Number(pCfg.width));
+        if (pCfg.height !== undefined) setPortalHeight(Number(pCfg.height));
+        if (pCfg.radius !== undefined) setPortalRadius(Number(pCfg.radius));
+        if (pCfg.depth !== undefined) setPortalDepth(Number(pCfg.depth));
+        if (pCfg.frameColor) setPortalFrameColor(pCfg.frameColor);
+        if (pCfg.frameWidth !== undefined) setPortalFrameWidth(Number(pCfg.frameWidth));
+        if (pCfg.frameEmissive) setPortalFrameEmissive(pCfg.frameEmissive);
+        if (pCfg.frameEmissiveIntensity !== undefined) setPortalFrameEmissiveIntensity(Number(pCfg.frameEmissiveIntensity));
+        if (pCfg.frameGlow !== undefined) setPortalFrameGlow(Boolean(pCfg.frameGlow));
+        if (pCfg.glassTint) setPortalGlassTint(pCfg.glassTint);
+        if (pCfg.glassOpacity !== undefined) setPortalGlassOpacity(Number(pCfg.glassOpacity));
+        if (pCfg.posX !== undefined) setPortalPosX(Number(pCfg.posX));
+        if (pCfg.posY !== undefined) setPortalPosY(Number(pCfg.posY));
+        if (pCfg.posZ !== undefined) setPortalPosZ(Number(pCfg.posZ));
+        if (pCfg.rotX !== undefined) setPortalRotX(Number(pCfg.rotX));
+        if (pCfg.rotY !== undefined) setPortalRotY(Number(pCfg.rotY));
+        if (pCfg.rotZ !== undefined) setPortalRotZ(Number(pCfg.rotZ));
+        if (pCfg.interiorType) setPortalInteriorType(pCfg.interiorType);
+        if (pCfg.skyboxUrl !== undefined) setPortalSkyboxUrl(pCfg.skyboxUrl);
+        if (pCfg.interiorColor) setPortalInteriorColor(pCfg.interiorColor);
+        if (pCfg.wallColor) setPortalWallColor(pCfg.wallColor);
+        if (pCfg.floorColor) setPortalFloorColor(pCfg.floorColor);
+        if (pCfg.gridColor) setPortalGridColor(pCfg.gridColor);
+        if (pCfg.interiorLightColor) setPortalLightColor(pCfg.interiorLightColor);
+        if (pCfg.interiorLightIntensity !== undefined) setPortalLightIntensity(Number(pCfg.interiorLightIntensity));
+        if (pCfg.interiorModelType) setPortalModelType(pCfg.interiorModelType);
+        if (pCfg.artifactType) setPortalArtifactType(pCfg.artifactType);
+        if (pCfg.customModelUrl !== undefined) setPortalCustomModelUrl(pCfg.customModelUrl);
+        if (pCfg.modelScale !== undefined) setPortalModelScale(Number(pCfg.modelScale));
+        if (pCfg.modelPosX !== undefined) setPortalModelPosX(Number(pCfg.modelPosX));
+        if (pCfg.modelPosY !== undefined) setPortalModelPosY(Number(pCfg.modelPosY));
+        if (pCfg.modelPosZ !== undefined) setPortalModelPosZ(Number(pCfg.modelPosZ));
+        if (pCfg.modelRotSpeed !== undefined) setPortalModelRotSpeed(Number(pCfg.modelRotSpeed));
+        if (pCfg.modelRotX !== undefined) setPortalModelRotX(Number(pCfg.modelRotX));
+        if (pCfg.modelRotY !== undefined) setPortalModelRotY(Number(pCfg.modelRotY));
+        if (pCfg.modelRotZ !== undefined) setPortalModelRotZ(Number(pCfg.modelRotZ));
+        if (pCfg.showVideo !== undefined) setPortalShowVideo(Boolean(pCfg.showVideo));
+        if (pCfg.videoUrl !== undefined) setPortalVideoUrl(pCfg.videoUrl);
+        if (pCfg.videoScale !== undefined) setPortalVideoScale(Number(pCfg.videoScale));
+        if (pCfg.videoPosY !== undefined) setPortalVideoPosY(Number(pCfg.videoPosY));
+        if (pCfg.videoPosZ !== undefined) setPortalVideoPosZ(Number(pCfg.videoPosZ));
+        if (pCfg.particles) setPortalParticles(pCfg.particles);
+        if (pCfg.particleCount !== undefined) setPortalParticleCount(Number(pCfg.particleCount));
+        if (pCfg.particleColor) setPortalParticleColor(pCfg.particleColor);
+        if (pCfg.particleSpeed !== undefined) setPortalParticleSpeed(Number(pCfg.particleSpeed));
+        if (pCfg.floatingText !== undefined) setPortalFloatingText(pCfg.floatingText);
+        if (pCfg.textColor) setPortalTextColor(pCfg.textColor);
+        if (pCfg.textScale !== undefined) setPortalTextScale(Number(pCfg.textScale));
+        if (pCfg.textPosY !== undefined) setPortalTextPosY(Number(pCfg.textPosY));
+        if (pCfg.textPosZ !== undefined) setPortalTextPosZ(Number(pCfg.textPosZ));
+        if (pCfg.hideOutsideModel !== undefined) setPortalHideOutsideModel(Boolean(pCfg.hideOutsideModel));
+      } else {
+        setPortalEnabled(false);
+      }
+
       if (cfg && cfg.meshOverrides) {
         const loadedDeleted = Object.entries(cfg.meshOverrides)
           .filter(([_, ovr]) => ovr && ovr.deleted)
@@ -2676,6 +2934,187 @@ const ARTest = () => {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const buildCurrentArConfig = () => {
+    const meshOverrides = {};
+    meshList.forEach((m) => {
+      meshOverrides[m.name] = {
+        position: m.position,
+        rotation: m.rotation,
+        scale: m.scale,
+        visible: m.visible,
+        material: { ...(m.material || {}) }
+      };
+    });
+    deletedMeshNames.forEach((name) => {
+      meshOverrides[name] = {
+        deleted: true,
+        visible: false
+      };
+    });
+
+    const currentVidUrl = activeVideoUrl || customVideoUrl || arData?.videoUrl || arData?.video_url || '';
+
+    return {
+      videoUrl: currentVidUrl,
+      video_url: currentVidUrl,
+      video_file_path: arData?.config?.video_file_path || arData?.video_file_path || '',
+      videoTargetMesh,
+      videoFlipX,
+      videoScale,
+      videoOffsetX,
+      videoOffsetY,
+      videoOffsetZ,
+      videoRotation,
+      videoTextureRepeatX,
+      videoTextureRepeatY,
+      videoTextureOffsetX,
+      videoTextureOffsetY,
+      aspectRatio: videoAspectRatio,
+      videoAspectRatio,
+      ambientColor,
+      ambientIntensity,
+      dir1Color,
+      dir1Intensity,
+      dir1Position,
+      dir2Color,
+      dir2Intensity,
+      dir2Position,
+      modelScale,
+      modelRotSpeed,
+      modelRotX,
+      modelRotY,
+      modelRotZ,
+      modelRotation: `${modelRotX} ${modelRotY} ${modelRotZ}`,
+      modelPosX,
+      modelPosY,
+      modelPosZ,
+      modelPosition: `${modelPosX} ${modelPosY} ${modelPosZ}`,
+      matMetalness: useNativePBR ? -1 : (matMetalness < 0 ? 0.0 : matMetalness),
+      matRoughness: useNativePBR ? -1 : (matRoughness < 0 ? 1.0 : matRoughness),
+      matEmissive,
+      matEmissiveIntensity,
+      matWireframe,
+      matOpacity,
+      useNativePBR,
+      fogColor,
+      fogDensity,
+      showBuyButton,
+      buyButtonColor,
+      mediaPlaying,
+      meshOverrides,
+      trackingConfig: {
+        filterMinCF: Number(trackingFilterMinCF),
+        filterBeta: Number(trackingFilterBeta),
+        missTolerance: Number(trackingMissTolerance),
+        warmupTolerance: Number(trackingWarmupTolerance),
+        maxTrack: Number(trackingMaxTrack),
+        targetIndex: Number(trackingTargetIndex),
+        showStats: Boolean(trackingShowStats),
+        uiLoading: trackingUiLoading,
+        uiScanning: trackingUiScanning,
+        uiError: trackingUiError
+      },
+      portalConfig: {
+        enabled: Boolean(portalEnabled),
+        preset: portalPreset,
+        shape: portalShape,
+        width: Number(portalWidth),
+        height: Number(portalHeight),
+        radius: Number(portalRadius),
+        depth: Number(portalDepth),
+        frameColor: portalFrameColor,
+        frameWidth: Number(portalFrameWidth),
+        frameEmissive: portalFrameEmissive,
+        frameEmissiveIntensity: Number(portalFrameEmissiveIntensity),
+        frameGlow: Boolean(portalFrameGlow),
+        glassTint: portalGlassTint,
+        glassOpacity: Number(portalGlassOpacity),
+        posX: Number(portalPosX),
+        posY: Number(portalPosY),
+        posZ: Number(portalPosZ),
+        rotX: Number(portalRotX),
+        rotY: Number(portalRotY),
+        rotZ: Number(portalRotZ),
+        interiorType: portalInteriorType,
+        skyboxUrl: portalSkyboxUrl,
+        interiorColor: portalInteriorColor,
+        wallColor: portalWallColor,
+        floorColor: portalFloorColor,
+        gridColor: portalGridColor,
+        interiorLightColor: portalLightColor,
+        interiorLightIntensity: Number(portalLightIntensity),
+        interiorModelType: portalModelType,
+        artifactType: portalArtifactType,
+        customModelUrl: portalCustomModelUrl,
+        modelScale: Number(portalModelScale),
+        modelPosX: Number(portalModelPosX),
+        modelPosY: Number(portalModelPosY),
+        modelPosZ: Number(portalModelPosZ),
+        modelRotSpeed: Number(portalModelRotSpeed),
+        modelRotX: Number(portalModelRotX),
+        modelRotY: Number(portalModelRotY),
+        modelRotZ: Number(portalModelRotZ),
+        showVideo: Boolean(portalShowVideo),
+        videoUrl: portalVideoUrl || currentVidUrl,
+        videoScale: Number(portalVideoScale),
+        videoPosY: Number(portalVideoPosY),
+        videoPosZ: Number(portalVideoPosZ),
+        particles: portalParticles,
+        particleCount: Number(portalParticleCount),
+        particleColor: portalParticleColor,
+        particleSpeed: Number(portalParticleSpeed),
+        floatingText: portalFloatingText,
+        textColor: portalTextColor,
+        textScale: Number(portalTextScale),
+        textPosY: Number(portalTextPosY),
+        textPosZ: Number(portalTextPosZ),
+        hideOutsideModel: Boolean(portalHideOutsideModel)
+      },
+      updatedAt: new Date().toISOString()
+    };
+  };
+
+  const handleTryInAR = async () => {
+    if (!batchId.trim()) return;
+    setIsLaunchingAR(true);
+    const targetBatch = batchId.trim();
+    try {
+      const currentConfig = buildCurrentArConfig();
+      // 1. Instant local persistence for same-browser live preview
+      try {
+        localStorage.setItem(`starwear_live_preview_config_${targetBatch}`, JSON.stringify(currentConfig));
+        localStorage.setItem('starwear_live_preview_config_last', JSON.stringify(currentConfig));
+      } catch (storageErr) {
+        console.warn('[ARTest] localStorage sync failed:', storageErr);
+      }
+
+      // 2. Synchronize to Firestore so physical markers / mobile devices get the live portal
+      try {
+        const batchRef = doc(db, 'batches', targetBatch);
+        const assetRef = doc(db, 'assets', targetBatch);
+        const syncPayload = {
+          ar_config: currentConfig,
+          portalConfig: currentConfig.portalConfig
+        };
+        await Promise.allSettled([
+          setDoc(batchRef, syncPayload, { merge: true }),
+          setDoc(assetRef, syncPayload, { merge: true })
+        ]);
+      } catch (fsErr) {
+        console.warn('[ARTest] Background Firestore sync failed:', fsErr);
+      }
+
+      // 3. Open WebAR experience in new tab with cache-buster and portal flag
+      const targetUrl = `/ar/${targetBatch}?t=${Date.now()}&portal=${portalEnabled ? '1' : '0'}`;
+      window.open(targetUrl, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      console.error('[ARTest] Error launching AR experience:', err);
+      window.open(`/ar/${targetBatch}?portal=${portalEnabled ? '1' : '0'}`, '_blank', 'noopener,noreferrer');
+    } finally {
+      setTimeout(() => setIsLaunchingAR(false), 1200);
     }
   };
 
@@ -2728,7 +3167,30 @@ const ARTest = () => {
         gltfFilePath = glbStoragePath;
       }
 
-      // 2b. Upload any staged custom mesh textures to Storage bucket
+      // 2b. Upload any staged custom portal skybox or custom portal GLB files
+      let finalPortalSkyboxUrl = portalSkyboxUrl;
+      if (selectedPortalSkyboxFile) {
+        setUploadProgress('Uploading portal 360 skybox to Storage...');
+        const cleanSkyName = selectedPortalSkyboxFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const skyStoragePath = `assets/${batchId.trim()}/portal_${Date.now()}_${cleanSkyName}`;
+        const skyRef = ref(storage, skyStoragePath);
+        await uploadBytes(skyRef, selectedPortalSkyboxFile);
+        finalPortalSkyboxUrl = await getDownloadURL(skyRef);
+        setPortalSkyboxUrl(finalPortalSkyboxUrl);
+      }
+
+      let finalPortalGlbUrl = portalCustomModelUrl;
+      if (selectedPortalGlbFile) {
+        setUploadProgress('Uploading portal interior 3D model to Storage...');
+        const cleanPName = selectedPortalGlbFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const pGlbStoragePath = `assets/${batchId.trim()}/portal_model_${Date.now()}_${cleanPName}`;
+        const pGlbRef = ref(storage, pGlbStoragePath);
+        await uploadBytes(pGlbRef, selectedPortalGlbFile);
+        finalPortalGlbUrl = await getDownloadURL(pGlbRef);
+        setPortalCustomModelUrl(finalPortalGlbUrl);
+      }
+
+      // 2c. Upload any staged custom mesh textures to Storage bucket
       const textureUploadResults = new Map();
       if (pendingTextureFilesRef.current.size > 0) {
         for (const [meshName, pending] of pendingTextureFilesRef.current.entries()) {
@@ -2746,6 +3208,7 @@ const ARTest = () => {
         }
         pendingTextureFilesRef.current.clear();
       }
+
 
       setUploadProgress('Saving batch configuration to Firestore...');
 
@@ -2840,6 +3303,62 @@ const ARTest = () => {
           uiScanning: trackingUiScanning,
           uiError: trackingUiError
         },
+        portalConfig: {
+          enabled: Boolean(portalEnabled),
+          preset: portalPreset,
+          shape: portalShape,
+          width: Number(portalWidth),
+          height: Number(portalHeight),
+          radius: Number(portalRadius),
+          depth: Number(portalDepth),
+          frameColor: portalFrameColor,
+          frameWidth: Number(portalFrameWidth),
+          frameEmissive: portalFrameEmissive,
+          frameEmissiveIntensity: Number(portalFrameEmissiveIntensity),
+          frameGlow: Boolean(portalFrameGlow),
+          glassTint: portalGlassTint,
+          glassOpacity: Number(portalGlassOpacity),
+          posX: Number(portalPosX),
+          posY: Number(portalPosY),
+          posZ: Number(portalPosZ),
+          rotX: Number(portalRotX),
+          rotY: Number(portalRotY),
+          rotZ: Number(portalRotZ),
+          interiorType: portalInteriorType,
+          skyboxUrl: finalPortalSkyboxUrl || portalSkyboxUrl,
+          interiorColor: portalInteriorColor,
+          wallColor: portalWallColor,
+          floorColor: portalFloorColor,
+          gridColor: portalGridColor,
+          interiorLightColor: portalLightColor,
+          interiorLightIntensity: Number(portalLightIntensity),
+          interiorModelType: portalModelType,
+          artifactType: portalArtifactType,
+          customModelUrl: finalPortalGlbUrl || portalCustomModelUrl,
+          modelScale: Number(portalModelScale),
+          modelPosX: Number(portalModelPosX),
+          modelPosY: Number(portalModelPosY),
+          modelPosZ: Number(portalModelPosZ),
+          modelRotSpeed: Number(portalModelRotSpeed),
+          modelRotX: Number(portalModelRotX),
+          modelRotY: Number(portalModelRotY),
+          modelRotZ: Number(portalModelRotZ),
+          showVideo: Boolean(portalShowVideo),
+          videoUrl: portalVideoUrl || finalVideoUrl,
+          videoScale: Number(portalVideoScale),
+          videoPosY: Number(portalVideoPosY),
+          videoPosZ: Number(portalVideoPosZ),
+          particles: portalParticles,
+          particleCount: Number(portalParticleCount),
+          particleColor: portalParticleColor,
+          particleSpeed: Number(portalParticleSpeed),
+          floatingText: portalFloatingText,
+          textColor: portalTextColor,
+          textScale: Number(portalTextScale),
+          textPosY: Number(portalTextPosY),
+          textPosZ: Number(portalTextPosZ),
+          hideOutsideModel: Boolean(portalHideOutsideModel)
+        },
         updatedAt: new Date().toISOString()
       };
 
@@ -2848,7 +3367,8 @@ const ARTest = () => {
         videoUrl: finalVideoUrl,
         video_file_path: videoFilePath,
         ...(gltfFilePath ? { gltf_file_path: gltfFilePath } : {}),
-        ar_config: arConfigPayload
+        ar_config: arConfigPayload,
+        portalConfig: arConfigPayload.portalConfig
       };
 
       // Save to both batches and assets collections with merge: true to guarantee persistence
@@ -2859,6 +3379,14 @@ const ARTest = () => {
         setDoc(batchRef, payload, { merge: true }),
         setDoc(assetRef, payload, { merge: true })
       ]);
+
+      // Save to localStorage for instant preview sync
+      try {
+        localStorage.setItem('starwear_live_preview_config_' + batchId.trim(), JSON.stringify(arConfigPayload));
+        localStorage.setItem('starwear_live_preview_config_last', JSON.stringify(arConfigPayload));
+      } catch (storageErr) {
+        console.warn('[ARTest] localStorage sync in saveConfig failed:', storageErr);
+      }
 
       // Update local arData state immediately so current session is in sync
       setArData((prev) => ({
@@ -2879,6 +3407,8 @@ const ARTest = () => {
       // Clear pending raw file selections once saved
       setSelectedVideoFile(null);
       setSelectedGlbFile(null);
+      setSelectedPortalSkyboxFile(null);
+      setSelectedPortalGlbFile(null);
 
       const timeStr = new Date().toLocaleTimeString();
       setSaveSuccessMsg(`Video & config saved to Storage & Batch at ${timeStr}`);
@@ -3191,7 +3721,7 @@ const ARTest = () => {
         </div>
 
         {/* Tab Navigation Strip */}
-        <div className="flex border-b border-neutral-800 bg-neutral-900/60 p-1 gap-1 text-xs select-none">
+        <div className="flex border-b border-neutral-800 bg-neutral-900/60 p-1 gap-1 text-xs select-none control-tabs">
           <button
             type="button"
             onClick={() => setActiveTab('transform')}
@@ -3246,6 +3776,20 @@ const ARTest = () => {
           >
             <span className="material-symbols-outlined text-sm text-sky-400">movie</span>
             <span>Scene</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('portal')}
+            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'portal'
+              ? 'bg-neutral-800 text-sky-300 font-bold shadow border border-sky-500/50'
+              : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
+              }`}
+          >
+            <span className="material-symbols-outlined text-sm text-sky-400">meeting_room</span>
+            <span>Portal</span>
+            {portalEnabled && (
+              <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse ml-0.5"></span>
+            )}
           </button>
           <button
             type="button"
@@ -4138,11 +4682,10 @@ const ARTest = () => {
                               key={deg}
                               type="button"
                               onClick={() => handleMeshMaterialChange('textureRotation', deg)}
-                              className={`px-1.5 py-0.5 text-[9px] font-mono rounded border transition-colors cursor-pointer ${
-                                (selectedMesh.material?.textureRotation ?? 0) === deg
+                              className={`px-1.5 py-0.5 text-[9px] font-mono rounded border transition-colors cursor-pointer ${(selectedMesh.material?.textureRotation ?? 0) === deg
                                   ? 'bg-sky-500/30 text-sky-300 border-sky-500/50'
                                   : 'bg-neutral-800 text-neutral-400 border-neutral-700 hover:text-white'
-                              }`}
+                                }`}
                             >
                               {deg}°
                             </button>
@@ -4210,11 +4753,10 @@ const ARTest = () => {
                                   textureRepeatY: sc
                                 });
                               }}
-                              className={`px-1.5 py-0.5 text-[9px] font-mono rounded border transition-colors cursor-pointer ${
-                                (selectedMesh.material?.textureRepeatX ?? 1.0) === sc && (selectedMesh.material?.textureRepeatY ?? 1.0) === sc
+                              className={`px-1.5 py-0.5 text-[9px] font-mono rounded border transition-colors cursor-pointer ${(selectedMesh.material?.textureRepeatX ?? 1.0) === sc && (selectedMesh.material?.textureRepeatY ?? 1.0) === sc
                                   ? 'bg-emerald-500/30 text-emerald-300 border-emerald-500/50'
                                   : 'bg-neutral-800 text-neutral-400 border-neutral-700 hover:text-white'
-                              }`}
+                                }`}
                             >
                               {sc}x
                             </button>
@@ -5385,12 +5927,1078 @@ const ARTest = () => {
                   )}
                 </button>
 
-                {trackingSuccessMsg && (
-                  <div className="p-2.5 bg-cyan-950/60 border border-cyan-500/50 rounded-lg text-[11px] text-cyan-200 flex items-center gap-2 animate-fadeIn">
-                    <span className="material-symbols-outlined text-cyan-400 text-sm">check_circle</span>
-                    <span>{trackingSuccessMsg}</span>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* TAB 7: AR PORTAL & VIRTUAL WINDOW EFFECT CONTROLS                          */}
+          {/* ========================================================================= */}
+          {activeTab === 'portal' && (
+            <div className="space-y-6">
+              {/* Master Portal Engine Switch & Overview */}
+              <div className="p-3.5 rounded-xl bg-gradient-to-br from-sky-950/40 via-neutral-900 to-indigo-950/30 border border-sky-500/30 shadow-lg space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${portalEnabled ? 'bg-sky-500 text-black shadow-lg shadow-sky-500/30 animate-pulse' : 'bg-neutral-800 text-neutral-400'}`}>
+                      <span className="material-symbols-outlined text-lg">meeting_room</span>
+                    </div>
+                    <div>
+                      <h2 className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
+                        AR Portal Effect
+                        <span className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-bold uppercase ${portalEnabled ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40' : 'bg-neutral-800 text-neutral-400'}`}>
+                          {portalEnabled ? 'Active' : 'Disabled'}
+                        </span>
+                      </h2>
+                      <p className="text-[10px] text-neutral-400">Virtual window into an alternate dimension</p>
+                    </div>
+                  </div>
+
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={portalEnabled}
+                      onChange={(e) => handleTogglePortal(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-500"></div>
+                  </label>
+                </div>
+
+                <div className="text-[11px] text-neutral-300 leading-relaxed bg-black/40 p-2.5 rounded-lg border border-neutral-800/80 space-y-1">
+                  <p>
+                    <span className="font-semibold text-sky-300">How it works:</span> An optical illusion aperture mask uses GPU stencil occlusion so the interior world is only visible through the window frame. Stepping or orbiting the camera inside immerses the viewer into the 360 world.
+                  </p>
+                  <div className="pt-1 flex items-center gap-3">
+                    <label className="flex items-center gap-1.5 cursor-pointer text-xs text-neutral-300 hover:text-white">
+                      <input
+                        type="checkbox"
+                        checked={portalHideOutsideModel}
+                        onChange={(e) => setPortalHideOutsideModel(e.target.checked)}
+                        className="rounded border-neutral-700 bg-neutral-800 text-sky-500 focus:ring-0 w-3.5 h-3.5"
+                      />
+                      <span>Hide Outside Model (Isolate Portal Only)</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Scene Addition Mode Card when a 3D model is loaded in the scene */}
+                {Boolean(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
+                  <div className="p-2.5 rounded-lg bg-sky-950/40 border border-sky-500/40 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-sm text-sky-400">layers</span>
+                        <span className="text-[11px] font-bold text-sky-200 uppercase tracking-wide">
+                          Scene Addition Mode
+                        </span>
+                      </div>
+                      <span className="text-[9px] px-1.5 py-0.2 rounded font-mono font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                        {portalEnabled ? (portalHideOutsideModel ? 'PORTAL ONLY' : 'ADDED ALONGSIDE MODEL') : 'READY TO ADD'}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-neutral-300 leading-snug">
+                      Portal renders inside your active scene alongside your 3D model. Choose a quick placement to position the virtual window relative to your model:
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 pt-0.5">
+                      <button
+                        type="button"
+                        onClick={() => handleApplyPortalPlacementPreset('behind')}
+                        className={`px-2 py-1.5 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalPosZ < -0.3 && Math.abs(portalPosX) < 0.2 && !portalHideOutsideModel) ? 'bg-sky-600 text-white border-sky-400 shadow-md shadow-sky-600/30' : 'bg-neutral-900/80 hover:bg-neutral-800 text-neutral-200 border-neutral-700'}`}
+                      >
+                        <span className="material-symbols-outlined text-xs">window</span>
+                        Behind Model
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleApplyPortalPlacementPreset('left')}
+                        className={`px-2 py-1.5 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalPosX < -0.4 && !portalHideOutsideModel) ? 'bg-sky-600 text-white border-sky-400 shadow-md shadow-sky-600/30' : 'bg-neutral-900/80 hover:bg-neutral-800 text-neutral-200 border-neutral-700'}`}
+                      >
+                        <span className="material-symbols-outlined text-xs">arrow_left_alt</span>
+                        Left Gateway
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleApplyPortalPlacementPreset('right')}
+                        className={`px-2 py-1.5 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalPosX > 0.4 && !portalHideOutsideModel) ? 'bg-sky-600 text-white border-sky-400 shadow-md shadow-sky-600/30' : 'bg-neutral-900/80 hover:bg-neutral-800 text-neutral-200 border-neutral-700'}`}
+                      >
+                        <span className="material-symbols-outlined text-xs">arrow_right_alt</span>
+                        Right Gateway
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleApplyPortalPlacementPreset('ground')}
+                        className={`px-2 py-1.5 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalRotX === -90 && !portalHideOutsideModel) ? 'bg-sky-600 text-white border-sky-400 shadow-md shadow-sky-600/30' : 'bg-neutral-900/80 hover:bg-neutral-800 text-neutral-200 border-neutral-700'}`}
+                      >
+                        <span className="material-symbols-outlined text-xs">adjust</span>
+                        Ground Dais
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleApplyPortalPlacementPreset('center')}
+                        className={`px-2 py-1.5 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalPosX === 0 && portalPosY === 0 && portalPosZ === 0 && !portalHideOutsideModel) ? 'bg-sky-600 text-white border-sky-400 shadow-md shadow-sky-600/30' : 'bg-neutral-900/80 hover:bg-neutral-800 text-neutral-200 border-neutral-700'}`}
+                      >
+                        <span className="material-symbols-outlined text-xs">center_focus_strong</span>
+                        Centered
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleApplyPortalPlacementPreset('inside')}
+                        className={`px-2 py-1.5 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalHideOutsideModel && portalModelType === 'current-product') ? 'bg-indigo-600 text-white border-indigo-400 shadow-md shadow-indigo-600/30' : 'bg-neutral-900/80 hover:bg-neutral-800 text-neutral-200 border-neutral-700'}`}
+                      >
+                        <span className="material-symbols-outlined text-xs">inbox</span>
+                        Inside Chamber
+                      </button>
+                    </div>
                   </div>
                 )}
+              </div>
+
+              {/* 1-Click Curated Presets Strip */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-sky-400">auto_awesome</span>
+                    1-Click Portal Presets
+                  </h3>
+                  <span className="text-[10px] text-neutral-500 font-mono">Quick Themes</span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                  {[
+                    { key: 'cosmic-nebula', label: 'Cosmic Nebula', icon: 'filter_drama', color: 'border-sky-500/50 text-sky-300 bg-sky-950/30' },
+                    { key: 'cyber-matrix', label: 'Cyber Matrix', icon: 'grid_view', color: 'border-emerald-500/50 text-emerald-300 bg-emerald-950/30' },
+                    { key: 'virtual-window', label: 'Virtual Window', icon: 'window', color: 'border-slate-500/50 text-slate-300 bg-slate-900/40' },
+                    { key: 'luxury-gallery', label: 'Luxury Gallery', icon: 'museum', color: 'border-amber-500/50 text-amber-300 bg-amber-950/30' },
+                    { key: 'stargate-ring', label: 'Sci-Fi Stargate', icon: 'cyclone', color: 'border-purple-500/50 text-purple-300 bg-purple-950/30' }
+                  ].map((preset) => (
+                    <button
+                      key={preset.key}
+                      type="button"
+                      onClick={() => handleApplyPresetWithSceneCheck(preset.key)}
+                      className={`p-2 rounded-lg border text-left flex flex-col gap-1 transition-all hover:scale-[1.02] active:scale-[0.98] ${portalPreset === preset.key
+                        ? `${preset.color} font-bold shadow-md`
+                        : 'bg-neutral-900/60 hover:bg-neutral-800/80 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                        }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-sm">{preset.icon}</span>
+                        <span className="text-[11px] truncate">{preset.label}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Section 1: Window Aperture & 3D Frame */}
+              <div className="space-y-3 pt-1 border-t border-neutral-800/80">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-cyan-400">crop_portrait</span>
+                    Window Aperture & Frame
+                  </h3>
+                  <span className="text-[10px] text-neutral-500 font-mono">Shape & Casing</span>
+                </div>
+
+                {/* Shape Selector */}
+                <div className="grid grid-cols-4 gap-1 p-0.5 bg-black/60 rounded border border-neutral-800 text-xs">
+                  {[
+                    { id: 'arch', label: 'Arch Gate', icon: 'door_front' },
+                    { id: 'rectangle', label: 'Window', icon: 'crop_square' },
+                    { id: 'circle', label: 'Stargate', icon: 'lens' },
+                    { id: 'hexagon', label: 'Hex Gate', icon: 'hexagon' }
+                  ].map((shapeOption) => (
+                    <button
+                      key={shapeOption.id}
+                      type="button"
+                      onClick={() => setPortalShape(shapeOption.id)}
+                      className={`py-1.5 rounded flex flex-col items-center justify-center gap-0.5 transition-colors ${portalShape === shapeOption.id
+                        ? 'bg-neutral-800 text-sky-400 font-bold border border-sky-500/40 shadow-sm'
+                        : 'text-neutral-400 hover:text-neutral-200'
+                        }`}
+                    >
+                      <span className="material-symbols-outlined text-sm">{shapeOption.icon}</span>
+                      <span className="text-[10px]">{shapeOption.label}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Dimensions */}
+                <div className="grid grid-cols-2 gap-2">
+                  {(portalShape === 'arch' || portalShape === 'rectangle') ? (
+                    <>
+                      <NumberSliderInput
+                        label="Window Width"
+                        value={portalWidth}
+                        onChange={setPortalWidth}
+                        min={0.3}
+                        max={3.5}
+                        step={0.05}
+                        unit="m"
+                        color="sky"
+                        precision={2}
+                        resetValue={1.1}
+                        showRange={true}
+                      />
+                      <NumberSliderInput
+                        label="Window Height"
+                        value={portalHeight}
+                        onChange={setPortalHeight}
+                        min={0.4}
+                        max={4.0}
+                        step={0.05}
+                        unit="m"
+                        color="sky"
+                        precision={2}
+                        resetValue={1.8}
+                        showRange={true}
+                      />
+                    </>
+                  ) : (
+                    <NumberSliderInput
+                      label="Portal Radius"
+                      value={portalRadius}
+                      onChange={setPortalRadius}
+                      min={0.2}
+                      max={2.5}
+                      step={0.05}
+                      unit="m"
+                      color="sky"
+                      precision={2}
+                      resetValue={0.7}
+                      showRange={true}
+                    />
+                  )}
+
+                  <NumberSliderInput
+                    label="Chamber Depth"
+                    value={portalDepth}
+                    onChange={setPortalDepth}
+                    min={1.0}
+                    max={10.0}
+                    step={0.2}
+                    unit="m"
+                    color="sky"
+                    precision={1}
+                    resetValue={3.5}
+                    showRange={true}
+                    description="How far back the interior room/dimension extends behind the portal window."
+                  />
+                  <NumberSliderInput
+                    label="Frame Width"
+                    value={portalFrameWidth}
+                    onChange={setPortalFrameWidth}
+                    min={0.02}
+                    max={0.25}
+                    step={0.01}
+                    unit="m"
+                    color="sky"
+                    precision={2}
+                    resetValue={0.08}
+                    showRange={true}
+                  />
+                </div>
+
+                {/* Frame Colors & Glow */}
+                <div className="grid grid-cols-2 gap-2 p-2.5 bg-neutral-900/60 rounded-lg border border-neutral-800">
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-semibold text-neutral-300">Frame Color</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={portalFrameColor}
+                        onChange={(e) => setPortalFrameColor(e.target.value)}
+                        className="w-8 h-8 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                      />
+                      <input
+                        type="text"
+                        value={portalFrameColor}
+                        onChange={(e) => setPortalFrameColor(e.target.value)}
+                        className="w-20 px-1.5 py-1 text-xs font-mono bg-black/60 border border-neutral-700 rounded text-neutral-300"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-semibold text-neutral-300">Emissive Glow Color</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={portalFrameEmissive}
+                        onChange={(e) => setPortalFrameEmissive(e.target.value)}
+                        className="w-8 h-8 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                      />
+                      <input
+                        type="text"
+                        value={portalFrameEmissive}
+                        onChange={(e) => setPortalFrameEmissive(e.target.value)}
+                        className="w-20 px-1.5 py-1 text-xs font-mono bg-black/60 border border-neutral-700 rounded text-neutral-300"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="col-span-2 pt-1 flex items-center justify-between">
+                    <NumberSliderInput
+                      label="Glow Intensity"
+                      value={portalFrameEmissiveIntensity}
+                      onChange={setPortalFrameEmissiveIntensity}
+                      min={0}
+                      max={5.0}
+                      step={0.1}
+                      color="sky"
+                      precision={1}
+                      resetValue={1.5}
+                      showRange={true}
+                    />
+                  </div>
+
+                  <div className="col-span-2 flex items-center justify-between pt-1 border-t border-neutral-800 text-xs">
+                    <span className="text-neutral-400">Outer Neon Halo Glow</span>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={portalFrameGlow}
+                        onChange={(e) => setPortalFrameGlow(e.target.checked)}
+                        className="sr-only peer"
+                      />
+                      <div className="w-8 h-4 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[1px] after:left-[1px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-sky-500"></div>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Section 2: Portal 3D Transform Placement */}
+              <div className="space-y-3 pt-1 border-t border-neutral-800/80">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-rose-400">open_with</span>
+                    Portal Placement & Orientation
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => handleApplyPortalPlacementPreset('center')}
+                    className="text-[10px] font-mono text-neutral-400 hover:text-amber-300"
+                  >
+                    Reset Origin
+                  </button>
+                </div>
+
+                {/* Quick Scene Placement Presets */}
+                <div className="space-y-1 bg-black/40 p-2 rounded-lg border border-neutral-800/80">
+                  <div className="flex items-center justify-between text-[10px] text-neutral-400 font-mono">
+                    <span>Scene Placement Presets:</span>
+                    <button
+                      type="button"
+                      onClick={() => handleApplyPortalPlacementPreset('center')}
+                      className="text-neutral-400 hover:text-amber-300"
+                    >
+                      (0,0,0)
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleApplyPortalPlacementPreset('behind')}
+                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalPosZ < -0.3 && Math.abs(portalPosX) < 0.2) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
+                      title="Position virtual window behind the model"
+                    >
+                      <span className="material-symbols-outlined text-[11px]">window</span>
+                      Behind Model
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApplyPortalPlacementPreset('left')}
+                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalPosX < -0.4) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
+                      title="Position portal gateway on the left side of the scene"
+                    >
+                      <span className="material-symbols-outlined text-[11px]">arrow_left_alt</span>
+                      Left Gateway
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApplyPortalPlacementPreset('right')}
+                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalPosX > 0.4) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
+                      title="Position portal gateway on the right side of the scene"
+                    >
+                      <span className="material-symbols-outlined text-[11px]">arrow_right_alt</span>
+                      Right Gateway
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApplyPortalPlacementPreset('ground')}
+                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalRotX === -90) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
+                      title="Position portal on ground beneath model"
+                    >
+                      <span className="material-symbols-outlined text-[11px]">adjust</span>
+                      Ground Dais
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApplyPortalPlacementPreset('center')}
+                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalPosX === 0 && portalPosY === 0 && portalPosZ === 0 && !portalHideOutsideModel) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
+                      title="Centered at origin"
+                    >
+                      <span className="material-symbols-outlined text-[11px]">center_focus_strong</span>
+                      Centered
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApplyPortalPlacementPreset('inside')}
+                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalHideOutsideModel && portalModelType === 'current-product') ? 'bg-indigo-600/30 text-indigo-200 border-indigo-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
+                      title="Enclose the batch model inside the portal chamber"
+                    >
+                      <span className="material-symbols-outlined text-[11px]">inbox</span>
+                      Inside Chamber
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-1.5">
+                  <NumberSliderInput
+                    label="Position X"
+                    value={portalPosX}
+                    onChange={setPortalPosX}
+                    min={-3.0}
+                    max={3.0}
+                    step={0.05}
+                    unit="m"
+                    color="rose"
+                    precision={2}
+                    resetValue={0}
+                    showRange={false}
+                  />
+                  <NumberSliderInput
+                    label="Position Y"
+                    value={portalPosY}
+                    onChange={setPortalPosY}
+                    min={-3.0}
+                    max={3.0}
+                    step={0.05}
+                    unit="m"
+                    color="emerald"
+                    precision={2}
+                    resetValue={0}
+                    showRange={false}
+                  />
+                  <NumberSliderInput
+                    label="Position Z"
+                    value={portalPosZ}
+                    onChange={setPortalPosZ}
+                    min={-3.0}
+                    max={3.0}
+                    step={0.05}
+                    unit="m"
+                    color="sky"
+                    precision={2}
+                    resetValue={0}
+                    showRange={false}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <RotationDial
+                    axis="X"
+                    angle={portalRotX}
+                    onChange={setPortalRotX}
+                    color="rose"
+                    description="Pitch (Tilt Front/Back)"
+                  />
+                  <RotationDial
+                    axis="Y"
+                    angle={portalRotY}
+                    onChange={setPortalRotY}
+                    color="emerald"
+                    description="Yaw (Turn Left/Right)"
+                  />
+                  <RotationDial
+                    axis="Z"
+                    angle={portalRotZ}
+                    onChange={setPortalRotZ}
+                    color="sky"
+                    description="Roll (Tilt Sideways)"
+                  />
+                </div>
+              </div>
+
+              {/* Section 3: Interior World Environment (What goes in the portal) */}
+              <div className="space-y-3 pt-1 border-t border-neutral-800/80">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-purple-400">public</span>
+                    Interior World Environment
+                  </h3>
+                  <span className="text-[10px] text-neutral-500 font-mono">Chamber Atmosphere</span>
+                </div>
+
+                {/* Interior Type Buttons */}
+                <div className="grid grid-cols-3 gap-1 p-0.5 bg-black/60 rounded border border-neutral-800 text-xs">
+                  {[
+                    { id: 'nebula', label: 'Cosmic Nebula' },
+                    { id: 'grid-room', label: 'Cyber Grid' },
+                    { id: 'starfield', label: 'Starfield' },
+                    { id: 'matrix', label: 'Matrix Void' },
+                    { id: 'skybox', label: '360° Photo' },
+                    { id: 'void', label: 'Smooth Void' }
+                  ].map((envOption) => (
+                    <button
+                      key={envOption.id}
+                      type="button"
+                      onClick={() => setPortalInteriorType(envOption.id)}
+                      className={`py-1 rounded text-center transition-colors text-[11px] ${portalInteriorType === envOption.id
+                        ? 'bg-neutral-800 text-purple-300 font-bold border border-purple-500/40 shadow-sm'
+                        : 'text-neutral-400 hover:text-neutral-200'
+                        }`}
+                    >
+                      {envOption.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* 360 Photosphere Custom URL & Upload */}
+                {portalInteriorType === 'skybox' && (
+                  <div className="p-3 bg-neutral-900/80 rounded-lg border border-neutral-800 space-y-2.5">
+                    <span className="text-xs font-semibold text-neutral-200">360° Panorama Image (Equirectangular)</span>
+
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        placeholder="Paste 360 photosphere image URL..."
+                        value={portalSkyboxUrl}
+                        onChange={(e) => setPortalSkyboxUrl(e.target.value)}
+                        className="flex-1 px-2.5 py-1.5 text-xs bg-black/60 border border-neutral-700 rounded text-neutral-200 placeholder-neutral-500"
+                      />
+                      {portalSkyboxUrl && (
+                        <button
+                          type="button"
+                          onClick={() => setPortalSkyboxUrl('')}
+                          className="px-2 py-1.5 text-xs text-neutral-400 hover:text-white bg-neutral-800 rounded"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5 text-[10px]">
+                      <span className="text-neutral-500">Presets:</span>
+                      {[
+                        { name: 'Space', url: 'https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?auto=format&fit=crop&w=2000&q=80' },
+                        { name: 'Milky Way', url: 'https://images.unsplash.com/photo-1538370965046-79c0d6907d47?auto=format&fit=crop&w=2000&q=80' },
+                        { name: 'Sunset', url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=2000&q=80' }
+                      ].map((preset) => (
+                        <button
+                          key={preset.name}
+                          type="button"
+                          onClick={() => setPortalSkyboxUrl(preset.url)}
+                          className="px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
+                        >
+                          {preset.name}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="pt-1">
+                      <label className="w-full py-1.5 px-3 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded text-xs text-neutral-200 flex items-center justify-center gap-1.5 cursor-pointer">
+                        <span className="material-symbols-outlined text-sm text-sky-400">upload_file</span>
+                        <span>{selectedPortalSkyboxFile ? selectedPortalSkyboxFile.name : 'Upload Local 360° Image'}</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              setSelectedPortalSkyboxFile(file);
+                              const blobUrl = URL.createObjectURL(file);
+                              setPortalSkyboxUrl(blobUrl);
+                            }
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {/* Chamber Environment Colors */}
+                <div className="grid grid-cols-2 gap-2 p-2.5 bg-neutral-900/60 rounded-lg border border-neutral-800">
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-semibold text-neutral-300">Chamber Wall Color</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={portalWallColor}
+                        onChange={(e) => setPortalWallColor(e.target.value)}
+                        className="w-7 h-7 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                      />
+                      <input
+                        type="text"
+                        value={portalWallColor}
+                        onChange={(e) => setPortalWallColor(e.target.value)}
+                        className="w-20 px-1.5 py-0.5 text-xs font-mono bg-black/60 border border-neutral-700 rounded text-neutral-300"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-semibold text-neutral-300">Chamber Floor Color</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={portalFloorColor}
+                        onChange={(e) => setPortalFloorColor(e.target.value)}
+                        className="w-7 h-7 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                      />
+                      <input
+                        type="text"
+                        value={portalFloorColor}
+                        onChange={(e) => setPortalFloorColor(e.target.value)}
+                        className="w-20 px-1.5 py-0.5 text-xs font-mono bg-black/60 border border-neutral-700 rounded text-neutral-300"
+                      />
+                    </div>
+                  </div>
+
+                  {(portalInteriorType === 'grid-room' || portalInteriorType === 'matrix') && (
+                    <div className="col-span-2 pt-1 flex items-center justify-between border-t border-neutral-800/80">
+                      <span className="text-[11px] font-semibold text-neutral-300">Grid Line Accent Color</span>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={portalGridColor}
+                          onChange={(e) => setPortalGridColor(e.target.value)}
+                          className="w-6 h-6 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                        />
+                        <span className="text-xs font-mono text-neutral-400">{portalGridColor}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="col-span-2 pt-1 flex items-center justify-between border-t border-neutral-800/80">
+                    <span className="text-[11px] font-semibold text-neutral-300">Interior Light Color</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={portalLightColor}
+                        onChange={(e) => setPortalLightColor(e.target.value)}
+                        className="w-6 h-6 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                      />
+                      <span className="text-xs font-mono text-neutral-400">{portalLightColor}</span>
+                    </div>
+                  </div>
+
+                  <div className="col-span-2">
+                    <NumberSliderInput
+                      label="Interior Light Intensity"
+                      value={portalLightIntensity}
+                      onChange={setPortalLightIntensity}
+                      min={0}
+                      max={6.0}
+                      step={0.1}
+                      color="purple"
+                      precision={1}
+                      resetValue={2.0}
+                      showRange={true}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Section 4: Interior 3D Content & Objects (What goes inside the portal) */}
+              <div className="space-y-3 pt-1 border-t border-neutral-800/80">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-emerald-400">token</span>
+                    Interior 3D Content & Objects
+                  </h3>
+                  <span className="text-[10px] text-neutral-500 font-mono">Inside Portal</span>
+                </div>
+
+                {/* Content Type Selector */}
+                <div className="grid grid-cols-4 gap-1 p-0.5 bg-black/60 rounded border border-neutral-800 text-xs">
+                  {[
+                    { id: 'artifact', label: '3D Artifact', icon: 'diamond' },
+                    { id: 'current-product', label: 'Batch Model', icon: 'view_in_ar' },
+                    { id: 'custom-glb', label: 'Custom GLB', icon: 'folder_zip' },
+                    { id: 'none', label: 'None', icon: 'block' }
+                  ].map((mType) => (
+                    <button
+                      key={mType.id}
+                      type="button"
+                      onClick={() => setPortalModelType(mType.id)}
+                      className={`py-1.5 rounded flex flex-col items-center justify-center gap-0.5 transition-colors ${portalModelType === mType.id
+                        ? 'bg-neutral-800 text-emerald-400 font-bold border border-emerald-500/40 shadow-sm'
+                        : 'text-neutral-400 hover:text-neutral-200'
+                        }`}
+                    >
+                      <span className="material-symbols-outlined text-sm">{mType.icon}</span>
+                      <span className="text-[10px]">{mType.label}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Artifact Choice */}
+                {portalModelType === 'artifact' && (
+                  <div className="p-3 bg-neutral-900/80 rounded-lg border border-neutral-800 space-y-2">
+                    <span className="text-xs font-semibold text-neutral-200">Select Procedural 3D Artifact:</span>
+                    <div className="grid grid-cols-2 gap-1.5 text-xs">
+                      {[
+                        { id: 'crystal', label: 'Iridescent Crystal', icon: 'diamond' },
+                        { id: 'cyber-core', label: 'Gyroscopic Cyber Core', icon: 'blur_on' },
+                        { id: 'star-emblem', label: '3D Star Emblem', icon: 'star' },
+                        { id: 'pedestal', label: 'Hovering Relic Dais', icon: 'account_balance' }
+                      ].map((art) => (
+                        <button
+                          key={art.id}
+                          type="button"
+                          onClick={() => setPortalArtifactType(art.id)}
+                          className={`p-2 rounded border text-left flex items-center gap-2 transition-colors ${portalArtifactType === art.id
+                            ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300 font-bold'
+                            : 'bg-black/40 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                            }`}
+                        >
+                          <span className="material-symbols-outlined text-sm">{art.icon}</span>
+                          <span className="text-[11px] truncate">{art.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Custom GLB URL & File Upload */}
+                {portalModelType === 'custom-glb' && (
+                  <div className="p-3 bg-neutral-900/80 rounded-lg border border-neutral-800 space-y-2.5">
+                    <span className="text-xs font-semibold text-neutral-200">Custom Secondary .glb Model URL:</span>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        placeholder="https://.../model.glb"
+                        value={portalCustomModelUrl}
+                        onChange={(e) => setPortalCustomModelUrl(e.target.value)}
+                        className="flex-1 px-2.5 py-1.5 text-xs bg-black/60 border border-neutral-700 rounded text-neutral-200 placeholder-neutral-500 font-mono"
+                      />
+                      {portalCustomModelUrl && (
+                        <button
+                          type="button"
+                          onClick={() => setPortalCustomModelUrl('')}
+                          className="px-2 py-1.5 text-xs text-neutral-400 hover:text-white bg-neutral-800 rounded"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="w-full py-1.5 px-3 bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 rounded text-xs text-neutral-200 flex items-center justify-center gap-1.5 cursor-pointer">
+                        <span className="material-symbols-outlined text-sm text-emerald-400">upload</span>
+                        <span>{selectedPortalGlbFile ? selectedPortalGlbFile.name : 'Upload .glb for Inside Portal'}</span>
+                        <input
+                          type="file"
+                          accept=".glb,.gltf"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              setSelectedPortalGlbFile(file);
+                              const blobUrl = URL.createObjectURL(file);
+                              setPortalCustomModelUrl(blobUrl);
+                            }
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {/* Transform of Model Inside Portal */}
+                {portalModelType !== 'none' && (
+                  <div className="space-y-2 p-2.5 bg-neutral-900/60 rounded-lg border border-neutral-800">
+                    <span className="text-xs font-semibold text-neutral-300">Model Transform Inside Portal:</span>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumberSliderInput
+                        label="Object Scale"
+                        value={portalModelScale}
+                        onChange={setPortalModelScale}
+                        min={0.05}
+                        max={2.0}
+                        step={0.02}
+                        color="emerald"
+                        precision={2}
+                        resetValue={0.4}
+                        showRange={true}
+                      />
+                      <NumberSliderInput
+                        label="Depth into Portal (Z)"
+                        value={portalModelPosZ}
+                        onChange={setPortalModelPosZ}
+                        min={-portalDepth}
+                        max={-0.1}
+                        step={0.05}
+                        unit="m"
+                        color="emerald"
+                        precision={2}
+                        resetValue={-1.3}
+                        showRange={true}
+                        description="Negative Z moves the object deeper inside the portal chamber."
+                      />
+                      <NumberSliderInput
+                        label="Offset X"
+                        value={portalModelPosX}
+                        onChange={setPortalModelPosX}
+                        min={-1.5}
+                        max={1.5}
+                        step={0.05}
+                        unit="m"
+                        color="emerald"
+                        precision={2}
+                        resetValue={0}
+                        showRange={false}
+                      />
+                      <NumberSliderInput
+                        label="Offset Y"
+                        value={portalModelPosY}
+                        onChange={setPortalModelPosY}
+                        min={-1.5}
+                        max={1.5}
+                        step={0.05}
+                        unit="m"
+                        color="emerald"
+                        precision={2}
+                        resetValue={0}
+                        showRange={false}
+                      />
+                    </div>
+
+                    <div className="pt-1">
+                      <NumberSliderInput
+                        label="Auto-Spin Speed"
+                        value={portalModelRotSpeed}
+                        onChange={setPortalModelRotSpeed}
+                        min={0}
+                        max={20000}
+                        step={500}
+                        unit="ms"
+                        color="emerald"
+                        precision={0}
+                        resetValue={6000}
+                        showRange={true}
+                        description="Duration per revolution. 0 = stationary."
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Section 5: Floating Video Screen Inside Portal */}
+              <div className="space-y-3 pt-1 border-t border-neutral-800/80">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-sky-400">videocam</span>
+                    Interior Video Screen
+                  </h3>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={portalShowVideo}
+                      onChange={(e) => setPortalShowVideo(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-8 h-4 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[1px] after:left-[1px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-sky-500"></div>
+                  </label>
+                </div>
+
+                {portalShowVideo && (
+                  <div className="p-2.5 bg-neutral-900/60 rounded-lg border border-neutral-800 space-y-2">
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold text-neutral-300">Screen Video URL:</span>
+                        {(() => {
+                          const effUrl = (portalVideoUrl || activeVideoUrl || '').trim();
+                          if (effUrl && isYouTubeUrl(effUrl)) {
+                            const ytId = extractYouTubeId(effUrl);
+                            return (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-red-950/60 border border-red-700/50 text-red-300 font-mono">
+                                <span className="material-symbols-outlined text-[12px] text-red-400">smart_display</span>
+                                YouTube: {ytId}
+                              </span>
+                            );
+                          }
+                          if (effUrl) {
+                            return (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sky-950/60 border border-sky-700/50 text-sky-300 font-mono truncate max-w-[140px]">
+                                <span className="material-symbols-outlined text-[12px] text-sky-400">videocam</span>
+                                Direct Video
+                              </span>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </div>
+                      <input
+                        type="text"
+                        placeholder={activeVideoUrl ? `Leave blank for scene video: ${activeVideoUrl.slice(0, 30)}...` : "Enter YouTube or direct video URL"}
+                        value={portalVideoUrl}
+                        onChange={(e) => setPortalVideoUrl(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs bg-black/60 border border-neutral-700 rounded text-neutral-200 placeholder-neutral-500 font-mono"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 pt-1">
+                      <NumberSliderInput
+                        label="Screen Scale"
+                        value={portalVideoScale}
+                        onChange={setPortalVideoScale}
+                        min={0.2}
+                        max={2.5}
+                        step={0.05}
+                        color="sky"
+                        precision={2}
+                        resetValue={1.0}
+                        showRange={true}
+                      />
+                      <NumberSliderInput
+                        label="Height (Y)"
+                        value={portalVideoPosY}
+                        onChange={setPortalVideoPosY}
+                        min={-Math.max(0.5, portalHeight / 2)}
+                        max={Math.max(0.5, portalHeight / 2)}
+                        step={0.05}
+                        unit="m"
+                        color="sky"
+                        precision={2}
+                        resetValue={0.0}
+                        showRange={true}
+                      />
+                      <NumberSliderInput
+                        label="Depth (Z)"
+                        value={portalVideoPosZ}
+                        onChange={setPortalVideoPosZ}
+                        min={-portalDepth}
+                        max={-0.2}
+                        step={0.1}
+                        unit="m"
+                        color="sky"
+                        precision={1}
+                        resetValue={-1.8}
+                        showRange={true}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Section 6: Interior Particle FX & Floating Text */}
+              <div className="space-y-3 pt-1 border-t border-neutral-800/80">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-amber-400">grain</span>
+                    Atmospheric Particles & Hologram Text
+                  </h3>
+                </div>
+
+                {/* Particles */}
+                <div className="p-2.5 bg-neutral-900/60 rounded-lg border border-neutral-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-neutral-300">Particle FX Type:</span>
+                    <div className="flex items-center gap-1 text-[11px]">
+                      {['stars', 'cyber', 'embers', 'none'].map((pType) => (
+                        <button
+                          key={pType}
+                          type="button"
+                          onClick={() => setPortalParticles(pType)}
+                          className={`px-2 py-0.5 rounded capitalize transition-colors ${portalParticles === pType
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold'
+                            : 'text-neutral-400 hover:text-neutral-200'
+                            }`}
+                        >
+                          {pType}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {portalParticles !== 'none' && (
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <NumberSliderInput
+                        label="Particle Count"
+                        value={portalParticleCount}
+                        onChange={setPortalParticleCount}
+                        min={20}
+                        max={400}
+                        step={10}
+                        color="amber"
+                        precision={0}
+                        resetValue={180}
+                        showRange={true}
+                      />
+                      <div className="space-y-1">
+                        <span className="text-[11px] font-semibold text-neutral-300">Particle Color</span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={portalParticleColor}
+                            onChange={(e) => setPortalParticleColor(e.target.value)}
+                            className="w-7 h-7 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                          />
+                          <span className="text-xs font-mono text-neutral-400">{portalParticleColor}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Floating 3D Text Banner */}
+                <div className="p-2.5 bg-neutral-900/60 rounded-lg border border-neutral-800 space-y-2">
+                  <div className="space-y-1">
+                    <span className="text-xs font-semibold text-neutral-300">Holographic 3D Text Banner:</span>
+                    <input
+                      type="text"
+                      placeholder="e.g. STAR weAR or custom message"
+                      value={portalFloatingText}
+                      onChange={(e) => setPortalFloatingText(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs bg-black/60 border border-neutral-700 rounded text-neutral-200 placeholder-neutral-500"
+                    />
+                  </div>
+
+                  {portalFloatingText && (
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <NumberSliderInput
+                        label="Text Scale"
+                        value={portalTextScale}
+                        onChange={setPortalTextScale}
+                        min={0.3}
+                        max={2.0}
+                        step={0.05}
+                        color="sky"
+                        precision={2}
+                        resetValue={1.0}
+                        showRange={true}
+                      />
+                      <div className="space-y-1">
+                        <span className="text-[11px] font-semibold text-neutral-300">Text Glow Color</span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="color"
+                            value={portalTextColor}
+                            onChange={(e) => setPortalTextColor(e.target.value)}
+                            className="w-7 h-7 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                          />
+                          <span className="text-xs font-mono text-neutral-400">{portalTextColor}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Dedicated Save Portal Configuration Button */}
+              <div className="pt-3 border-t border-neutral-800/80 space-y-2">
+                <button
+                  type="button"
+                  disabled={savingConfig}
+                  onClick={handleSaveConfig}
+                  className="w-full py-2.5 px-4 bg-gradient-to-r from-sky-600 via-indigo-600 to-purple-600 hover:from-sky-500 hover:to-purple-500 text-white font-bold rounded-lg shadow-lg shadow-sky-500/20 text-xs flex items-center justify-center gap-2 transition-all disabled:opacity-50 active:scale-[0.99]"
+                >
+                  <span className="material-symbols-outlined text-sm">save</span>
+                  <span>{savingConfig ? 'Saving Portal Configuration...' : `Save Portal to Batch (${batchId || 'Active'})`}</span>
+                </button>
               </div>
             </div>
           )}
@@ -5406,12 +7014,12 @@ const ARTest = () => {
         style={{ touchAction: 'none' }}
         onContextMenu={(e) => e.preventDefault()}
       >
-        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) ? (
+        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled) ? (
           <a-scene
-            key={localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath}
+            key={batchId || localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || 'ar-portal-scene'}
             embedded
             color-space="sRGB"
-            renderer="colorManagement: true; physicallyCorrectLights: true; antialias: true;"
+            renderer="colorManagement: true; physicallyCorrectLights: true; antialias: true; stencil: true;"
             vr-mode-ui="enabled: false"
             device-orientation-permission-ui="enabled: false"
             scene-environment="exposure: 1.0"
@@ -5433,26 +7041,37 @@ const ARTest = () => {
             <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
 
             {/* Center Model Entity Anchor */}
-            <a-entity position="0 0 0">
-              <a-gltf-model
-                id="ar-model"
-                src={localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath}
-                position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
-                scale={`${modelScale} ${modelScale} ${modelScale}`}
-                rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
-                {...(modelRotSpeed > 0 && !selectedMeshUuid
-                  ? {
-                    animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${modelRotY + 360
-                      } ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;`
-                  }
-                  : {})}
-                model-auto-center="enabled: true"
-                dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-                play-gltf-video={`src: ${activeVideoUrl || customVideoUrl || arData?.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${videoTargetMesh}; flipX: ${videoFlipX}; videoScale: ${videoScale}; videoOffsetX: ${videoOffsetX}; videoOffsetY: ${videoOffsetY}; videoOffsetZ: ${videoOffsetZ}; videoRotation: ${videoRotation}; videoTextureRepeatX: ${videoTextureRepeatX}; videoTextureRepeatY: ${videoTextureRepeatY}; videoTextureOffsetX: ${videoTextureOffsetX}; videoTextureOffsetY: ${videoTextureOffsetY}; aspectRatio: ${videoAspectRatio}`}
-                play-gltf-animation={`playing: ${mediaPlaying}`}
-              >
-              </a-gltf-model>
-            </a-entity>
+            {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
+              <a-entity position="0 0 0">
+                <a-gltf-model
+                  id="ar-model"
+                  src={localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath}
+                  position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
+                  scale={`${modelScale} ${modelScale} ${modelScale}`}
+                  rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
+                  visible={!(portalEnabled && portalHideOutsideModel)}
+                  {...(modelRotSpeed > 0 && !selectedMeshUuid
+                    ? {
+                      animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${modelRotY + 360
+                        } ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;`
+                    }
+                    : {})}
+                  model-auto-center="enabled: true"
+                  dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
+                  play-gltf-video={`src: ${activeVideoUrl || customVideoUrl || arData?.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${videoTargetMesh}; flipX: ${videoFlipX}; videoScale: ${videoScale}; videoOffsetX: ${videoOffsetX}; videoOffsetY: ${videoOffsetY}; videoOffsetZ: ${videoOffsetZ}; videoRotation: ${videoRotation}; videoTextureRepeatX: ${videoTextureRepeatX}; videoTextureRepeatY: ${videoTextureRepeatY}; videoTextureOffsetX: ${videoTextureOffsetX}; videoTextureOffsetY: ${videoTextureOffsetY}; aspectRatio: ${videoAspectRatio}`}
+                  play-gltf-animation={`playing: ${mediaPlaying}`}
+                >
+                </a-gltf-model>
+              </a-entity>
+            )}
+
+            {/* AR Portal & Virtual Window Anchor */}
+            {portalEnabled && (
+              <a-entity
+                id="ar-portal-anchor"
+                ar-portal={`enabled: ${portalEnabled}; shape: ${portalShape}; width: ${portalWidth}; height: ${portalHeight}; radius: ${portalRadius}; depth: ${portalDepth}; frameColor: ${portalFrameColor}; frameWidth: ${portalFrameWidth}; frameDepth: 0.08; frameEmissive: ${portalFrameEmissive}; frameEmissiveIntensity: ${portalFrameEmissiveIntensity}; frameGlow: ${portalFrameGlow}; glassTint: ${portalGlassTint}; glassOpacity: ${portalGlassOpacity}; interiorType: ${portalInteriorType}; skyboxUrl: ${portalSkyboxUrl}; interiorColor: ${portalInteriorColor}; wallColor: ${portalWallColor}; floorColor: ${portalFloorColor}; gridColor: ${portalGridColor}; interiorLightColor: ${portalLightColor}; interiorLightIntensity: ${portalLightIntensity}; interiorModelType: ${portalModelType}; artifactType: ${portalArtifactType}; customModelUrl: ${portalCustomModelUrl}; currentModelUrl: ${localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || ''}; modelScale: ${portalModelScale}; modelPosX: ${portalModelPosX}; modelPosY: ${portalModelPosY}; modelPosZ: ${portalModelPosZ}; modelRotSpeed: ${portalModelRotSpeed}; modelRotX: ${portalModelRotX}; modelRotY: ${portalModelRotY}; modelRotZ: ${portalModelRotZ}; showVideo: ${portalShowVideo}; videoUrl: ${portalVideoUrl || activeVideoUrl || ''}; videoScale: ${portalVideoScale}; videoPosY: ${portalVideoPosY}; videoPosZ: ${portalVideoPosZ}; particles: ${portalParticles}; particleCount: ${portalParticleCount}; particleColor: ${portalParticleColor}; particleSpeed: ${portalParticleSpeed}; floatingText: ${portalFloatingText}; textColor: ${portalTextColor}; textScale: ${portalTextScale}; textPosY: ${portalTextPosY}; textPosZ: ${portalTextPosZ}; posX: ${portalPosX}; posY: ${portalPosY}; posZ: ${portalPosZ}; rotX: ${portalRotX}; rotY: ${portalRotY}; rotZ: ${portalRotZ};`}
+              ></a-entity>
+            )}
           </a-scene>
         ) : (
           !loading && (
@@ -5645,11 +7264,10 @@ const ARTest = () => {
             <button
               type="button"
               onClick={toggleCameraAutoRotate}
-              className={`px-3 py-1.5 rounded-full text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                cameraAutoRotate
+              className={`px-3 py-1.5 rounded-full text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer ${cameraAutoRotate
                   ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
                   : 'text-neutral-400 hover:text-white hover:bg-white/10'
-              }`}
+                }`}
               title="Toggle 360 Auto-Rotation"
             >
               <span className={`material-symbols-outlined text-sm ${cameraAutoRotate ? 'animate-spin' : ''}`} style={{ animationDuration: '6s' }}>
@@ -5675,11 +7293,10 @@ const ARTest = () => {
             <button
               type="button"
               onClick={() => setMatWireframe((prev) => !prev)}
-              className={`px-2.5 py-1.5 rounded-full text-[11px] font-mono flex items-center gap-1 transition-all cursor-pointer ${
-                matWireframe
+              className={`px-2.5 py-1.5 rounded-full text-[11px] font-mono flex items-center gap-1 transition-all cursor-pointer ${matWireframe
                   ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
                   : 'text-neutral-400 hover:text-white hover:bg-white/10'
-              }`}
+                }`}
               title="Toggle Wireframe Mesh"
             >
               <span className="material-symbols-outlined text-sm">grid_view</span>
@@ -5689,16 +7306,18 @@ const ARTest = () => {
             {batchId && (
               <>
                 <div className="w-px h-4 bg-white/20"></div>
-                <a
-                  href={`/ar/${batchId}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 rounded-full text-[11px] font-mono font-bold bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-500 hover:to-indigo-500 text-white flex items-center gap-1 shadow-md transition-all cursor-pointer"
-                  title="Launch Live WebAR Camera on Mobile"
+                <button
+                  type="button"
+                  onClick={handleTryInAR}
+                  disabled={isLaunchingAR}
+                  className="px-3 py-1.5 rounded-full text-[11px] font-mono font-bold bg-gradient-to-r from-rose-600 to-indigo-600 hover:from-rose-500 hover:to-indigo-500 text-white flex items-center gap-1 shadow-md transition-all cursor-pointer disabled:opacity-60 active:scale-95"
+                  title="Save Calibration & Launch Live WebAR Camera"
                 >
-                  <span className="material-symbols-outlined text-sm">view_in_ar</span>
-                  <span>Try In AR</span>
-                </a>
+                  <span className={`material-symbols-outlined text-sm ${isLaunchingAR ? 'animate-spin' : ''}`}>
+                    {isLaunchingAR ? 'sync' : 'view_in_ar'}
+                  </span>
+                  <span>{isLaunchingAR ? 'Syncing...' : 'Try In AR'}</span>
+                </button>
               </>
             )}
           </div>

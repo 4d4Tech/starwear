@@ -18,9 +18,11 @@ import { storage } from '../firebase';
 import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfaceFrame } from '../utils/aframe-components';
 import MeshTemplateBrowser from '../components/MeshTemplateBrowser';
 import ThreeDAIStudioModal from '../components/ThreeDAIStudioModal';
+import InstagramIngestionModal from '../components/InstagramIngestionModal';
+import AddGeometryModal from '../components/AddGeometryModal';
+import { createInstagramFrameMesh } from '../utils/instagramFrameRenderer';
 import { getMeshTemplates, fetchTemplatesFromBucket } from '../utils/meshTemplates';
 import { CharacterAnimationManager } from '../utils/CharacterAnimationManager';
-import { rigHumanoidObject, analyzeHumanoidGeometry } from '../utils/humanoidRigging';
 import {
   DEFAULT_TRIPO_KEY,
   TRIPO_ANIMATION_PRESETS,
@@ -887,7 +889,8 @@ export class VideoDisplayManager {
     name = 'YouTube_3D_Display',
     targetMode = 'FLAT_DISPLAY',
     selectedMesh = null,
-    targetMaterialIndex = 0
+    targetMaterialIndex = 0,
+    orientationMode = 'OBJECT_LOCK'
   }) {
     const videoId = this.extractYouTubeId(urlOrId);
     const fullVideoUrl = `https://www.youtube.com/watch?v=${videoId}`;
@@ -902,7 +905,7 @@ export class VideoDisplayManager {
       iframeH = 360;
     }
 
-    // 1. Create HTML wrapper & IFrame
+    // 1. Create HTML wrapper & IFrame with backface culling & smooth opacity transitions
     const containerDiv = document.createElement('div');
     containerDiv.style.width = `${iframeW}px`;
     containerDiv.style.height = `${iframeH}px`;
@@ -912,6 +915,9 @@ export class VideoDisplayManager {
     containerDiv.style.pointerEvents = 'auto';
     containerDiv.style.boxShadow = '0 20px 50px rgba(0,0,0,0.8)';
     containerDiv.style.border = '2px solid rgba(99, 102, 241, 0.4)';
+    containerDiv.style.backfaceVisibility = 'hidden';
+    containerDiv.style.webkitBackfaceVisibility = 'hidden';
+    containerDiv.style.transition = 'opacity 0.12s ease-out';
 
     const iframe = document.createElement('iframe');
     iframe.style.width = '100%';
@@ -947,19 +953,19 @@ export class VideoDisplayManager {
         bBox.getCenter(bCenter);
 
         if (targetMode === 'SELECTED_MESH') {
-          // Whichever 3D geometry is specified for the video layer defaults to fill that 3D geometry
-          const slot = typeof targetMaterialIndex === 'number' && targetMaterialIndex >= 0 ? targetMaterialIndex : 0;
-          const frame = computeGeometrySurfaceFrame(calcMesh, slot);
-          baseScale = Math.max(frame.size.x, 0.05) / iframeW;
-          const uOffsetX = calcMesh.userData?.videoOffsetX || 0;
-          const uOffsetY = calcMesh.userData?.videoOffsetY || 0;
-          const uOffsetZ = calcMesh.userData?.videoOffsetZ || 0;
-          const localScreen = frame.localCenter.clone().addScaledVector(frame.localNormal, 0.005 + uOffsetZ);
-          localScreen.addScaledVector(frame.localRight, uOffsetX);
-          localScreen.addScaledVector(frame.localUp, uOffsetY);
-          localScreen.applyMatrix4(calcMesh.matrixWorld);
-          spawnPos.copy(localScreen);
-          cssObject.quaternion.copy(frame.worldQuat);
+          // Whichever 3D geometry is specified for the video layer locks directly to its orientation & center
+          const targetW = Math.max(bSize.x, 0.05);
+          baseScale = targetW / iframeW;
+
+          // Position at exact local geometry center
+          const localCenter = bCenter.clone();
+          localCenter.applyMatrix4(calcMesh.matrixWorld);
+          spawnPos.copy(localCenter);
+
+          // Lock orientation 1:1 to target mesh world quaternion
+          const targetWorldQuat = new THREE.Quaternion();
+          calcMesh.getWorldQuaternion(targetWorldQuat);
+          cssObject.quaternion.copy(targetWorldQuat);
         } else {
           const targetW = Math.min(0.42, Math.max(0.24, bSize.x * 0.40));
           baseScale = targetW / iframeW;
@@ -1000,11 +1006,16 @@ export class VideoDisplayManager {
           frameStyle,
           videoTargetMaterialIndex: slot,
           archetype: 'CSS3D_YOUTUBE',
+          videoOrientationMode: orientationMode || 'OBJECT_LOCK',
           videoScale: mesh.userData?.videoScale ?? 1.0,
           videoOffsetX: mesh.userData?.videoOffsetX ?? 0.0,
           videoOffsetY: mesh.userData?.videoOffsetY ?? 0.0,
           videoOffsetZ: mesh.userData?.videoOffsetZ ?? 0.0,
+          videoRotationX: mesh.userData?.videoRotationX ?? 0.0,
+          videoRotationY: mesh.userData?.videoRotationY ?? 0.0,
+          videoRotationZ: mesh.userData?.videoRotationZ ?? (mesh.userData?.videoRotation ?? 0.0),
           videoRotation: mesh.userData?.videoRotation ?? 0.0,
+          videoOcclusionEnabled: mesh.userData?.videoOcclusionEnabled ?? true,
           videoTextureRepeatX: mesh.userData?.videoTextureRepeatX ?? 1.0,
           videoTextureRepeatY: mesh.userData?.videoTextureRepeatY ?? 1.0,
           videoTextureOffsetX: mesh.userData?.videoTextureOffsetX ?? 0.0,
@@ -1093,6 +1104,11 @@ export class VideoDisplayManager {
             videoUrl: fullVideoUrl,
             aspectRatio,
             frameStyle,
+            videoOrientationMode: orientationMode || 'OBJECT_LOCK',
+            videoRotationX: 0.0,
+            videoRotationY: 0.0,
+            videoRotationZ: 0.0,
+            videoOcclusionEnabled: true,
             videoTargetMeshName: mesh.name,
             videoTargetMeshUuid: mesh.uuid,
             videoTargetMaterialIndex: mesh.userData.videoTargetMaterialIndex ?? 0
@@ -1102,6 +1118,10 @@ export class VideoDisplayManager {
         this.css3dEntries.push({
           id: entryId,
           cssObject,
+          containerDiv,
+          iframe,
+          iframeW,
+          iframeH,
           bezelMesh: mesh,
           targetMesh: mesh,
           videoId,
@@ -1112,7 +1132,7 @@ export class VideoDisplayManager {
 
         this.app.selectObject(mesh);
         this.app.updatePropertiesPanel();
-        this.app.updateDiagnostics(`Attached YouTube Video [${videoId}] to "${mesh.name || 'Selected Mesh'}" [Layer/Slot ${mesh.userData.videoTargetMaterialIndex ?? 0}]`);
+        this.app.updateDiagnostics(`Attached YouTube Video [${videoId}] to "${mesh.name || 'Selected Mesh'}" [Locked to 3D Object Space]`);
         return mesh;
       }
     }
@@ -1150,12 +1170,21 @@ export class VideoDisplayManager {
       frameStyle,
       hasVideo: true,
       isVideoLayer: true,
+      videoOrientationMode: 'OBJECT_LOCK',
+      videoRotationX: 0.0,
+      videoRotationY: 0.0,
+      videoRotationZ: 0.0,
+      videoOcclusionEnabled: true,
       materials: { lit: bezelMats }
     };
 
     this.css3dEntries.push({
       id: entryId,
       cssObject,
+      containerDiv,
+      iframe,
+      iframeW,
+      iframeH,
       bezelMesh,
       targetMesh: bezelMesh,
       videoId,
@@ -1169,7 +1198,7 @@ export class VideoDisplayManager {
   }
 
   update() {
-    // 1. Sync CSS3D YouTube overlays to WebGL target mesh positions
+    // 1. Sync CSS3D YouTube overlays to WebGL target mesh positions & orientations
     if (!this._tempWorldPos) {
       this._tempWorldPos = new THREE.Vector3();
       this._tempWorldQuat = new THREE.Quaternion();
@@ -1214,54 +1243,117 @@ export class VideoDisplayManager {
         });
       }
 
-      // If target has geometry, calculate accurate submesh/screen surface alignment
-      if (calcMesh && calcMesh.geometry) {
+      // Base orientation locked 1:1 to target object's world quaternion
+      const orientMode = target.userData?.videoOrientationMode || 'OBJECT_LOCK';
+      let baseQuat = this._tempWorldQuat.clone();
+
+      if (orientMode === 'BACK_FACE') {
+        baseQuat.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
+      } else if (orientMode === 'TOP_FACE') {
+        baseQuat.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2));
+      } else if (orientMode === 'BOTTOM_FACE') {
+        baseQuat.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
+      } else if (orientMode === 'RIGHT_FACE') {
+        baseQuat.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2));
+      } else if (orientMode === 'LEFT_FACE') {
+        baseQuat.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2));
+      } else if (orientMode === 'SURFACE_NORMAL' && calcMesh && calcMesh.geometry) {
         const slotIdx = typeof entry.slotIndex === 'number'
           ? entry.slotIndex
           : (typeof target.userData?.videoTargetMaterialIndex === 'number'
               ? target.userData.videoTargetMaterialIndex
               : 0);
-
         const frame = computeGeometrySurfaceFrame(calcMesh, slotIdx);
+        baseQuat.copy(frame.worldQuat);
+      }
 
-        const uOffsetX = Number(target.userData?.videoOffsetX || 0);
-        const uOffsetY = Number(target.userData?.videoOffsetY || 0);
-        const uOffsetZ = Number(target.userData?.videoOffsetZ || 0);
+      // 3-Axis Euler Rotation in Object Space (Pitch X, Yaw Y, Roll Z)
+      const rotX = THREE.MathUtils.degToRad(Number(target.userData?.videoRotationX || 0));
+      const rotY = THREE.MathUtils.degToRad(Number(target.userData?.videoRotationY || 0));
+      const rotZ = THREE.MathUtils.degToRad(Number(target.userData?.videoRotationZ ?? (target.userData?.videoRotation ?? 0)));
+      if (rotX !== 0 || rotY !== 0 || rotZ !== 0) {
+        const userRotQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(rotX, rotY, rotZ, 'YXZ'));
+        baseQuat.multiply(userRotQuat);
+      }
+      this._tempWorldQuat.copy(baseQuat);
 
-        const localPos = frame.localCenter.clone().addScaledVector(frame.localNormal, 0.005 + uOffsetZ);
-        localPos.addScaledVector(frame.localRight, uOffsetX);
-        localPos.addScaledVector(frame.localUp, uOffsetY);
-        localPos.applyMatrix4(calcMesh.matrixWorld);
-        this._tempWorldPos.copy(localPos);
+      // Local center calculation from geometry bounding box
+      let localCenter = new THREE.Vector3(0, 0, 0);
+      let localNormal = new THREE.Vector3(0, 0, 1);
+      let localRight = new THREE.Vector3(1, 0, 0);
+      let localUp = new THREE.Vector3(0, 1, 0);
 
-        let quat = frame.worldQuat.clone();
-        const uRot = Number(target.userData?.videoRotation || 0);
-        if (uRot !== 0) {
-          const rotQuat = new THREE.Quaternion().setFromAxisAngle(
-            frame.worldNormal,
-            (uRot * Math.PI) / 180
-          );
-          quat = rotQuat.multiply(quat);
-        }
-        this._tempWorldQuat.copy(quat);
-
-        if (!entry.baseScale) {
-          entry.baseScale = Math.max(frame.size.x, 0.05) / 640;
-        }
-      } else {
-        const uRot = Number(target.userData?.videoRotation || 0);
-        if (uRot) {
-          if (!this._tempRotQuat) this._tempRotQuat = new THREE.Quaternion();
-          this._tempRotQuat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), (uRot * Math.PI) / 180);
-          this._tempWorldQuat.multiply(this._tempRotQuat);
+      if (calcMesh && calcMesh.geometry) {
+        if (!calcMesh.geometry.boundingBox) calcMesh.geometry.computeBoundingBox();
+        const bBox = calcMesh.geometry.boundingBox;
+        if (bBox) {
+          bBox.getCenter(localCenter);
+          if (orientMode === 'FRONT_FACE') {
+            localCenter.z = bBox.max.z;
+          } else if (orientMode === 'BACK_FACE') {
+            localCenter.z = bBox.min.z;
+          } else if (orientMode === 'TOP_FACE') {
+            localCenter.y = bBox.max.y;
+          } else if (orientMode === 'BOTTOM_FACE') {
+            localCenter.y = bBox.min.y;
+          } else if (orientMode === 'RIGHT_FACE') {
+            localCenter.x = bBox.max.x;
+          } else if (orientMode === 'LEFT_FACE') {
+            localCenter.x = bBox.min.x;
+          } else if (orientMode === 'SURFACE_NORMAL') {
+            const slotIdx = typeof entry.slotIndex === 'number'
+              ? entry.slotIndex
+              : (typeof target.userData?.videoTargetMaterialIndex === 'number'
+                  ? target.userData.videoTargetMaterialIndex
+                  : 0);
+            const frame = computeGeometrySurfaceFrame(calcMesh, slotIdx);
+            localCenter.copy(frame.localCenter);
+            localNormal.copy(frame.localNormal);
+            localRight.copy(frame.localRight);
+            localUp.copy(frame.localUp);
+          }
         }
       }
+
+      // User spatial offsets in meters
+      const uOffsetX = Number(target.userData?.videoOffsetX || 0);
+      const uOffsetY = Number(target.userData?.videoOffsetY || 0);
+      const uOffsetZ = Number(target.userData?.videoOffsetZ || 0);
+
+      const localFinal = localCenter.clone();
+      if (orientMode === 'SURFACE_NORMAL') {
+        localFinal.addScaledVector(localNormal, uOffsetZ);
+        localFinal.addScaledVector(localRight, uOffsetX);
+        localFinal.addScaledVector(localUp, uOffsetY);
+      } else {
+        localFinal.add(new THREE.Vector3(uOffsetX, uOffsetY, uOffsetZ));
+      }
+
+      if (calcMesh) {
+        localFinal.applyMatrix4(calcMesh.matrixWorld);
+      } else {
+        localFinal.applyMatrix4(target.matrixWorld);
+      }
+      this._tempWorldPos.copy(localFinal);
 
       entry.cssObject.position.copy(this._tempWorldPos);
       entry.cssObject.quaternion.copy(this._tempWorldQuat);
 
+      if (!entry.baseScale) {
+        let geomW = 0.5;
+        if (calcMesh && calcMesh.geometry) {
+          if (!calcMesh.geometry.boundingBox) calcMesh.geometry.computeBoundingBox();
+          if (calcMesh.geometry.boundingBox) {
+            const sz = new THREE.Vector3();
+            calcMesh.geometry.boundingBox.getSize(sz);
+            geomW = Math.max(sz.x, 0.05);
+          }
+        }
+        entry.baseScale = geomW / (entry.iframeW || 640);
+      }
+
       const uScale = Number(target.userData?.videoScale || 1.0);
-      const s = (entry.baseScale || 0.0006) * uScale;
+      const s = entry.baseScale * uScale;
       entry.cssObject.scale.set(
         Math.abs(this._tempWorldScale.x || 1) * s,
         Math.abs(this._tempWorldScale.y || 1) * s,
@@ -1282,8 +1374,125 @@ export class VideoDisplayManager {
     });
   }
 
+  updateOcclusion(camera) {
+    if (!camera || !this.css3dEntries || this.css3dEntries.length === 0) return;
+
+    if (!this._occlusionRaycaster) {
+      this._occlusionRaycaster = new THREE.Raycaster();
+      this._occlusionRaycaster.near = 0.02;
+    }
+    if (!this._screenNormal) {
+      this._screenNormal = new THREE.Vector3();
+      this._camToScreen = new THREE.Vector3();
+      this._rayDir = new THREE.Vector3();
+    }
+
+    for (let i = 0; i < this.css3dEntries.length; i++) {
+      const entry = this.css3dEntries[i];
+      if (!entry.cssObject || !entry.containerDiv) continue;
+
+      const target = entry.targetMesh || entry.bezelMesh;
+      const occlusionEnabled = target?.userData?.videoOcclusionEnabled !== false;
+
+      if (!occlusionEnabled) {
+        entry.containerDiv.style.opacity = '1';
+        entry.containerDiv.style.pointerEvents = 'auto';
+        entry.containerDiv.style.visibility = 'visible';
+        continue;
+      }
+
+      // 1. Backface Culling Check (Surface normal vs camera vector)
+      this._screenNormal.set(0, 0, 1).applyQuaternion(entry.cssObject.quaternion).normalize();
+      this._camToScreen.copy(entry.cssObject.position).sub(camera.position).normalize();
+
+      const facingDot = this._screenNormal.dot(this._camToScreen);
+
+      // Facing away or parallel to camera view: hide to prevent showing on back of mesh
+      if (facingDot >= -0.02) {
+        entry.containerDiv.style.opacity = '0';
+        entry.containerDiv.style.pointerEvents = 'none';
+        entry.containerDiv.style.visibility = 'hidden';
+        continue;
+      }
+
+      // 2. Camera Line of Sight Raycasting (Scene Mesh Occlusion)
+      const uScale = Number(target?.userData?.videoScale || 1.0);
+      const s = (entry.baseScale || 0.0006) * uScale;
+      const halfW = ((entry.iframeW || 640) * s * Math.abs(entry.cssObject.scale.x || 1)) * 0.45;
+      const halfH = ((entry.iframeH || 360) * s * Math.abs(entry.cssObject.scale.y || 1)) * 0.45;
+
+      const rightVec = new THREE.Vector3(1, 0, 0).applyQuaternion(entry.cssObject.quaternion);
+      const upVec = new THREE.Vector3(0, 1, 0).applyQuaternion(entry.cssObject.quaternion);
+
+      const centerPt = entry.cssObject.position;
+      const pts = [
+        centerPt,
+        centerPt.clone().addScaledVector(rightVec, -halfW).addScaledVector(upVec, halfH),
+        centerPt.clone().addScaledVector(rightVec, halfW).addScaledVector(upVec, halfH),
+        centerPt.clone().addScaledVector(rightVec, -halfW).addScaledVector(upVec, -halfH),
+        centerPt.clone().addScaledVector(rightVec, halfW).addScaledVector(upVec, -halfH)
+      ];
+
+      const occluders = [];
+      const isTargetOrDescendant = (obj) => {
+        let curr = obj;
+        while (curr) {
+          if (curr === target || curr === entry.bezelMesh || curr === this.app.transformControl) return true;
+          curr = curr.parent;
+        }
+        return false;
+      };
+
+      if (this.app.scene) {
+        this.app.scene.traverse((child) => {
+          if (child.isMesh && child.visible && !child.isHelper && !isTargetOrDescendant(child)) {
+            occluders.push(child);
+          }
+        });
+      }
+
+      if (occluders.length === 0) {
+        entry.containerDiv.style.opacity = '1';
+        entry.containerDiv.style.pointerEvents = 'auto';
+        entry.containerDiv.style.visibility = 'visible';
+        continue;
+      }
+
+      let visibleSamples = 0;
+      for (let p = 0; p < pts.length; p++) {
+        const testPt = pts[p];
+        this._rayDir.copy(testPt).sub(camera.position);
+        const dist = this._rayDir.length();
+        if (dist < 0.01) continue;
+        this._rayDir.normalize();
+
+        this._occlusionRaycaster.set(camera.position, this._rayDir);
+        this._occlusionRaycaster.far = dist;
+
+        const hits = this._occlusionRaycaster.intersectObjects(occluders, true);
+        if (hits.length > 0 && hits[0].distance < dist - 0.04) {
+          // Blocked by another scene mesh closer to the camera!
+        } else {
+          visibleSamples++;
+        }
+      }
+
+      if (visibleSamples === 0) {
+        entry.containerDiv.style.opacity = '0';
+        entry.containerDiv.style.pointerEvents = 'none';
+        entry.containerDiv.style.visibility = 'hidden';
+      } else {
+        const opacity = visibleSamples >= 3 ? '1.0' : (visibleSamples / 5).toFixed(2);
+        entry.containerDiv.style.opacity = opacity;
+        entry.containerDiv.style.pointerEvents = visibleSamples >= 3 ? 'auto' : 'none';
+        entry.containerDiv.style.visibility = 'visible';
+      }
+    }
+  }
+
   render(camera) {
     if (this.cssRenderer && this.cssScene && camera) {
+      this.updateOcclusion(camera);
       this.cssRenderer.render(this.cssScene, camera);
     }
   }
@@ -1665,6 +1874,9 @@ function extractRadialContour(maskGrid, w, h) {
 export default function Studio4D4() {
   const [threeDAIModalData, setThreeDAIModalData] = useState(null);
   const [videoModalOpen, setVideoModalOpen] = useState(false);
+  const [instagramModalOpen, setInstagramModalOpen] = useState(false);
+  const [geometryModalOpen, setGeometryModalOpen] = useState(false);
+  const [exportFileName, setExportFileName] = useState('Studio_Export');
   const [videoTab, setVideoTab] = useState('webgl');
   const [videoUrlInput, setVideoUrlInput] = useState('');
   const [videoTargetMode, setVideoTargetMode] = useState('FLAT_DISPLAY');
@@ -1915,14 +2127,33 @@ export default function Studio4D4() {
         if (cssEntry) {
           cssEntry.targetMesh = targetMesh;
           cssEntry.slotIndex = slot;
-          cssEntry.baseScale = Math.max(frame.size.x, 0.05) / 640;
 
-          // Reset user transform offsets on target mesh
+          let localCenter = new THREE.Vector3(0, 0, 0);
+          let localSize = new THREE.Vector3(0.5, 0.5, 0.1);
+          if (targetMesh.geometry) {
+            if (!targetMesh.geometry.boundingBox) targetMesh.geometry.computeBoundingBox();
+            if (targetMesh.geometry.boundingBox) {
+              targetMesh.geometry.boundingBox.getCenter(localCenter);
+              targetMesh.geometry.boundingBox.getSize(localSize);
+            }
+          }
+
+          const targetScale = new THREE.Vector3();
+          targetMesh.getWorldScale(targetScale);
+          const physicalW = Math.max(localSize.x * Math.abs(targetScale.x), 0.05);
+          cssEntry.baseScale = physicalW / (cssEntry.iframeW || 640);
+
+          // Reset user transform offsets on target mesh and lock to object
+          targetMesh.userData.videoOrientationMode = 'OBJECT_LOCK';
           targetMesh.userData.videoScale = 1.0;
           targetMesh.userData.videoOffsetX = 0.0;
           targetMesh.userData.videoOffsetY = 0.0;
           targetMesh.userData.videoOffsetZ = 0.0;
+          targetMesh.userData.videoRotationX = 0;
+          targetMesh.userData.videoRotationY = 0;
+          targetMesh.userData.videoRotationZ = 0;
           targetMesh.userData.videoRotation = 0;
+          targetMesh.userData.videoOcclusionEnabled = true;
           targetMesh.userData.hasVideo = true;
           targetMesh.userData.isCSS3D = true;
           targetMesh.userData.videoId = cssEntry.videoId;
@@ -1945,30 +2176,38 @@ export default function Studio4D4() {
               videoTargetMaterialIndex: slot,
               videoTargetMeshUuid: targetMesh.uuid,
               videoTargetMeshName: targetMesh.name,
+              videoOrientationMode: 'OBJECT_LOCK',
               videoScale: 1.0,
               videoOffsetX: 0.0,
               videoOffsetY: 0.0,
               videoOffsetZ: 0.0,
-              videoRotation: 0
+              videoRotationX: 0,
+              videoRotationY: 0,
+              videoRotationZ: 0,
+              videoRotation: 0,
+              videoOcclusionEnabled: true
             };
           }
 
-          // Instantly position CSS3D overlay on surface
-          const localPos = frame.localCenter.clone().addScaledVector(frame.localNormal, 0.005);
+          // Instantly position CSS3D overlay occupying object's exact space & orientation
+          const localPos = localCenter.clone();
           localPos.applyMatrix4(targetMesh.matrixWorld);
           cssEntry.cssObject.position.copy(localPos);
-          cssEntry.cssObject.quaternion.copy(frame.worldQuat);
+
+          const targetWorldQuat = new THREE.Quaternion();
+          targetMesh.getWorldQuaternion(targetWorldQuat);
+          cssEntry.cssObject.quaternion.copy(targetWorldQuat);
           cssEntry.cssObject.scale.set(cssEntry.baseScale, cssEntry.baseScale, cssEntry.baseScale);
 
           if (cssEntry.bezelMesh && cssEntry.bezelMesh !== targetMesh) {
             cssEntry.bezelMesh.position.copy(localPos);
-            cssEntry.bezelMesh.quaternion.copy(frame.worldQuat);
+            cssEntry.bezelMesh.quaternion.copy(targetWorldQuat);
           }
 
           this.flashMeshHighlight(targetMesh);
           this.selectObject(targetMesh);
           this.updatePropertiesPanel();
-          this.updateDiagnostics(`Snapped YouTube Video to "${targetMesh.name || 'Mesh'}" [Face/Slot ${slot}] in exact 3D orientation`);
+          this.updateDiagnostics(`Locked YouTube Video to "${targetMesh.name || 'Mesh'}" [Face/Slot ${slot}] in exact 3D orientation & space`);
           return;
         }
 
@@ -2004,6 +2243,47 @@ export default function Studio4D4() {
           this.updatePropertiesPanel();
           this.updateDiagnostics(`Snapped WebGL Video to "${targetMesh.name || 'Mesh'}" [Face/Slot ${slot}]`);
         }
+      }
+
+      fitVideoLayerToObject(mesh) {
+        if (!mesh) return;
+        const cssEntry = this.videoDisplayManager?.css3dEntries?.[0];
+        if (!cssEntry) return;
+
+        let calcMesh = mesh;
+        if (!calcMesh.isMesh && calcMesh.traverse) {
+          calcMesh.traverse((c) => { if (!calcMesh.isMesh && c.isMesh && c.geometry) calcMesh = c; });
+        }
+
+        let localSize = new THREE.Vector3(0.5, 0.5, 0.1);
+        if (calcMesh && calcMesh.geometry) {
+          if (!calcMesh.geometry.boundingBox) calcMesh.geometry.computeBoundingBox();
+          if (calcMesh.geometry.boundingBox) {
+            calcMesh.geometry.boundingBox.getSize(localSize);
+          }
+        }
+        const meshWorldScale = new THREE.Vector3();
+        calcMesh.getWorldScale(meshWorldScale);
+        const physicalW = Math.max(localSize.x * Math.abs(meshWorldScale.x), 0.05);
+
+        cssEntry.baseScale = physicalW / (cssEntry.iframeW || 640);
+        mesh.userData.videoScale = 1.0;
+        this.updatePropertiesPanel();
+        this.updateDiagnostics(`Fit YouTube display to "${mesh.name || 'Mesh'}" geometry bounds (${physicalW.toFixed(2)}m width).`);
+      }
+
+      zeroVideoLayerOffsets(mesh) {
+        if (!mesh) return;
+        mesh.userData.videoOffsetX = 0.0;
+        mesh.userData.videoOffsetY = 0.0;
+        mesh.userData.videoOffsetZ = 0.0;
+        mesh.userData.videoRotationX = 0.0;
+        mesh.userData.videoRotationY = 0.0;
+        mesh.userData.videoRotationZ = 0.0;
+        mesh.userData.videoRotation = 0.0;
+        mesh.userData.videoOrientationMode = 'OBJECT_LOCK';
+        this.updatePropertiesPanel();
+        this.updateDiagnostics(`Locked YouTube display flush onto "${mesh.name || 'Mesh'}" 3D space.`);
       }
 
       enableFacePickMode(callback) {
@@ -2869,7 +3149,17 @@ export default function Studio4D4() {
             }
           }
 
-          // Populate Video Placement & Sizing UI Controls
+          // Populate Video Placement, 3D Orientation & Sizing UI Controls
+          const orientSelect = document.getElementById('video-orientation-mode-select');
+          if (orientSelect) {
+            orientSelect.value = videoOwner.userData?.videoOrientationMode || 'OBJECT_LOCK';
+          }
+
+          const occlusionToggle = document.getElementById('video-occlusion-toggle');
+          if (occlusionToggle) {
+            occlusionToggle.checked = videoOwner.userData?.videoOcclusionEnabled !== false;
+          }
+
           const scaleSlider = document.getElementById('video-scale-slider');
           const scaleVal = document.getElementById('video-scale-val');
           const scaleNum = document.getElementById('video-scale-num');
@@ -2882,6 +3172,16 @@ export default function Studio4D4() {
           const offZSlider = document.getElementById('video-offset-z-slider');
           const offZVal = document.getElementById('video-offset-z-val');
           const offZNum = document.getElementById('video-offset-z-num');
+
+          const rotXSlider = document.getElementById('video-rotation-x-slider');
+          const rotXVal = document.getElementById('video-rotation-x-val');
+          const rotXNum = document.getElementById('video-rotation-x-num');
+          const rotYSlider = document.getElementById('video-rotation-y-slider');
+          const rotYVal = document.getElementById('video-rotation-y-val');
+          const rotYNum = document.getElementById('video-rotation-y-num');
+          const rotZSlider = document.getElementById('video-rotation-z-slider');
+          const rotZVal = document.getElementById('video-rotation-z-val');
+          const rotZNum = document.getElementById('video-rotation-z-num');
           const rotSlider = document.getElementById('video-rotation-slider');
           const rotVal = document.getElementById('video-rotation-val');
           const rotNum = document.getElementById('video-rotation-num');
@@ -2890,7 +3190,10 @@ export default function Studio4D4() {
           const vOffX = videoOwner.userData?.videoOffsetX ?? 0.0;
           const vOffY = videoOwner.userData?.videoOffsetY ?? 0.0;
           const vOffZ = videoOwner.userData?.videoOffsetZ ?? 0.0;
-          const vRot = videoOwner.userData?.videoRotation ?? 0;
+          const vRotX = videoOwner.userData?.videoRotationX ?? 0.0;
+          const vRotY = videoOwner.userData?.videoRotationY ?? 0.0;
+          const vRotZ = videoOwner.userData?.videoRotationZ ?? (videoOwner.userData?.videoRotation ?? 0.0);
+          const vRot = videoOwner.userData?.videoRotation ?? vRotZ;
 
           if (scaleSlider && scaleVal) {
             scaleSlider.value = vScale;
@@ -2915,6 +3218,24 @@ export default function Studio4D4() {
             offZVal.textContent = `${Number(vOffZ).toFixed(3)}m`;
           }
           if (offZNum) offZNum.value = Number(vOffZ).toFixed(3);
+
+          if (rotXSlider && rotXVal) {
+            rotXSlider.value = vRotX;
+            rotXVal.textContent = `${Math.round(vRotX)}°`;
+          }
+          if (rotXNum) rotXNum.value = Math.round(vRotX);
+
+          if (rotYSlider && rotYVal) {
+            rotYSlider.value = vRotY;
+            rotYVal.textContent = `${Math.round(vRotY)}°`;
+          }
+          if (rotYNum) rotYNum.value = Math.round(vRotY);
+
+          if (rotZSlider && rotZVal) {
+            rotZSlider.value = vRotZ;
+            rotZVal.textContent = `${Math.round(vRotZ)}°`;
+          }
+          if (rotZNum) rotZNum.value = Math.round(vRotZ);
 
           if (rotSlider && rotVal) {
             rotSlider.value = vRot;
@@ -3053,8 +3374,17 @@ export default function Studio4D4() {
 
         document.getElementById('color-front')?.addEventListener('input', (e) => {
           const obj = this.selectedObject;
-          if (obj?.isMesh && obj.userData?.materials?.lit?.[0]) {
-            obj.userData.materials.lit[0].color.set(e.target.value);
+          if (obj?.isMesh) {
+            if (obj.userData?.materials?.lit?.[0]) {
+              obj.userData.materials.lit[0].color.set(e.target.value);
+            }
+            if (obj.material) {
+              if (Array.isArray(obj.material)) {
+                obj.material.forEach((m) => m?.color?.set(e.target.value));
+              } else if (obj.material.color) {
+                obj.material.color.set(e.target.value);
+              }
+            }
           }
         });
 
@@ -3168,13 +3498,18 @@ export default function Studio4D4() {
           const offX = parseFloat(document.getElementById('video-offset-x-slider')?.value || '0.0');
           const offY = parseFloat(document.getElementById('video-offset-y-slider')?.value || '0.0');
           const offZ = parseFloat(document.getElementById('video-offset-z-slider')?.value || '0.0');
-          const rot = parseFloat(document.getElementById('video-rotation-slider')?.value || '0');
+          const rotX = parseFloat(document.getElementById('video-rotation-x-slider')?.value || '0');
+          const rotY = parseFloat(document.getElementById('video-rotation-y-slider')?.value || '0');
+          const rotZ = parseFloat(document.getElementById('video-rotation-z-slider')?.value || document.getElementById('video-rotation-slider')?.value || '0');
 
           target.userData.videoScale = sVal;
           target.userData.videoOffsetX = offX;
           target.userData.videoOffsetY = offY;
           target.userData.videoOffsetZ = offZ;
-          target.userData.videoRotation = rot;
+          target.userData.videoRotationX = rotX;
+          target.userData.videoRotationY = rotY;
+          target.userData.videoRotationZ = rotZ;
+          target.userData.videoRotation = rotZ;
 
           let topParent = target;
           while (topParent.parent && topParent.parent !== this.scene) {
@@ -3185,7 +3520,10 @@ export default function Studio4D4() {
             topParent.userData.videoOffsetX = offX;
             topParent.userData.videoOffsetY = offY;
             topParent.userData.videoOffsetZ = offZ;
-            topParent.userData.videoRotation = rot;
+            topParent.userData.videoRotationX = rotX;
+            topParent.userData.videoRotationY = rotY;
+            topParent.userData.videoRotationZ = rotZ;
+            topParent.userData.videoRotation = rotZ;
           }
 
           this.videoDisplayManager.applyTextureTransforms(target);
@@ -3219,7 +3557,111 @@ export default function Studio4D4() {
         syncSliderAndInput('video-offset-x-slider', 'video-offset-x-num', 'video-offset-x-val', (v) => `${v.toFixed(2)}m`, 0.0);
         syncSliderAndInput('video-offset-y-slider', 'video-offset-y-num', 'video-offset-y-val', (v) => `${v.toFixed(2)}m`, 0.0);
         syncSliderAndInput('video-offset-z-slider', 'video-offset-z-num', 'video-offset-z-val', (v) => `${v.toFixed(3)}m`, 0.0);
+        syncSliderAndInput('video-rotation-x-slider', 'video-rotation-x-num', 'video-rotation-x-val', (v) => `${Math.round(v)}°`, 0);
+        syncSliderAndInput('video-rotation-y-slider', 'video-rotation-y-num', 'video-rotation-y-val', (v) => `${Math.round(v)}°`, 0);
+        syncSliderAndInput('video-rotation-z-slider', 'video-rotation-z-num', 'video-rotation-z-val', (v) => `${Math.round(v)}°`, 0);
         syncSliderAndInput('video-rotation-slider', 'video-rotation-num', 'video-rotation-val', (v) => `${Math.round(v)}°`, 0);
+
+        document.getElementById('video-orientation-mode-select')?.addEventListener('change', (e) => {
+          const obj = this.selectedObject;
+          if (!obj) return;
+          let target = obj;
+          if (!target.userData?.hasVideo && !target.userData?.isCSS3D && target.traverse) {
+            target.traverse((child) => {
+              if (child.userData?.hasVideo || child.userData?.isCSS3D) target = child;
+            });
+          }
+          target.userData.videoOrientationMode = e.target.value;
+          this.updateDiagnostics(`Changed 3D orientation lock mode to "${e.target.value}".`);
+        });
+
+        document.getElementById('video-occlusion-toggle')?.addEventListener('change', (e) => {
+          const obj = this.selectedObject;
+          if (!obj) return;
+          let target = obj;
+          if (!target.userData?.hasVideo && !target.userData?.isCSS3D && target.traverse) {
+            target.traverse((child) => {
+              if (child.userData?.hasVideo || child.userData?.isCSS3D) target = child;
+            });
+          }
+          target.userData.videoOcclusionEnabled = e.target.checked;
+          this.updateDiagnostics(`Dynamic layer occlusion ${e.target.checked ? 'enabled' : 'disabled'}.`);
+        });
+
+        document.getElementById('btn-lock-video-space')?.addEventListener('click', () => {
+          const obj = this.selectedObject;
+          if (!obj) return;
+          let target = obj;
+          if (!target.userData?.hasVideo && !target.userData?.isCSS3D && target.traverse) {
+            target.traverse((child) => {
+              if (child.userData?.hasVideo || child.userData?.isCSS3D) target = child;
+            });
+          }
+          this.zeroVideoLayerOffsets(target);
+        });
+
+        document.getElementById('btn-fit-video-bounds')?.addEventListener('click', () => {
+          const obj = this.selectedObject;
+          if (!obj) return;
+          let target = obj;
+          if (!target.userData?.hasVideo && !target.userData?.isCSS3D && target.traverse) {
+            target.traverse((child) => {
+              if (child.userData?.hasVideo || child.userData?.isCSS3D) target = child;
+            });
+          }
+          this.fitVideoLayerToObject(target);
+        });
+
+        document.getElementById('btn-flush-video')?.addEventListener('click', () => {
+          const obj = this.selectedObject;
+          if (!obj) return;
+          let target = obj;
+          if (!target.userData?.hasVideo && !target.userData?.isCSS3D && target.traverse) {
+            target.traverse((child) => {
+              if (child.userData?.hasVideo || child.userData?.isCSS3D) target = child;
+            });
+          }
+          target.userData.videoOffsetZ = 0.0;
+          this.updatePropertiesPanel();
+          this.updateDiagnostics('Set video layer surface clearance to 0.000m (flush).');
+        });
+
+        const addRotationDeg = (axis, deg) => {
+          const obj = this.selectedObject;
+          if (!obj) return;
+          let target = obj;
+          if (!target.userData?.hasVideo && !target.userData?.isCSS3D && target.traverse) {
+            target.traverse((child) => {
+              if (child.userData?.hasVideo || child.userData?.isCSS3D) target = child;
+            });
+          }
+          const prop = axis === 'x' ? 'videoRotationX' : (axis === 'y' ? 'videoRotationY' : 'videoRotationZ');
+          let current = Number(target.userData[prop] || 0) + deg;
+          while (current > 180) current -= 360;
+          while (current < -180) current += 360;
+          target.userData[prop] = current;
+          if (axis === 'z') target.userData.videoRotation = current;
+          this.updatePropertiesPanel();
+        };
+
+        document.getElementById('btn-rot-x-90')?.addEventListener('click', () => addRotationDeg('x', 90));
+        document.getElementById('btn-rot-y-90')?.addEventListener('click', () => addRotationDeg('y', 90));
+        document.getElementById('btn-rot-z-90')?.addEventListener('click', () => addRotationDeg('z', 90));
+        document.getElementById('btn-rot-zero')?.addEventListener('click', () => {
+          const obj = this.selectedObject;
+          if (!obj) return;
+          let target = obj;
+          if (!target.userData?.hasVideo && !target.userData?.isCSS3D && target.traverse) {
+            target.traverse((child) => {
+              if (child.userData?.hasVideo || child.userData?.isCSS3D) target = child;
+            });
+          }
+          target.userData.videoRotationX = 0;
+          target.userData.videoRotationY = 0;
+          target.userData.videoRotationZ = 0;
+          target.userData.videoRotation = 0;
+          this.updatePropertiesPanel();
+        });
 
         document.getElementById('btn-reset-video-transform')?.addEventListener('click', () => {
           const obj = this.selectedObject;
@@ -3234,7 +3676,11 @@ export default function Studio4D4() {
           target.userData.videoOffsetX = 0.0;
           target.userData.videoOffsetY = 0.0;
           target.userData.videoOffsetZ = 0.0;
+          target.userData.videoRotationX = 0;
+          target.userData.videoRotationY = 0;
+          target.userData.videoRotationZ = 0;
           target.userData.videoRotation = 0;
+          target.userData.videoOrientationMode = 'OBJECT_LOCK';
           this.updatePropertiesPanel();
           this.videoDisplayManager.applyTextureTransforms(target);
         });
@@ -3479,6 +3925,196 @@ export default function Studio4D4() {
         } finally {
           this.setLoadingState('', false);
         }
+      }
+
+      async addInstagramFrames(posts, options = {}) {
+        if (!posts || posts.length === 0) return;
+        this.setLoadingState(`Constructing ${posts.length} 3D Instagram Picture Frames...`, true);
+        this.updateDiagnostics(`Generating ${posts.length} gallery 3D picture frames with ${options.finish || 'obsidian'} finish...`);
+
+        try {
+          const total = posts.length;
+          const createdFrames = [];
+
+          for (let i = 0; i < total; i++) {
+            const frameMesh = await createInstagramFrameMesh(posts[i], options, i, total);
+            this.addSceneObject(frameMesh);
+            createdFrames.push(frameMesh);
+          }
+
+          if (createdFrames.length > 0) {
+            this.selectObject(createdFrames[0]);
+            this.flashMeshHighlight(createdFrames[0]);
+            if (this.orbit) {
+              this.orbit.target.set(0, 1.6, 0);
+              this.camera.position.set(0, 2.0, 5.5);
+              this.orbit.update();
+            }
+          }
+
+          this.updateDiagnostics(`🎉 Successfully ingested ${total} Instagram posts into 3D gallery frames!`);
+        } catch (err) {
+          console.error('Error adding Instagram frames to 3D scene:', err);
+          this.updateDiagnostics(`❌ Error generating Instagram frames: ${err.message}`, true);
+          alert(`Failed to construct Instagram 3D frames:\n${err.message}`);
+        } finally {
+          this.setLoadingState('', false);
+        }
+      }
+
+      addPrimitiveGeometry(type, options = {}) {
+        let geometry;
+        const p = options.params || {};
+
+        switch (type) {
+          case 'box':
+            geometry = new THREE.BoxGeometry(
+              p.width || 1,
+              p.height || 1,
+              p.depth || 1,
+              p.widthSegments || 1,
+              p.heightSegments || 1,
+              p.depthSegments || 1
+            );
+            break;
+          case 'sphere':
+            geometry = new THREE.SphereGeometry(
+              p.radius || 0.6,
+              p.widthSegments || 32,
+              p.heightSegments || 32
+            );
+            break;
+          case 'cylinder':
+            geometry = new THREE.CylinderGeometry(
+              p.radiusTop !== undefined ? p.radiusTop : 0.5,
+              p.radiusBottom !== undefined ? p.radiusBottom : 0.5,
+              p.height || 1.2,
+              p.radialSegments || 32
+            );
+            break;
+          case 'cone':
+            geometry = new THREE.ConeGeometry(
+              p.radius || 0.6,
+              p.height || 1.3,
+              p.radialSegments || 32
+            );
+            break;
+          case 'torus':
+            geometry = new THREE.TorusGeometry(
+              p.radius || 0.65,
+              p.tube || 0.22,
+              p.radialSegments || 24,
+              p.tubularSegments || 48
+            );
+            break;
+          case 'torusKnot':
+            geometry = new THREE.TorusKnotGeometry(
+              p.radius || 0.55,
+              p.tube || 0.16,
+              p.tubularSegments || 80,
+              p.radialSegments || 16,
+              p.p || 2,
+              p.q || 3
+            );
+            break;
+          case 'capsule':
+            geometry = new THREE.CapsuleGeometry(
+              p.radius || 0.4,
+              p.length || 0.9,
+              p.capSegments || 8,
+              p.radialSegments || 24
+            );
+            break;
+          case 'plane':
+            geometry = new THREE.PlaneGeometry(
+              p.width || 2.5,
+              p.height || 2.5,
+              p.widthSegments || 1,
+              p.heightSegments || 1
+            );
+            break;
+          case 'ring':
+            geometry = new THREE.RingGeometry(
+              p.innerRadius || 0.35,
+              p.outerRadius || 0.85,
+              p.thetaSegments || 32
+            );
+            break;
+          case 'icosahedron':
+            geometry = new THREE.IcosahedronGeometry(
+              p.radius || 0.7,
+              p.detail || 0
+            );
+            break;
+          case 'dodecahedron':
+            geometry = new THREE.DodecahedronGeometry(
+              p.radius || 0.7,
+              p.detail || 0
+            );
+            break;
+          case 'tetrahedron':
+            geometry = new THREE.TetrahedronGeometry(
+              p.radius || 0.75,
+              p.detail || 0
+            );
+            break;
+          default:
+            geometry = new THREE.BoxGeometry(1, 1, 1);
+            break;
+        }
+
+        const color = options.color || '#526373';
+        const roughness = options.roughness !== undefined ? options.roughness : 0.35;
+        const metalness = options.metalness !== undefined ? options.metalness : 0.15;
+        const clearcoat = options.clearcoat !== undefined ? options.clearcoat : 0.0;
+        const wireframe = options.wireframe || false;
+        const flatShading = options.flatShading || false;
+
+        const material = new THREE.MeshPhysicalMaterial({
+          color: new THREE.Color(color),
+          roughness,
+          metalness,
+          clearcoat,
+          wireframe,
+          flatShading,
+          side: THREE.DoubleSide
+        });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+
+        geometry.computeBoundingBox();
+        const bbox = geometry.boundingBox;
+        const baseY = bbox ? -bbox.min.y : 0.5;
+
+        const existingPrimitives = this.objects.filter((o) => o.userData?.archetype === 'PRIMITIVE_GEOMETRY');
+        const count = existingPrimitives.length;
+        const offsetX = (count % 5 - 2) * 0.45;
+        const offsetZ = Math.floor(count / 5) * 0.45;
+
+        mesh.position.set(offsetX, baseY, offsetZ);
+
+        const cleanTypeName = type.charAt(0).toUpperCase() + type.slice(1);
+        mesh.name = options.name || `${cleanTypeName} ${count + 1}`;
+        mesh.userData = {
+          isGenerated: true,
+          archetype: 'PRIMITIVE_GEOMETRY',
+          primitiveType: type,
+          params: { ...p },
+          fabricProfile: options.profile || 'cotton',
+          materials: {
+            lit: [material, material, material],
+            unlit: [material, material, material],
+            wireframe: [material, material, material]
+          }
+        };
+
+        this.addSceneObject(mesh);
+        this.selectObject(mesh);
+        this.flashMeshHighlight(mesh);
+        this.updateDiagnostics(`Added 3D ${cleanTypeName} to scene.`);
+        return mesh;
       }
 
       prepareMeshForExport(obj) {
@@ -3785,7 +4421,7 @@ export default function Studio4D4() {
         return null;
       }
 
-      async exportGLTF() {
+      async exportGLTF(customName = '') {
         if (this.isExporting) return;
         this.isExporting = true;
         this.updateDiagnostics('Preparing 3D scene, character armature & animations for export...');
@@ -3862,12 +4498,29 @@ export default function Studio4D4() {
               const link = document.createElement('a');
               link.style.display = 'none';
               link.href = url;
-              link.download = 'Studio_Export.glb';
+              // Resolve export filename with user specification
+              let finalName = (customName || '').trim();
+              if (!finalName) {
+                const inputEl = document.getElementById('export-filename-input');
+                if (inputEl && inputEl.value) {
+                  finalName = inputEl.value.trim();
+                }
+              }
+              if (!finalName) {
+                finalName = this.selectedObject?.name ? `${this.selectedObject.name}_Export` : 'Studio_Export';
+              }
+              // Sanitize illegal file system characters
+              finalName = finalName.replace(/[/\\?%*:|"<>]/g, '_').trim();
+              if (!finalName.toLowerCase().endsWith('.glb')) {
+                finalName = `${finalName}.glb`;
+              }
+
+              link.download = finalName;
               document.body.appendChild(link);
               link.click();
               document.body.removeChild(link);
               setTimeout(() => URL.revokeObjectURL(url), 1000);
-              this.updateDiagnostics(`GLB Export complete with ${allClips.length} animation cycle${allClips.length === 1 ? '' : 's'} and armature embedded.`);
+              this.updateDiagnostics(`GLB Export complete: "${finalName}" with ${allClips.length} animation cycle${allClips.length === 1 ? '' : 's'} and armature embedded.`);
             } finally {
               this.isExporting = false;
             }
@@ -4060,7 +4713,7 @@ export default function Studio4D4() {
       }
 
       setCloudRigStep('Rigging humanoid skeleton in Tripo AI cluster...');
-      const { glbUrl: riggedGlbUrl, rigTaskId } = await rigModelWithTripo({
+      const { rigTaskId } = await rigModelWithTripo({
         apiKey: key,
         originalModelTaskId: originalTaskId,
         rigType: 'biped',
@@ -4201,6 +4854,19 @@ export default function Studio4D4() {
 
             <button
               type="button"
+              onClick={() => setGeometryModalOpen(true)}
+              className="p-2.5 border border-sky-500/40 hover:border-sky-400 bg-gradient-to-br from-sky-950/60 to-indigo-950/40 hover:from-sky-900/60 hover:to-indigo-900/60 rounded-xl text-center transition-all cursor-pointer group flex flex-col items-center justify-center gap-1 shadow-sm"
+              title="Add 3D Primitives: Cube, Sphere, Cylinder, Cone, Torus, Torus Knot, Capsule, Plane, Polyhedra"
+            >
+              <span className="material-symbols-outlined text-2xl text-sky-400 group-hover:scale-110 transition-transform">
+                deployed_code
+              </span>
+              <span className="text-[11px] font-bold text-sky-200">3D Shapes</span>
+              <span className="text-[8px] text-sky-400/90 font-mono">12 Geometries</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => appRef.current?.characterAnimationManager?.autoRigSelected()}
               className="p-2.5 border border-emerald-500/40 hover:border-emerald-400 bg-gradient-to-b from-emerald-950/40 to-teal-950/30 hover:from-emerald-900/50 hover:to-teal-900/40 rounded-xl text-center transition-all cursor-pointer group flex flex-col items-center justify-center gap-1 shadow-sm"
               title="Add standard 19-bone biped armature & character animations to selected humanoid 3D object"
@@ -4210,6 +4876,23 @@ export default function Studio4D4() {
               </span>
               <span className="text-[11px] font-bold text-emerald-200">Auto-Rig</span>
               <span className="text-[8px] text-emerald-400/90 font-mono">19 Bones + Motion</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setInstagramModalOpen(true)}
+              className="col-span-2 py-2 px-3 border border-pink-500/40 hover:border-pink-400 bg-gradient-to-r from-purple-950/40 via-pink-950/30 to-amber-950/20 hover:from-purple-900/50 hover:via-pink-900/40 hover:to-amber-900/30 rounded-xl text-center transition-all cursor-pointer group flex items-center justify-between shadow-sm"
+              title="Authenticate Instagram to pull posts into 3D picture frames"
+            >
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-lg text-pink-400 group-hover:scale-110 transition-transform">
+                  photo_camera
+                </span>
+                <span className="text-[11px] font-semibold text-pink-200">Instagram 3D Frames</span>
+              </div>
+              <span className="text-[9px] bg-pink-950/80 border border-pink-500/40 text-pink-300 font-mono px-1.5 py-0.5 rounded font-bold">
+                Default: 5 (Up to 8)
+              </span>
             </button>
 
             <button
@@ -4265,12 +4948,23 @@ export default function Studio4D4() {
             </div>
 
             {activeLeftTab === 'outliner' && (
-              <button
-                id="btn-add-light"
-                className="text-xs bg-slate-800 hover:bg-slate-700 text-indigo-300 font-semibold px-2.5 py-1 rounded border border-slate-700 transition-colors flex items-center gap-1 cursor-pointer"
-              >
-                <span className="material-symbols-outlined text-xs">add</span> Light
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setGeometryModalOpen(true)}
+                  className="text-xs bg-sky-600 hover:bg-sky-500 text-white font-semibold px-2 py-1 rounded border border-sky-500 transition-colors flex items-center gap-1 cursor-pointer shadow-xs"
+                  title="Add 3D Primitives (Cube, Sphere, Cylinder, Torus, etc.)"
+                >
+                  <span className="material-symbols-outlined text-xs">deployed_code</span>
+                  <span>+ Shape</span>
+                </button>
+                <button
+                  id="btn-add-light"
+                  className="text-xs bg-slate-800 hover:bg-slate-700 text-indigo-300 font-semibold px-2.5 py-1 rounded border border-slate-700 transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-xs">add</span> Light
+                </button>
+              </div>
             )}
           </div>
 
@@ -4675,26 +5369,230 @@ export default function Studio4D4() {
             </div>
 
             {/* Video Layer Mapping, Size & Placement Controls */}
-            <div className="pt-2.5 border-t border-slate-800 space-y-2.5">
+            <div className="pt-2.5 border-t border-slate-800 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] uppercase font-bold text-indigo-400 tracking-wider flex items-center gap-1">
                   <span className="material-symbols-outlined text-xs">tune</span>
-                  Geometry Mapping & Size
+                  3D Orientation & Mapping
                 </span>
                 <button
                   type="button"
                   id="btn-reset-video-transform"
-                  className="text-[10px] text-slate-400 hover:text-white px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 transition-colors"
+                  className="text-[10px] text-slate-400 hover:text-white px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 transition-colors cursor-pointer"
                   title="Reset to default geometry fill"
                 >
-                  Reset Fill
+                  Reset All
                 </button>
               </div>
 
+              {/* 3D Orientation Mode Selector */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="video-orientation-mode-select" className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                    Orientation Lock Mode
+                  </label>
+                  <span className="text-[9px] text-indigo-400 font-mono">3D Space</span>
+                </div>
+                <select
+                  id="video-orientation-mode-select"
+                  className="w-full bg-slate-900 border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
+                >
+                  <option value="OBJECT_LOCK">🔒 Lock to Object (Exact 1:1 Orientation)</option>
+                  <option value="FRONT_FACE">Front Face (+Z)</option>
+                  <option value="BACK_FACE">Back Face (-Z)</option>
+                  <option value="TOP_FACE">Top Face (+Y)</option>
+                  <option value="BOTTOM_FACE">Bottom Face (-Y)</option>
+                  <option value="RIGHT_FACE">Right Face (+X)</option>
+                  <option value="LEFT_FACE">Left Face (-X)</option>
+                  <option value="SURFACE_NORMAL">Surface Normal (Auto Group)</option>
+                </select>
+              </div>
+
+              {/* Quick Space & Sizing Shortcuts */}
+              <div className="grid grid-cols-3 gap-1 pt-0.5">
+                <button
+                  type="button"
+                  id="btn-lock-video-space"
+                  className="py-1 px-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700/60 rounded text-[10px] font-semibold text-indigo-300 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                  title="Snap directly into object's 3D center and lock orientation"
+                >
+                  <span className="material-symbols-outlined text-xs">lock</span>
+                  Lock 1:1
+                </button>
+                <button
+                  type="button"
+                  id="btn-fit-video-bounds"
+                  className="py-1 px-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700/60 rounded text-[10px] font-semibold text-emerald-300 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                  title="Auto-fit video dimensions to match object geometry width"
+                >
+                  <span className="material-symbols-outlined text-xs">fit_screen</span>
+                  Fit Bounds
+                </button>
+                <button
+                  type="button"
+                  id="btn-flush-video"
+                  className="py-1 px-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700/60 rounded text-[10px] font-semibold text-sky-300 flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                  title="Zero surface clearance offset (flush)"
+                >
+                  <span className="material-symbols-outlined text-xs">vertical_align_center</span>
+                  Flush (0m)
+                </button>
+              </div>
+
+              {/* Dynamic Occlusion & Backface Culling Control */}
+              <div className="p-2 bg-slate-950/80 border border-slate-800 rounded-lg space-y-1">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="video-occlusion-toggle" className="text-[10px] font-semibold text-slate-300 flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      id="video-occlusion-toggle"
+                      defaultChecked
+                      className="rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                    />
+                    <span>Scene Occlusion & Depth Sorting</span>
+                  </label>
+                  <span className="text-[9px] bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 px-1 py-0.2 rounded font-mono">
+                    Active
+                  </span>
+                </div>
+                <p className="text-[9px] text-slate-500 leading-tight">
+                  Prevents video layer from rendering in front of other objects or showing through the rear of models.
+                </p>
+              </div>
+
+              {/* 3-Axis Orientation Controls: Pitch (X), Yaw (Y), Roll (Z) */}
+              <div className="space-y-2 pt-1 border-t border-slate-800/80">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                    3-Axis Rotation Angles
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      id="btn-rot-x-90"
+                      className="text-[9px] bg-slate-800 hover:bg-slate-700 px-1 py-0.5 rounded text-slate-300"
+                      title="Rotate +90° Pitch (X)"
+                    >
+                      +90° X
+                    </button>
+                    <button
+                      type="button"
+                      id="btn-rot-y-90"
+                      className="text-[9px] bg-slate-800 hover:bg-slate-700 px-1 py-0.5 rounded text-slate-300"
+                      title="Rotate +90° Yaw (Y)"
+                    >
+                      +90° Y
+                    </button>
+                    <button
+                      type="button"
+                      id="btn-rot-z-90"
+                      className="text-[9px] bg-slate-800 hover:bg-slate-700 px-1 py-0.5 rounded text-slate-300"
+                      title="Rotate +90° Roll (Z)"
+                    >
+                      +90° Z
+                    </button>
+                    <button
+                      type="button"
+                      id="btn-rot-zero"
+                      className="text-[9px] bg-slate-800 hover:bg-slate-700 px-1 py-0.5 rounded text-indigo-300"
+                      title="Zero all rotation angles"
+                    >
+                      0°
+                    </button>
+                  </div>
+                </div>
+
+                {/* Pitch X */}
+                <div>
+                  <div className="flex justify-between items-center mb-0.5">
+                    <span className="text-[10px] text-slate-400">Pitch (X Axis)</span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        id="video-rotation-x-num"
+                        step="1"
+                        min="-180"
+                        max="180"
+                        defaultValue="0"
+                        className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[10px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                      />
+                      <span className="text-[10px] font-mono text-slate-400">°</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    id="video-rotation-x-slider"
+                    min="-180"
+                    max="180"
+                    step="1"
+                    defaultValue="0"
+                    className="w-full accent-indigo-500"
+                  />
+                </div>
+
+                {/* Yaw Y */}
+                <div>
+                  <div className="flex justify-between items-center mb-0.5">
+                    <span className="text-[10px] text-slate-400">Yaw (Y Axis)</span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        id="video-rotation-y-num"
+                        step="1"
+                        min="-180"
+                        max="180"
+                        defaultValue="0"
+                        className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[10px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                      />
+                      <span className="text-[10px] font-mono text-slate-400">°</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    id="video-rotation-y-slider"
+                    min="-180"
+                    max="180"
+                    step="1"
+                    defaultValue="0"
+                    className="w-full accent-indigo-500"
+                  />
+                </div>
+
+                {/* Roll Z */}
+                <div>
+                  <div className="flex justify-between items-center mb-0.5">
+                    <span className="text-[10px] text-slate-400">Roll (Z Axis)</span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        id="video-rotation-z-num"
+                        step="1"
+                        min="-180"
+                        max="180"
+                        defaultValue="0"
+                        className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[10px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                      />
+                      <span className="text-[10px] font-mono text-slate-400">°</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    id="video-rotation-z-slider"
+                    min="-180"
+                    max="180"
+                    step="1"
+                    defaultValue="0"
+                    className="w-full accent-indigo-500"
+                  />
+                </div>
+                {/* Hidden backward-compatible single rotation slider */}
+                <input type="range" id="video-rotation-slider" min="-180" max="180" defaultValue="0" className="hidden" />
+              </div>
+
               {/* Video Scale Multiplier */}
-              <div>
+              <div className="pt-1 border-t border-slate-800/80">
                 <div className="flex justify-between items-center mb-1">
-                  <span className="text-[10px] text-slate-400">Scale / Size Multiplier</span>
+                  <span className="text-[10px] text-slate-400">Scale Multiplier</span>
                   <div className="flex items-center gap-1">
                     <input
                       type="number"
@@ -4703,7 +5601,7 @@ export default function Studio4D4() {
                       min="0.01"
                       max="10.0"
                       defaultValue="1.0"
-                      className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                      className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[10px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
                     />
                     <span className="text-[10px] font-mono text-slate-400">x</span>
                   </div>
@@ -4732,7 +5630,7 @@ export default function Studio4D4() {
                         min="-10.0"
                         max="10.0"
                         defaultValue="0.0"
-                        className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                        className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[10px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
                       />
                       <span className="text-[10px] font-mono text-slate-400">m</span>
                     </div>
@@ -4740,8 +5638,8 @@ export default function Studio4D4() {
                   <input
                     type="range"
                     id="video-offset-x-slider"
-                    min="-1.0"
-                    max="1.0"
+                    min="-2.0"
+                    max="2.0"
                     step="0.005"
                     defaultValue="0.0"
                     className="w-full accent-indigo-500"
@@ -4758,7 +5656,7 @@ export default function Studio4D4() {
                         min="-10.0"
                         max="10.0"
                         defaultValue="0.0"
-                        className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                        className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[10px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
                       />
                       <span className="text-[10px] font-mono text-slate-400">m</span>
                     </div>
@@ -4766,8 +5664,8 @@ export default function Studio4D4() {
                   <input
                     type="range"
                     id="video-offset-y-slider"
-                    min="-1.0"
-                    max="1.0"
+                    min="-2.0"
+                    max="2.0"
                     step="0.005"
                     defaultValue="0.0"
                     className="w-full accent-indigo-500"
@@ -4775,60 +5673,32 @@ export default function Studio4D4() {
                 </div>
               </div>
 
-              {/* Surface Clearance Z & Rotation */}
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-[10px] text-slate-400">Clearance (Z)</span>
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        id="video-offset-z-num"
-                        step="0.001"
-                        min="-5.0"
-                        max="5.0"
-                        defaultValue="0.0"
-                        className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
-                      />
-                      <span className="text-[10px] font-mono text-slate-400">m</span>
-                    </div>
+              {/* Surface Clearance Z */}
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-[10px] text-slate-400">Clearance / Depth (Z)</span>
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      id="video-offset-z-num"
+                      step="0.001"
+                      min="-2.0"
+                      max="2.0"
+                      defaultValue="0.0"
+                      className="w-14 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[10px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
+                    />
+                    <span className="text-[10px] font-mono text-slate-400">m</span>
                   </div>
-                  <input
-                    type="range"
-                    id="video-offset-z-slider"
-                    min="-0.1"
-                    max="0.2"
-                    step="0.001"
-                    defaultValue="0.0"
-                    className="w-full accent-indigo-500"
-                  />
                 </div>
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-[10px] text-slate-400">Layer Rotation</span>
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        id="video-rotation-num"
-                        step="0.5"
-                        min="-360"
-                        max="360"
-                        defaultValue="0"
-                        className="w-16 bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-[11px] font-mono text-right text-indigo-400 focus:outline-none focus:border-indigo-500"
-                      />
-                      <span className="text-[10px] font-mono text-slate-400">°</span>
-                    </div>
-                  </div>
-                  <input
-                    type="range"
-                    id="video-rotation-slider"
-                    min="-180"
-                    max="180"
-                    step="0.5"
-                    defaultValue="0"
-                    className="w-full accent-indigo-500"
-                  />
-                </div>
+                <input
+                  type="range"
+                  id="video-offset-z-slider"
+                  min="-0.2"
+                  max="0.5"
+                  step="0.001"
+                  defaultValue="0.0"
+                  className="w-full accent-indigo-500"
+                />
               </div>
             </div>
           </div>
@@ -5098,9 +5968,51 @@ export default function Studio4D4() {
           <div className="mb-2.5 p-2.5 bg-indigo-950/60 border border-indigo-500/30 rounded-lg text-[11px] text-indigo-300 leading-tight">
             ✨ <strong>WebAR Ready:</strong> Single-click export compiles all textures, normal maps, and PBR materials into a standalone binary <code className="text-white bg-indigo-900/80 px-1 py-0.5 rounded">.GLB</code>.
           </div>
+
+          {/* Export File Name Specification */}
+          <div className="mb-3 space-y-1">
+            <div className="flex items-center justify-between text-[11px] font-semibold text-slate-300">
+              <label htmlFor="export-filename-input" className="cursor-pointer flex items-center gap-1">
+                <span className="material-symbols-outlined text-xs text-indigo-400">edit_document</span>
+                <span>Export Model Name</span>
+              </label>
+              {appRef.current?.selectedObject?.name && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const clean = (appRef.current.selectedObject.name || '').replace(/\.[^/.]+$/, '').trim();
+                    if (clean) setExportFileName(clean);
+                  }}
+                  className="text-[10px] text-indigo-400 hover:text-indigo-300 underline cursor-pointer"
+                  title="Use selected object name as export filename"
+                >
+                  Use Selected
+                </button>
+              )}
+            </div>
+            <div className="relative flex items-center">
+              <input
+                id="export-filename-input"
+                type="text"
+                value={exportFileName}
+                onChange={(e) => setExportFileName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    appRef.current?.exportGLTF(exportFileName);
+                  }
+                }}
+                placeholder="Studio_Export"
+                className="w-full bg-slate-900 border border-slate-700 focus:border-indigo-500 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono placeholder:text-slate-500 pr-12 focus:outline-none transition-colors"
+              />
+              <span className="absolute right-2.5 text-[11px] text-slate-500 font-mono pointer-events-none">
+                .glb
+              </span>
+            </div>
+          </div>
+
           <button
             id="btn-export"
-            onClick={() => appRef.current?.exportGLTF()}
+            onClick={() => appRef.current?.exportGLTF(exportFileName)}
             className="w-full py-3 bg-gradient-to-r from-indigo-600 to-fuchsia-600 hover:from-indigo-500 hover:to-fuchsia-500 text-white text-xs font-bold uppercase tracking-wider rounded-xl shadow-lg shadow-indigo-600/20 transition-all flex justify-center items-center gap-2 active:scale-98 cursor-pointer"
           >
             <span className="material-symbols-outlined text-sm">download</span>
@@ -5117,6 +6029,24 @@ export default function Studio4D4() {
           isOpen={!!threeDAIModalData}
           onClose={() => setThreeDAIModalData(null)}
           data={threeDAIModalData}
+          appInstance={appRef.current}
+        />
+      )}
+
+      {/* Instagram 3D Picture Frame Ingestion Modal */}
+      {instagramModalOpen && (
+        <InstagramIngestionModal
+          isOpen={instagramModalOpen}
+          onClose={() => setInstagramModalOpen(false)}
+          appInstance={appRef.current}
+        />
+      )}
+
+      {/* 3D Primitive Geometries Modal */}
+      {geometryModalOpen && (
+        <AddGeometryModal
+          isOpen={geometryModalOpen}
+          onClose={() => setGeometryModalOpen(false)}
           appInstance={appRef.current}
         />
       )}

@@ -242,6 +242,9 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
         // Fetch live ar_config directly from Firestore server (bypassing local client cache)
         let liveConfig = null;
+        let batchDocData = null;
+        let assetDocData = null;
+
         try {
           let batchSnap = null;
           try {
@@ -251,33 +254,55 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           }
 
           if (batchSnap && batchSnap.exists()) {
-            const bData = batchSnap.data();
-            if (bData.ar_config) {
-              liveConfig = bData.ar_config;
-              logToScreen('FIRESTORE_CONFIG', 'Using live Firestore ar_config from batches collection.');
-            }
+            batchDocData = batchSnap.data();
           }
         } catch (fsErr) {
-          logToScreen('FIRESTORE_WARN', fsErr.message);
+          logToScreen('FIRESTORE_BATCH_WARN', fsErr.message);
         }
 
-        if (!liveConfig) {
+        try {
+          let assetSnap = null;
           try {
-            let assetSnap = null;
-            try {
-              assetSnap = await getDocFromServer(doc(db, 'assets', batchId));
-            } catch {
-              assetSnap = await getDoc(doc(db, 'assets', batchId));
-            }
-            if (assetSnap && assetSnap.exists()) {
-              const aData = assetSnap.data();
-              if (aData.ar_config) {
-                liveConfig = aData.ar_config;
-                logToScreen('FIRESTORE_CONFIG', 'Using live Firestore ar_config from assets collection.');
-              }
-            }
-          } catch {}
+            assetSnap = await getDocFromServer(doc(db, 'assets', batchId));
+          } catch {
+            assetSnap = await getDoc(doc(db, 'assets', batchId));
+          }
+          if (assetSnap && assetSnap.exists()) {
+            assetDocData = assetSnap.data();
+          }
+        } catch (fsErr) {
+          logToScreen('FIRESTORE_ASSET_WARN', fsErr.message);
         }
+
+        const mergedFsConfig = {
+          ...(assetDocData?.ar_config || {}),
+          ...(assetDocData?.portalConfig ? { portalConfig: assetDocData.portalConfig } : {}),
+          ...(batchDocData?.ar_config || {}),
+          ...(batchDocData?.portalConfig ? { portalConfig: batchDocData.portalConfig } : {})
+        };
+        if (Object.keys(mergedFsConfig).length > 0) {
+          liveConfig = mergedFsConfig;
+          logToScreen('FIRESTORE_CONFIG', 'Using live Firestore configuration merged from batches and assets.');
+        }
+
+        // Check local preview calibration config (for instant preview from AR Test editor)
+        let localPreviewConfig = null;
+        try {
+          const stored = localStorage.getItem(`starwear_live_preview_config_${batchId}`) || localStorage.getItem('starwear_live_preview_config_last');
+          if (stored) {
+            localPreviewConfig = JSON.parse(stored);
+            logToScreen('LOCAL_PREVIEW_CONFIG', 'Loaded active calibration config from AR Test session.');
+          }
+        } catch {}
+
+        // Check URL search params for preview overrides (e.g. ?portal=1)
+        let urlPortalOverride = null;
+        try {
+          const searchParams = new URLSearchParams(window.location.search);
+          if (searchParams.get('portal') === '1' || searchParams.get('portal') === 'true') {
+            urlPortalOverride = { enabled: true };
+          }
+        } catch {}
 
         const isFlipX = !!(
           liveConfig?.videoFlipX ??
@@ -298,6 +323,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         } catch {}
 
         const activeTracking = liveConfig?.trackingConfig || liveConfig?.tracking ||
+                               localPreviewConfig?.trackingConfig ||
                                data?.arExperience?.config?.trackingConfig || data?.ar_config?.trackingConfig ||
                                data?.trackingConfig || {};
 
@@ -319,7 +345,12 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         const mergedConfig = {
           ...(data.arExperience?.config || {}),
           ...(data.ar_config || {}),
+          ...(data.portalConfig ? { portalConfig: data.portalConfig } : {}),
+          ...(assetDocData?.portalConfig ? { portalConfig: assetDocData.portalConfig } : {}),
+          ...(batchDocData?.portalConfig ? { portalConfig: batchDocData.portalConfig } : {}),
           ...(liveConfig || {}),
+          ...(localPreviewConfig || {}),
+          ...(urlPortalOverride ? { portalConfig: { ...(liveConfig?.portalConfig || {}), ...(localPreviewConfig?.portalConfig || {}), ...urlPortalOverride } } : {}),
           videoFlipX: isFlipX,
           trackingConfig: mergedTracking
         };
@@ -1021,6 +1052,20 @@ useEffect(() => {
   const videoAspect = videoCfg.aspectRatio || videoCfg.videoAspectRatio || (isYouTubeShortUrl(videoCfg.videoUrl || arData?.videoUrl) ? '9:16' : '16:9');
   const playGltfVideoAttr = `src: ${videoCfg.videoUrl || arData?.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${videoCfg.videoTargetMesh || 'auto'}; flipX: ${videoCfg.videoFlipX || false}; videoScale: ${videoCfg.videoScale ?? 1.0}; videoOffsetX: ${videoCfg.videoOffsetX ?? 0.0}; videoOffsetY: ${videoCfg.videoOffsetY ?? 0.0}; videoOffsetZ: ${videoCfg.videoOffsetZ ?? 0.0}; videoRotation: ${videoCfg.videoRotation ?? 0.0}; videoTextureRepeatX: ${videoCfg.videoTextureRepeatX ?? 1.0}; videoTextureRepeatY: ${videoCfg.videoTextureRepeatY ?? 1.0}; videoTextureOffsetX: ${videoCfg.videoTextureOffsetX ?? 0.0}; videoTextureOffsetY: ${videoCfg.videoTextureOffsetY ?? 0.0}; aspectRatio: ${videoAspect}`;
 
+  const portalCfg =
+    arData?.config?.portalConfig ||
+    arData?.config?.portal ||
+    arData?.portalConfig ||
+    arData?.portal ||
+    arData?.arExperience?.config?.portalConfig ||
+    arData?.arExperience?.config?.portal ||
+    null;
+  const portalEnabled = !!(portalCfg && (portalCfg.enabled === true || portalCfg.enabled === 'true' || portalCfg.enabled === 1 || portalCfg.enabled === '1'));
+  const portalHideOutsideModel = portalEnabled && !!portalCfg?.hideOutsideModel;
+  const portalAttr = portalEnabled
+    ? `enabled: true; shape: ${portalCfg.shape || 'arch'}; width: ${portalCfg.width ?? 1.1}; height: ${portalCfg.height ?? 1.8}; radius: ${portalCfg.radius ?? 0.7}; depth: ${portalCfg.depth ?? 3.5}; frameColor: ${portalCfg.frameColor || '#38bdf8'}; frameWidth: ${portalCfg.frameWidth ?? 0.08}; frameDepth: 0.08; frameEmissive: ${portalCfg.frameEmissive || '#0284c7'}; frameEmissiveIntensity: ${portalCfg.frameEmissiveIntensity ?? 1.5}; frameGlow: ${portalCfg.frameGlow ?? true}; glassTint: ${portalCfg.glassTint || '#38bdf8'}; glassOpacity: ${portalCfg.glassOpacity ?? 0.05}; interiorType: ${portalCfg.interiorType || 'nebula'}; skyboxUrl: ${portalCfg.skyboxUrl || ''}; interiorColor: ${portalCfg.interiorColor || '#050714'}; wallColor: ${portalCfg.wallColor || '#0f172a'}; floorColor: ${portalCfg.floorColor || '#020617'}; gridColor: ${portalCfg.gridColor || '#38bdf8'}; interiorLightColor: ${portalCfg.interiorLightColor || '#e0f2fe'}; interiorLightIntensity: ${portalCfg.interiorLightIntensity ?? 2.0}; interiorModelType: ${portalCfg.interiorModelType || 'artifact'}; artifactType: ${portalCfg.artifactType || 'crystal'}; customModelUrl: ${portalCfg.customModelUrl || ''}; currentModelUrl: ${arData?.gltfPath || ''}; modelScale: ${portalCfg.modelScale ?? 0.4}; modelPosX: ${portalCfg.modelPosX ?? 0}; modelPosY: ${portalCfg.modelPosY ?? 0}; modelPosZ: ${portalCfg.modelPosZ ?? -1.3}; modelRotSpeed: ${portalCfg.modelRotSpeed ?? 6000}; modelRotX: ${portalCfg.modelRotX ?? 0}; modelRotY: ${portalCfg.modelRotY ?? 0}; modelRotZ: ${portalCfg.modelRotZ ?? 0}; showVideo: ${portalCfg.showVideo ?? false}; videoUrl: ${portalCfg.videoUrl || arData?.videoUrl || ''}; videoScale: ${portalCfg.videoScale ?? 1.0}; videoPosY: ${portalCfg.videoPosY ?? 0}; videoPosZ: ${portalCfg.videoPosZ ?? -1.8}; particles: ${portalCfg.particles || 'stars'}; particleCount: ${portalCfg.particleCount ?? 180}; particleColor: ${portalCfg.particleColor || '#38bdf8'}; particleSpeed: ${portalCfg.particleSpeed ?? 1.0}; floatingText: ${portalCfg.floatingText || 'STAR weAR'}; textColor: ${portalCfg.textColor || '#38bdf8'}; textScale: ${portalCfg.textScale ?? 1.0}; textPosY: ${portalCfg.textPosY ?? 0.65}; textPosZ: ${portalCfg.textPosZ ?? -1.2}; posX: ${portalCfg.posX ?? 0}; posY: ${portalCfg.posY ?? 0}; posZ: ${portalCfg.posZ ?? 0}; rotX: ${portalCfg.rotX ?? 0}; rotY: ${portalCfg.rotY ?? 0}; rotZ: ${portalCfg.rotZ ?? 0};`
+    : '';
+
   return (
     <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden select-none bg-transparent">
       {/* Top Floating Control Bar */}
@@ -1126,7 +1171,7 @@ useEffect(() => {
         ref={sceneRef}
         mindar-image={`imageTargetSrc: ${arData.mindPath}; autoStart: true; uiLoading: ${uiLoading}; uiScanning: ${uiScanning}; uiError: ${uiError}; filterMinCF: ${filterMinCF}; filterBeta: ${filterBeta}; missTolerance: ${missTolerance}; warmupTolerance: ${warmupTolerance}; maxTrack: ${maxTrack}; showStats: ${showStats};`}
         color-space="sRGB"
-        renderer="colorManagement: true; physicallyCorrectLights: true; alpha: true; antialias: true;"
+        renderer="colorManagement: true; physicallyCorrectLights: true; alpha: true; antialias: true; stencil: true;"
         vr-mode-ui="enabled: false"
         device-orientation-permission-ui="enabled: false"
         loading-screen="enabled: false"
@@ -1162,7 +1207,7 @@ useEffect(() => {
 
         {/* MindAR Target Anchor: Active in Live AR Camera Mode */}
         <a-entity id="target-entity" mindar-image-target={`targetIndex: ${targetIndex}`}>
-          {cameraEnabled && (
+          {cameraEnabled && !portalHideOutsideModel && (
             <a-gltf-model
               id="ar-model"
               src={arData.gltfPath}
@@ -1182,53 +1227,78 @@ useEffect(() => {
               play-gltf-animation={`playing: ${mediaPlaying}`}
             ></a-gltf-model>
           )}
+
+          {cameraEnabled && portalEnabled && (
+            <a-entity
+              id="ar-portal-anchor"
+              ar-portal={portalAttr}
+            ></a-entity>
+          )}
         </a-entity>
 
         {/* Center 3D Model Anchor: Active in 3D Preview Mode (Studio4D4 OrbitControls) */}
         {!cameraEnabled && (
           <a-entity id="preview-anchor" position="0 0 0">
-            <a-gltf-model
-              id="preview-model"
-              src={arData.gltfPath}
-              position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
-              scale={`${modelScale} ${modelScale} ${modelScale}`}
-              rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
-              {...(modelRotSpeed > 0
-                ? {
-                    animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${
-                      modelRotY + 360
-                    } ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;`
-                  }
-                : {})}
-              model-auto-center="enabled: true"
-              dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-              play-gltf-video={playGltfVideoAttr}
-              play-gltf-animation={`playing: ${mediaPlaying}`}
-            ></a-gltf-model>
+            {!portalHideOutsideModel && (
+              <a-gltf-model
+                id="preview-model"
+                src={arData.gltfPath}
+                position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
+                scale={`${modelScale} ${modelScale} ${modelScale}`}
+                rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
+                {...(modelRotSpeed > 0
+                  ? {
+                      animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${
+                        modelRotY + 360
+                      } ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;`
+                    }
+                  : {})}
+                model-auto-center="enabled: true"
+                dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
+                play-gltf-video={playGltfVideoAttr}
+                play-gltf-animation={`playing: ${mediaPlaying}`}
+              ></a-gltf-model>
+            )}
+
+            {portalEnabled && (
+              <a-entity
+                id="ar-portal-anchor-preview"
+                ar-portal={portalAttr}
+              ></a-entity>
+            )}
           </a-entity>
         )}
 
         {/* Force Test Render Anchor (Bypasses marker requirement for testing) */}
         {forceShowModel && cameraEnabled && (
           <a-entity position="0 0 -2">
-            <a-gltf-model
-              id="ar-model-forced"
-              src={arData.gltfPath}
-              position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
-              scale={`${modelScale} ${modelScale} ${modelScale}`}
-              rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
-              {...(modelRotSpeed > 0
-                ? {
-                    animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${
-                      modelRotY + 360
-                    } ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;`
-                  }
-                : {})}
-              model-auto-center="enabled: true"
-              dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
-              play-gltf-video={playGltfVideoAttr}
-              play-gltf-animation={`playing: ${mediaPlaying}`}
-            ></a-gltf-model>
+            {!portalHideOutsideModel && (
+              <a-gltf-model
+                id="ar-model-forced"
+                src={arData.gltfPath}
+                position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
+                scale={`${modelScale} ${modelScale} ${modelScale}`}
+                rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
+                {...(modelRotSpeed > 0
+                  ? {
+                      animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${
+                        modelRotY + 360
+                      } ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;`
+                    }
+                  : {})}
+                model-auto-center="enabled: true"
+                dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
+                play-gltf-video={playGltfVideoAttr}
+                play-gltf-animation={`playing: ${mediaPlaying}`}
+              ></a-gltf-model>
+            )}
+
+            {portalEnabled && (
+              <a-entity
+                id="ar-portal-anchor-forced"
+                ar-portal={portalAttr}
+              ></a-entity>
+            )}
           </a-entity>
         )}
       </a-scene>

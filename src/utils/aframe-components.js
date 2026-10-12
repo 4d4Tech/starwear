@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+
 
 // =========================================================================
 // YOUTUBE PARSING & DETECTION HELPERS (CORS SAFE)
@@ -325,6 +327,106 @@ export function purgeAllSceneVideoLayers(sceneEl) {
     });
   }
 }
+
+// Global user-interaction listener to unlock mobile/Safari video autoplay
+export const unlockAllVideos = () => {
+  videoElementCache.forEach((video) => {
+    if (video) {
+      video.muted = true;
+      video.playsInline = true;
+      const p = video.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+  });
+};
+
+if (typeof window !== 'undefined') {
+  ['touchstart', 'touchend', 'pointerdown', 'click'].forEach((evt) => {
+    window.addEventListener(evt, unlockAllVideos, { passive: true });
+    document.addEventListener(evt, unlockAllVideos, { passive: true });
+  });
+}
+
+// Module-level Video Element Resolver for WebGL VideoTextures (CORS & Safari Safe)
+export const createOrActivateVideoElement = (videoOrUrl) => {
+  if (!videoOrUrl) return null;
+  if (videoOrUrl.tagName === 'VIDEO' || videoOrUrl instanceof HTMLVideoElement) {
+    return videoOrUrl;
+  }
+  if (typeof videoOrUrl !== 'string' || videoOrUrl.trim() === '') {
+    return null;
+  }
+
+  const url = videoOrUrl.trim();
+
+  // YouTube Guard: Never load YouTube URLs into HTML5 <video> elements!
+  if (isYouTubeUrl(url)) {
+    return null;
+  }
+
+  if (videoElementCache.has(url)) {
+    const cached = videoElementCache.get(url);
+    if (cached && cached.isConnected) {
+      cached.muted = true;
+      if (cached.paused) cached.play().catch(() => {});
+      return cached;
+    }
+  }
+
+  const video = document.createElement('video');
+  video.muted = true;
+  video.defaultMuted = true;
+  video.playsInline = true;
+  video.autoplay = true;
+  video.loop = true;
+  video.volume = 0;
+  video.preload = 'auto';
+  video.setAttribute('playsinline', '');
+  video.setAttribute('webkit-playsinline', '');
+  video.setAttribute('x5-playsinline', '');
+  video.setAttribute('x5-video-player-type', 'h5-page');
+  video.setAttribute('muted', '');
+  video.setAttribute('autoplay', '');
+  video.setAttribute('loop', '');
+  video.setAttribute('preload', 'auto');
+
+  if (/^https?:\/\//i.test(url)) {
+    video.crossOrigin = 'anonymous';
+  }
+  video.src = url;
+
+  let container = document.getElementById('aframe-video-hidden-box');
+  if (!container && typeof document !== 'undefined') {
+    container = document.createElement('div');
+    container.id = 'aframe-video-hidden-box';
+    container.style.cssText = 'position:fixed;top:0;left:0;width:4px;height:4px;opacity:0.01;pointer-events:none;z-index:-999;overflow:hidden;';
+    document.body.appendChild(container);
+  }
+  if (container) {
+    container.appendChild(video);
+  }
+
+  try {
+    video.load();
+  } catch {}
+
+  const tryPlay = () => {
+    video.muted = true;
+    const p = video.play();
+    if (p && p.catch) {
+      p.catch(() => {});
+    }
+  };
+
+  video.addEventListener('canplay', tryPlay);
+  video.addEventListener('canplaythrough', tryPlay);
+  video.addEventListener('loadeddata', tryPlay);
+  video.addEventListener('loadedmetadata', tryPlay);
+  tryPlay();
+
+  videoElementCache.set(url, video);
+  return video;
+};
 
 const AFRAME = typeof window !== 'undefined' ? window.AFRAME : undefined;
 
@@ -770,106 +872,6 @@ if (typeof AFRAME !== 'undefined') {
   // DOM attached, user gesture unlocking), and forces WebGL texture memory sync on every render frame.
   // =========================================================================
   if (!AFRAME.components['play-gltf-video']) {
-    const unlockAllVideos = () => {
-      videoElementCache.forEach((video) => {
-        if (video) {
-          video.muted = true;
-          video.playsInline = true;
-          const p = video.play();
-          if (p && p.catch) p.catch(() => {});
-        }
-      });
-    };
-
-    if (typeof window !== 'undefined') {
-      ['touchstart', 'touchend', 'pointerdown', 'click'].forEach((evt) => {
-        window.addEventListener(evt, unlockAllVideos, { passive: true });
-        document.addEventListener(evt, unlockAllVideos, { passive: true });
-      });
-    }
-
-    const createOrActivateVideoElement = (videoOrUrl) => {
-      if (!videoOrUrl) return null;
-      if (videoOrUrl.tagName === 'VIDEO' || videoOrUrl instanceof HTMLVideoElement) {
-        return videoOrUrl;
-      }
-      if (typeof videoOrUrl !== 'string' || videoOrUrl.trim() === '') {
-        return null;
-      }
-
-      const url = videoOrUrl.trim();
-
-      // YouTube Guard: Never load YouTube URLs into HTML5 <video> elements!
-      // This eliminates the browser CORS violation completely.
-      if (isYouTubeUrl(url)) {
-        return null;
-      }
-
-      if (videoElementCache.has(url)) {
-        const cached = videoElementCache.get(url);
-        if (cached && cached.isConnected) {
-          cached.muted = true;
-          if (cached.paused) cached.play().catch(() => {});
-          return cached;
-        }
-      }
-
-      const video = document.createElement('video');
-      
-      // CRITICAL FOR iOS SAFARI: Attributes must be set before assigning video.src
-      video.muted = true;
-      video.defaultMuted = true;
-      video.playsInline = true;
-      video.autoplay = true;
-      video.loop = true;
-      video.volume = 0;
-      video.preload = 'auto';
-      video.setAttribute('playsinline', '');
-      video.setAttribute('webkit-playsinline', '');
-      video.setAttribute('x5-playsinline', '');
-      video.setAttribute('x5-video-player-type', 'h5-page');
-      video.setAttribute('muted', '');
-      video.setAttribute('autoplay', '');
-      video.setAttribute('loop', '');
-      video.setAttribute('preload', 'auto');
-
-      if (/^https?:\/\//i.test(url)) {
-        video.crossOrigin = 'anonymous';
-      }
-      video.src = url;
-
-      // Ensure video is in active viewport DOM so iOS hardware media decoders remain active
-      let container = document.getElementById('aframe-video-hidden-box');
-      if (!container) {
-        container = document.createElement('div');
-        container.id = 'aframe-video-hidden-box';
-        container.style.cssText = 'position:fixed;top:0;left:0;width:4px;height:4px;opacity:0.01;pointer-events:none;z-index:-999;overflow:hidden;';
-        document.body.appendChild(container);
-      }
-      container.appendChild(video);
-
-      try {
-        video.load();
-      } catch {}
-
-      const tryPlay = () => {
-        video.muted = true;
-        const p = video.play();
-        if (p && p.catch) {
-          p.catch(() => {});
-        }
-      };
-
-      video.addEventListener('canplay', tryPlay);
-      video.addEventListener('canplaythrough', tryPlay);
-      video.addEventListener('loadeddata', tryPlay);
-      video.addEventListener('loadedmetadata', tryPlay);
-      tryPlay();
-
-      videoElementCache.set(url, video);
-      return video;
-    };
-
     AFRAME.registerComponent('play-gltf-video', {
       schema: {
         src: { type: 'string', default: '' },
@@ -878,10 +880,15 @@ if (typeof AFRAME !== 'undefined') {
         targetMesh: { type: 'string', default: 'auto' },
         flipX: { type: 'boolean', default: false },
         videoScale: { type: 'number', default: 1.0 },
+        videoOrientationMode: { type: 'string', default: 'OBJECT_LOCK' },
         videoOffsetX: { type: 'number', default: 0.0 },
         videoOffsetY: { type: 'number', default: 0.0 },
         videoOffsetZ: { type: 'number', default: 0.0 },
         videoRotation: { type: 'number', default: 0.0 },
+        videoRotationX: { type: 'number', default: 0.0 },
+        videoRotationY: { type: 'number', default: 0.0 },
+        videoRotationZ: { type: 'number', default: 0.0 },
+        videoOcclusionEnabled: { type: 'boolean', default: true },
         videoTextureRepeatX: { type: 'number', default: 1.0 },
         videoTextureRepeatY: { type: 'number', default: 1.0 },
         videoTextureOffsetX: { type: 'number', default: 0.0 },
@@ -894,6 +901,9 @@ if (typeof AFRAME !== 'undefined') {
         this.cssObject = null;
         this.cssTargetNode = null;
         this.youtubeIframe = null;
+        this.containerDiv = null;
+        this.iframeW = 640;
+        this.iframeH = 360;
         this.baseScale = 0.003125;
         this.isMuted = this.data.muted !== undefined ? this.data.muted : false;
 
@@ -1138,6 +1148,9 @@ if (typeof AFRAME !== 'undefined') {
         containerDiv.style.pointerEvents = 'auto'; // allow user interaction with YouTube player
         containerDiv.style.boxShadow = '0 20px 50px rgba(0,0,0,0.85)';
         containerDiv.style.border = '2px solid rgba(99, 102, 241, 0.5)';
+        containerDiv.style.backfaceVisibility = 'hidden';
+        containerDiv.style.webkitBackfaceVisibility = 'hidden';
+        containerDiv.style.transition = 'opacity 0.12s ease-out';
 
         const iframe = document.createElement('iframe');
         iframe.style.width = '100%';
@@ -1167,6 +1180,9 @@ if (typeof AFRAME !== 'undefined') {
 
         containerDiv.appendChild(iframe);
         this.youtubeIframe = iframe;
+        this.containerDiv = containerDiv;
+        this.iframeW = iframeW;
+        this.iframeH = iframeH;
 
         // Floating Sound Badge on the 3D screen overlay
         const muteBadge = document.createElement('button');
@@ -1199,17 +1215,36 @@ if (typeof AFRAME !== 'undefined') {
 
         // 5. Create CSS3DObject
         const cssObject = new CSS3DObject(containerDiv);
-        const slotIdx = typeof this.cssTargetNode?.userData?.videoTargetMaterialIndex === 'number'
-          ? this.cssTargetNode.userData.videoTargetMaterialIndex
-          : 0;
-        const frame = computeGeometrySurfaceFrame(this.cssTargetNode, slotIdx);
-        const targetW = Math.max(frame.size.x, 0.05);
+        let calcMesh = this.cssTargetNode;
+        if (calcMesh && !calcMesh.isMesh && calcMesh.traverse) {
+          calcMesh.traverse((c) => {
+            if (!calcMesh.isMesh && c.isMesh && c.geometry) calcMesh = c;
+          });
+        }
+
+        let targetW = 0.5;
+        let spawnPos = new THREE_LIB.Vector3(0, 1.2, 0);
+        if (calcMesh && calcMesh.geometry) {
+          if (!calcMesh.geometry.boundingBox) calcMesh.geometry.computeBoundingBox();
+          if (calcMesh.geometry.boundingBox) {
+            const bBox = calcMesh.geometry.boundingBox;
+            const bSize = new THREE_LIB.Vector3();
+            const bCenter = new THREE_LIB.Vector3();
+            bBox.getSize(bSize);
+            bBox.getCenter(bCenter);
+            targetW = Math.max(bSize.x, 0.05);
+            const localCenter = bCenter.clone();
+            localCenter.applyMatrix4(calcMesh.matrixWorld);
+            spawnPos.copy(localCenter);
+          }
+        }
         const baseScale = targetW / iframeW;
 
         cssObject.scale.set(baseScale, baseScale, baseScale);
-        const spawnPos = frame.worldCenter.clone().addScaledVector(frame.worldNormal, 0.005);
         cssObject.position.copy(spawnPos);
-        cssObject.quaternion.copy(frame.worldQuat);
+        if (calcMesh) {
+          calcMesh.getWorldQuaternion(cssObject.quaternion);
+        }
 
         cssScene.add(cssObject);
         this.cssObject = cssObject;
@@ -1654,48 +1689,152 @@ if (typeof AFRAME !== 'undefined') {
             });
           }
 
-          const slotIdx = typeof target.userData?.videoTargetMaterialIndex === 'number'
-            ? target.userData.videoTargetMaterialIndex
-            : 0;
-          const frame = computeGeometrySurfaceFrame(target, slotIdx);
-
-          // User adjustment controls
-          const uOffsetX = this.data.videoOffsetX !== undefined ? this.data.videoOffsetX : (target.userData?.videoOffsetX || 0);
-          const uOffsetY = this.data.videoOffsetY !== undefined ? this.data.videoOffsetY : (target.userData?.videoOffsetY || 0);
-          const uOffsetZ = this.data.videoOffsetZ !== undefined ? this.data.videoOffsetZ : (target.userData?.videoOffsetZ || 0);
-
-          // Position in exact 3D space: face center + normal clearance + in-plane offsets (tangent & bitangent)
-          const localPos = frame.localCenter.clone().addScaledVector(frame.localNormal, 0.005 + uOffsetZ);
-          localPos.addScaledVector(frame.localRight, uOffsetX);
-          localPos.addScaledVector(frame.localUp, uOffsetY);
-          localPos.applyMatrix4(target.matrixWorld);
-          this.cssObject.position.copy(localPos);
-
-          // Exact 3D orientation matching face surface normal and rotation
-          let quat = frame.worldQuat.clone();
-          const uRot = this.data.videoRotation !== undefined ? this.data.videoRotation : (target.userData?.videoRotation || 0);
-          if (uRot !== 0) {
-            const rotQuat = new THREE_LIB.Quaternion().setFromAxisAngle(
-              frame.worldNormal,
-              (uRot * Math.PI) / 180
-            );
-            quat = rotQuat.multiply(quat);
-          }
-          this.cssObject.quaternion.copy(quat);
-
+          target.getWorldPosition(this._tempWorldPos);
+          target.getWorldQuaternion(this._tempWorldQuat);
           target.getWorldScale(this._tempWorldScale);
+
+          // Base orientation locked 1:1 to target object's world quaternion
+          const orientMode = this.data.videoOrientationMode || target.userData?.videoOrientationMode || 'OBJECT_LOCK';
+          let baseQuat = this._tempWorldQuat.clone();
+
+          if (orientMode === 'BACK_FACE') {
+            baseQuat.multiply(new THREE_LIB.Quaternion().setFromAxisAngle(new THREE_LIB.Vector3(0, 1, 0), Math.PI));
+          } else if (orientMode === 'TOP_FACE') {
+            baseQuat.multiply(new THREE_LIB.Quaternion().setFromAxisAngle(new THREE_LIB.Vector3(1, 0, 0), -Math.PI / 2));
+          } else if (orientMode === 'BOTTOM_FACE') {
+            baseQuat.multiply(new THREE_LIB.Quaternion().setFromAxisAngle(new THREE_LIB.Vector3(1, 0, 0), Math.PI / 2));
+          } else if (orientMode === 'RIGHT_FACE') {
+            baseQuat.multiply(new THREE_LIB.Quaternion().setFromAxisAngle(new THREE_LIB.Vector3(0, 1, 0), Math.PI / 2));
+          } else if (orientMode === 'LEFT_FACE') {
+            baseQuat.multiply(new THREE_LIB.Quaternion().setFromAxisAngle(new THREE_LIB.Vector3(0, 1, 0), -Math.PI / 2));
+          } else if (orientMode === 'SURFACE_NORMAL' && target && target.geometry) {
+            const slotIdx = typeof target.userData?.videoTargetMaterialIndex === 'number'
+              ? target.userData.videoTargetMaterialIndex
+              : 0;
+            const frame = computeGeometrySurfaceFrame(target, slotIdx);
+            baseQuat.copy(frame.worldQuat);
+          }
+
+          // 3-Axis Euler Rotation in Object Space (Pitch X, Yaw Y, Roll Z)
+          const rotXDeg = this.data.videoRotationX !== undefined && this.data.videoRotationX !== 0
+            ? this.data.videoRotationX
+            : Number(target.userData?.videoRotationX || 0);
+          const rotYDeg = this.data.videoRotationY !== undefined && this.data.videoRotationY !== 0
+            ? this.data.videoRotationY
+            : Number(target.userData?.videoRotationY || 0);
+          const rotZDeg = this.data.videoRotationZ !== undefined && this.data.videoRotationZ !== 0
+            ? this.data.videoRotationZ
+            : Number(target.userData?.videoRotationZ ?? (target.userData?.videoRotation ?? (this.data.videoRotation || 0)));
+
+          const rotX = THREE_LIB.MathUtils.degToRad(rotXDeg);
+          const rotY = THREE_LIB.MathUtils.degToRad(rotYDeg);
+          const rotZ = THREE_LIB.MathUtils.degToRad(rotZDeg);
+
+          if (rotX !== 0 || rotY !== 0 || rotZ !== 0) {
+            const userRotQuat = new THREE_LIB.Quaternion().setFromEuler(new THREE_LIB.Euler(rotX, rotY, rotZ, 'YXZ'));
+            baseQuat.multiply(userRotQuat);
+          }
+          this.cssObject.quaternion.copy(baseQuat);
+
+          // Local center calculation from geometry bounding box
+          let localCenter = new THREE_LIB.Vector3(0, 0, 0);
+          let localNormal = new THREE_LIB.Vector3(0, 0, 1);
+          let localRight = new THREE_LIB.Vector3(1, 0, 0);
+          let localUp = new THREE_LIB.Vector3(0, 1, 0);
+
+          if (target && target.geometry) {
+            if (!target.geometry.boundingBox) target.geometry.computeBoundingBox();
+            const bBox = target.geometry.boundingBox;
+            if (bBox) {
+              bBox.getCenter(localCenter);
+              if (orientMode === 'FRONT_FACE') {
+                localCenter.z = bBox.max.z;
+              } else if (orientMode === 'BACK_FACE') {
+                localCenter.z = bBox.min.z;
+              } else if (orientMode === 'TOP_FACE') {
+                localCenter.y = bBox.max.y;
+              } else if (orientMode === 'BOTTOM_FACE') {
+                localCenter.y = bBox.min.y;
+              } else if (orientMode === 'RIGHT_FACE') {
+                localCenter.x = bBox.max.x;
+              } else if (orientMode === 'LEFT_FACE') {
+                localCenter.x = bBox.min.x;
+              } else if (orientMode === 'SURFACE_NORMAL') {
+                const slotIdx = typeof target.userData?.videoTargetMaterialIndex === 'number'
+                  ? target.userData.videoTargetMaterialIndex
+                  : 0;
+                const frame = computeGeometrySurfaceFrame(target, slotIdx);
+                localCenter.copy(frame.localCenter);
+                localNormal.copy(frame.localNormal);
+                localRight.copy(frame.localRight);
+                localUp.copy(frame.localUp);
+              }
+            }
+          }
+
+          // User spatial offsets in meters
+          const uOffsetX = this.data.videoOffsetX !== undefined && this.data.videoOffsetX !== 0
+            ? this.data.videoOffsetX
+            : Number(target.userData?.videoOffsetX || 0);
+          const uOffsetY = this.data.videoOffsetY !== undefined && this.data.videoOffsetY !== 0
+            ? this.data.videoOffsetY
+            : Number(target.userData?.videoOffsetY || 0);
+          const uOffsetZ = this.data.videoOffsetZ !== undefined && this.data.videoOffsetZ !== 0
+            ? this.data.videoOffsetZ
+            : Number(target.userData?.videoOffsetZ || 0);
+
+          const localFinal = localCenter.clone();
+          if (orientMode === 'SURFACE_NORMAL') {
+            localFinal.addScaledVector(localNormal, uOffsetZ);
+            localFinal.addScaledVector(localRight, uOffsetX);
+            localFinal.addScaledVector(localUp, uOffsetY);
+          } else {
+            localFinal.add(new THREE_LIB.Vector3(uOffsetX, uOffsetY, uOffsetZ));
+          }
+          localFinal.applyMatrix4(target.matrixWorld);
+          this.cssObject.position.copy(localFinal);
 
           // User scale multiplier
           const uScale = (this.data.videoScale !== undefined && this.data.videoScale > 0)
             ? this.data.videoScale
             : (target.userData?.videoScale || 1.0);
-          const baseScale = (this.baseScale || (Math.max(frame.size.x, 0.05) / 640)) * uScale;
+          const baseScale = (this.baseScale || 0.0006) * uScale;
 
           this.cssObject.scale.set(
             baseScale * Math.abs(this._tempWorldScale.x || 1),
             baseScale * Math.abs(this._tempWorldScale.y || 1),
             baseScale * Math.abs(this._tempWorldScale.z || 1)
           );
+
+          // Backface Culling & Depth Occlusion check for AR camera
+          const camera = sceneEl.camera;
+          const occlusionEnabled = (this.data.videoOcclusionEnabled !== false) && (target.userData?.videoOcclusionEnabled !== false);
+          if (this.containerDiv && !this.isTargetLost) {
+            if (!occlusionEnabled) {
+              this.containerDiv.style.opacity = '1';
+              this.containerDiv.style.pointerEvents = 'auto';
+              this.containerDiv.style.visibility = 'visible';
+            } else if (camera) {
+              if (!this._screenNormal) {
+                this._screenNormal = new THREE_LIB.Vector3();
+                this._camToScreen = new THREE_LIB.Vector3();
+              }
+              this._screenNormal.set(0, 0, 1).applyQuaternion(this.cssObject.quaternion).normalize();
+              this._camToScreen.copy(this.cssObject.position).sub(camera.position).normalize();
+              const facingDot = this._screenNormal.dot(this._camToScreen);
+
+              if (facingDot >= -0.02) {
+                // Facing away or glancing angle: cull backface
+                this.containerDiv.style.opacity = '0';
+                this.containerDiv.style.pointerEvents = 'none';
+                this.containerDiv.style.visibility = 'hidden';
+              } else {
+                this.containerDiv.style.opacity = '1';
+                this.containerDiv.style.pointerEvents = 'auto';
+                this.containerDiv.style.visibility = 'visible';
+              }
+            }
+          }
 
           if (sceneEl && sceneEl._css3dRenderer && sceneEl._css3dScene && sceneEl.camera) {
             // Force world matrix and inverse updates on A-Frame camera so CSS3DRenderer projections match WebGL identically
@@ -1810,4 +1949,1472 @@ if (typeof AFRAME !== 'undefined') {
       }
     });
   }
+
+  // =========================================================================
+  // 6. PROCEDURAL TEXTURE GENERATORS FOR AR PORTAL
+  // =========================================================================
+  const getPortalThree = () => ((typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE) ? window.AFRAME.THREE : THREE);
+
+  function generateProceduralNebulaTexture() {
+    if (typeof document === 'undefined') return null;
+    const THREE_LIB = getPortalThree();
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    // Dark cosmic gradient
+    const bgGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    bgGrad.addColorStop(0, '#02030a');
+    bgGrad.addColorStop(0.5, '#070b1e');
+    bgGrad.addColorStop(1, '#02030a');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Luminous cosmic dust clouds
+    const drawCloud = (cx, cy, r, c1, c2) => {
+      const g = ctx.createRadialGradient(cx, cy, r * 0.1, cx, cy, r);
+      g.addColorStop(0, c1);
+      g.addColorStop(0.5, c2);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+    };
+
+    drawCloud(280, 200, 240, 'rgba(168, 85, 247, 0.45)', 'rgba(59, 130, 246, 0.15)');
+    drawCloud(720, 310, 260, 'rgba(6, 182, 212, 0.4)', 'rgba(99, 102, 241, 0.15)');
+    drawCloud(460, 280, 190, 'rgba(236, 72, 153, 0.35)', 'rgba(147, 51, 234, 0.1)');
+    drawCloud(860, 180, 210, 'rgba(56, 189, 248, 0.35)', 'rgba(30, 58, 138, 0.1)');
+
+    // Star specks
+    for (let i = 0; i < 450; i++) {
+      const x = Math.random() * canvas.width;
+      const y = Math.random() * canvas.height;
+      const radius = Math.random() * 1.5 + 0.3;
+      const alpha = Math.random() * 0.85 + 0.15;
+      ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const tex = new THREE_LIB.CanvasTexture(canvas);
+    tex.wrapS = THREE_LIB.RepeatWrapping;
+    tex.wrapT = THREE_LIB.ClampToEdgeWrapping;
+    return tex;
+  }
+
+  function generateProceduralGridTexture(gridColor = '#38bdf8', bgColor = '#020617') {
+    if (typeof document === 'undefined') return null;
+    const THREE_LIB = getPortalThree();
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, 256, 256);
+
+    ctx.strokeStyle = gridColor;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(0, 0, 256, 256);
+
+    ctx.strokeStyle = gridColor;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(128, 0); ctx.lineTo(128, 256);
+    ctx.moveTo(0, 128); ctx.lineTo(256, 128);
+    ctx.stroke();
+
+    const tex = new THREE_LIB.CanvasTexture(canvas);
+    tex.wrapS = THREE_LIB.RepeatWrapping;
+    tex.wrapT = THREE_LIB.RepeatWrapping;
+    tex.repeat.set(6, 6);
+    return tex;
+  }
+
+  function generateHolographicTextTexture(text = 'STAR weAR', color = '#38bdf8') {
+    if (typeof document === 'undefined') return null;
+    const THREE_LIB = getPortalThree();
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.clearRect(0, 0, 512, 128);
+
+    // Glowing capsule frame
+    ctx.fillStyle = 'rgba(8, 14, 29, 0.8)';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    if (typeof ctx.roundRect === 'function') {
+      ctx.roundRect(16, 16, 480, 96, 24);
+    } else {
+      ctx.rect(16, 16, 480, 96);
+    }
+    ctx.fill();
+    ctx.stroke();
+
+    // Text with soft glow
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 34px "Inter", "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 256, 64);
+
+    const tex = new THREE_LIB.CanvasTexture(canvas);
+    return tex;
+  }
+
+  // =========================================================================
+  // 7. AR-PORTAL COMPONENT (VIRTUAL WINDOW & DIMENSIONAL GATEWAY)
+  // Optical illusion portal using hardware WebGL Stencil Buffer.
+  // Interior objects are strictly rendered where aperture stencil = 1.
+  // Features camera pass-through immersion & customizable interior world.
+  // =========================================================================
+  if (!AFRAME.components['ar-portal']) {
+    AFRAME.registerComponent('ar-portal', {
+      schema: {
+        enabled: { type: 'boolean', default: false },
+        shape: { type: 'string', default: 'arch' }, // 'arch' | 'rectangle' | 'circle' | 'hexagon'
+        width: { type: 'number', default: 1.1 },
+        height: { type: 'number', default: 1.8 },
+        radius: { type: 'number', default: 0.7 },
+        depth: { type: 'number', default: 3.2 },
+        frameColor: { type: 'color', default: '#38bdf8' },
+        frameWidth: { type: 'number', default: 0.08 },
+        frameDepth: { type: 'number', default: 0.08 },
+        frameEmissive: { type: 'color', default: '#0284c7' },
+        frameEmissiveIntensity: { type: 'number', default: 1.5 },
+        frameGlow: { type: 'boolean', default: true },
+        glassTint: { type: 'color', default: '#38bdf8' },
+        glassOpacity: { type: 'number', default: 0.05 },
+        interiorType: { type: 'string', default: 'nebula' }, // 'nebula' | 'starfield' | 'grid-room' | 'matrix' | 'skybox' | 'void'
+        skyboxUrl: { type: 'string', default: '' },
+        interiorColor: { type: 'color', default: '#050714' },
+        wallColor: { type: 'color', default: '#0f172a' },
+        floorColor: { type: 'color', default: '#020617' },
+        gridColor: { type: 'color', default: '#38bdf8' },
+        interiorLightColor: { type: 'color', default: '#e0f2fe' },
+        interiorLightIntensity: { type: 'number', default: 2.0 },
+        interiorModelType: { type: 'string', default: 'artifact' }, // 'none' | 'artifact' | 'current-product' | 'custom-glb'
+        customModelUrl: { type: 'string', default: '' },
+        currentModelUrl: { type: 'string', default: '' },
+        modelScale: { type: 'number', default: 0.4 },
+        modelPosX: { type: 'number', default: 0.0 },
+        modelPosY: { type: 'number', default: 0.0 },
+        modelPosZ: { type: 'number', default: -1.3 },
+        modelRotSpeed: { type: 'number', default: 6000 },
+        modelRotX: { type: 'number', default: 0 },
+        modelRotY: { type: 'number', default: 0 },
+        modelRotZ: { type: 'number', default: 0 },
+        showVideo: { type: 'boolean', default: false },
+        videoUrl: { type: 'string', default: '' },
+        videoScale: { type: 'number', default: 1.0 },
+        videoPosY: { type: 'number', default: 0.0 },
+        videoPosZ: { type: 'number', default: -1.8 },
+        particles: { type: 'string', default: 'stars' }, // 'stars' | 'embers' | 'cyber' | 'none'
+        particleCount: { type: 'number', default: 160 },
+        particleColor: { type: 'color', default: '#38bdf8' },
+        particleSpeed: { type: 'number', default: 1.0 },
+        floatingText: { type: 'string', default: 'STAR weAR' },
+        textColor: { type: 'color', default: '#38bdf8' },
+        textScale: { type: 'number', default: 1.0 },
+        textPosY: { type: 'number', default: 0.65 },
+        textPosZ: { type: 'number', default: -1.2 },
+        posX: { type: 'number', default: 0.0 },
+        posY: { type: 'number', default: 0.0 },
+        posZ: { type: 'number', default: 0.0 },
+        rotX: { type: 'number', default: 0 },
+        rotY: { type: 'number', default: 0 },
+        rotZ: { type: 'number', default: 0 }
+      },
+
+      init: function () {
+        const THREE_LIB = getPortalThree();
+        this.rootGroup = new THREE_LIB.Group();
+        this.portalFrameGroup = new THREE_LIB.Group();
+        this.interiorGroup = new THREE_LIB.Group();
+
+        this.rootGroup.add(this.portalFrameGroup);
+        this.rootGroup.add(this.interiorGroup);
+        this.el.setObject3D('portalRoot', this.rootGroup);
+
+        this.tempCamWorld = new THREE_LIB.Vector3();
+        this.tempCamLocal = new THREE_LIB.Vector3();
+        this.isCameraInside = false;
+        this.activeArtifact = null;
+        this.cyberCoreRings = [];
+        this.particlesObj = null;
+        this.particleVelocities = [];
+        this.loadedCustomModel = null;
+
+        // Video Screen properties & CSS3D state
+        this.portalVideo = null;
+        this.portalVideoTexture = null;
+        this.portalCssObject = null;
+        this.portalYoutubeIframe = null;
+        this.portalContainerDiv = null;
+        this.portalVideoMesh = null;
+        this.portalBaseScale = 0.0025;
+        this._portalQuat = new THREE_LIB.Quaternion();
+        this._portalScale = new THREE_LIB.Vector3();
+        this._portalForward = new THREE_LIB.Vector3();
+        this._portalPos = new THREE_LIB.Vector3();
+        this._portalCamToScreen = new THREE_LIB.Vector3();
+        this.isTargetLost = false;
+
+        const LoaderClass = (THREE_LIB && THREE_LIB.GLTFLoader) ? THREE_LIB.GLTFLoader : GLTFLoader;
+        this.gltfLoader = new LoaderClass();
+
+        this.buildPortal();
+
+        this.onTargetFound = () => {
+          this.isTargetLost = false;
+          if (this.rootGroup && this.data.enabled) {
+            this.rootGroup.visible = true;
+            this.rootGroup.updateMatrixWorld(true);
+            if (this.portalCssObject) {
+              this.portalCssObject.visible = true;
+              if (this.portalContainerDiv) this.portalContainerDiv.style.opacity = '1';
+            }
+          }
+        };
+
+        this.onTargetLost = () => {
+          this.isTargetLost = true;
+          if (this.portalCssObject) {
+            this.portalCssObject.visible = false;
+            if (this.portalContainerDiv) this.portalContainerDiv.style.opacity = '0';
+          }
+        };
+
+        const sceneEl = this.el.sceneEl;
+        if (sceneEl) {
+          sceneEl.addEventListener('targetFound', this.onTargetFound);
+          sceneEl.addEventListener('targetLost', this.onTargetLost);
+        }
+        if (this.el.parentEl) {
+          this.el.parentEl.addEventListener('targetFound', this.onTargetFound);
+          this.el.parentEl.addEventListener('targetLost', this.onTargetLost);
+        }
+      },
+
+      cleanupPortalVideo: function () {
+        if (this.portalCssObject) {
+          const sceneEl = this.el.sceneEl;
+          if (sceneEl && sceneEl._css3dScene) {
+            try { sceneEl._css3dScene.remove(this.portalCssObject); } catch {}
+          }
+          this.portalCssObject = null;
+        }
+        if (this.portalYoutubeIframe && this.portalYoutubeIframe.parentElement) {
+          try { this.portalYoutubeIframe.parentElement.remove(); } catch {}
+          this.portalYoutubeIframe = null;
+        }
+        if (this.portalContainerDiv) {
+          try { this.portalContainerDiv.remove(); } catch {}
+          this.portalContainerDiv = null;
+        }
+        if (this.portalVideo) {
+          try {
+            this.portalVideo.pause();
+            this.portalVideo.removeAttribute('src');
+            this.portalVideo.load();
+            this.portalVideo.remove();
+          } catch {}
+          this.portalVideo = null;
+        }
+        if (this.portalVideoTexture) {
+          try { this.portalVideoTexture.dispose(); } catch {}
+          this.portalVideoTexture = null;
+        }
+        this.portalVideoMesh = null;
+      },
+
+      setupPortalCSS3DYouTube: function (youtubeId, targetMesh, screenW, screenH) {
+        if (!youtubeId || !targetMesh) return;
+        const sceneEl = this.el.sceneEl;
+        if (!sceneEl) return;
+        const THREE_LIB = getPortalThree();
+
+        // 1. Ensure scene-wide CSS3DRenderer overlay exists
+        let cssRenderer = sceneEl._css3dRenderer;
+        let cssScene = sceneEl._css3dScene;
+
+        if (!cssRenderer) {
+          cssRenderer = new CSS3DRenderer();
+          const container = sceneEl.canvas?.parentElement || sceneEl;
+          const w = container.clientWidth || window.innerWidth;
+          const h = container.clientHeight || window.innerHeight;
+          cssRenderer.setSize(w, h);
+
+          const dom = cssRenderer.domElement;
+          dom.id = 'aframe-css3d-canvas-overlay';
+          dom.style.position = 'absolute';
+          dom.style.top = '0';
+          dom.style.left = '0';
+          dom.style.width = '100%';
+          dom.style.height = '100%';
+          dom.style.pointerEvents = 'none';
+          dom.style.zIndex = '10';
+
+          container.appendChild(dom);
+
+          cssScene = new THREE_LIB.Scene();
+          sceneEl._css3dRenderer = cssRenderer;
+          sceneEl._css3dScene = cssScene;
+
+          const handleResize = () => {
+            if (sceneEl.canvas && cssRenderer) {
+              const rw = sceneEl.canvas.parentElement ? sceneEl.canvas.parentElement.clientWidth : window.innerWidth;
+              const rh = sceneEl.canvas.parentElement ? sceneEl.canvas.parentElement.clientHeight : window.innerHeight;
+              cssRenderer.setSize(rw, rh);
+            }
+          };
+          window.addEventListener('resize', handleResize);
+          sceneEl._css3dResizeHandler = handleResize;
+        }
+
+        const iframeW = 640;
+        const iframeH = 360;
+
+        const containerDiv = document.createElement('div');
+        containerDiv.style.width = `${iframeW}px`;
+        containerDiv.style.height = `${iframeH}px`;
+        containerDiv.style.background = '#090d16';
+        containerDiv.style.borderRadius = '10px';
+        containerDiv.style.overflow = 'hidden';
+        containerDiv.style.position = 'relative';
+        containerDiv.style.pointerEvents = 'auto';
+        containerDiv.style.boxShadow = '0 10px 30px rgba(0,0,0,0.85)';
+        containerDiv.style.border = `2px solid ${this.data.frameColor || '#38bdf8'}`;
+        containerDiv.style.backfaceVisibility = 'hidden';
+        containerDiv.style.webkitBackfaceVisibility = 'hidden';
+        containerDiv.style.transition = 'opacity 0.15s ease-out';
+
+        const iframe = document.createElement('iframe');
+        iframe.style.width = '100%';
+        iframe.style.height = '100%';
+        iframe.style.border = '0px';
+        const originParam = typeof window !== 'undefined' ? `&origin=${encodeURIComponent(window.location.origin)}` : '';
+        iframe.src = `https://www.youtube-nocookie.com/embed/${youtubeId}?enablejsapi=1&autoplay=1&mute=1&controls=1&loop=1&playlist=${youtubeId}${originParam}`;
+        iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+        iframe.allowFullscreen = true;
+
+        containerDiv.appendChild(iframe);
+
+        // Floating sound unmute toggle
+        const muteBadge = document.createElement('button');
+        muteBadge.type = 'button';
+        muteBadge.style.cssText = 'position:absolute;top:10px;right:10px;z-index:99;background:rgba(15,23,42,0.9);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:white;border:1px solid rgba(255,255,255,0.3);border-radius:9999px;padding:4px 10px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;box-shadow:0 4px 15px rgba(0,0,0,0.7);pointer-events:auto;user-select:none;';
+        muteBadge.innerHTML = '<span>🔊</span><span>Tap for Sound</span>';
+
+        let isSoundOn = false;
+        muteBadge.addEventListener('click', (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          isSoundOn = !isSoundOn;
+          const func = isSoundOn ? 'unMute' : 'mute';
+          try {
+            iframe.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args: [] }), '*');
+            if (isSoundOn) {
+              iframe.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }), '*');
+            }
+          } catch {}
+          muteBadge.innerHTML = isSoundOn ? '<span>🔊</span><span>Sound On</span>' : '<span>🔇</span><span>Sound Off</span>';
+          muteBadge.style.background = isSoundOn ? 'rgba(16, 185, 129, 0.9)' : 'rgba(225, 29, 72, 0.9)';
+        });
+        containerDiv.appendChild(muteBadge);
+
+        const cssObject = new CSS3DObject(containerDiv);
+        const baseScale = screenW / iframeW;
+        cssObject.scale.set(baseScale, baseScale, baseScale);
+
+        if (targetMesh) {
+          try {
+            targetMesh.updateMatrixWorld(true);
+            targetMesh.getWorldPosition(this._portalPos);
+            targetMesh.getWorldQuaternion(this._portalQuat);
+            cssObject.position.copy(this._portalPos);
+            cssObject.quaternion.copy(this._portalQuat);
+          } catch {}
+        }
+
+        cssScene.add(cssObject);
+        this.portalCssObject = cssObject;
+        this.portalYoutubeIframe = iframe;
+        this.portalContainerDiv = containerDiv;
+        this.portalBaseScale = baseScale;
+      },
+
+      update: function (oldData) {
+        if (!this.data.enabled) {
+          this.rootGroup.visible = false;
+          if (this.portalCssObject) {
+            this.portalCssObject.visible = false;
+            if (this.portalContainerDiv) this.portalContainerDiv.style.opacity = '0';
+          }
+          return;
+        }
+        this.rootGroup.visible = true;
+
+        // Apply portal root placement & rotation
+        this.rootGroup.position.set(this.data.posX, this.data.posY, this.data.posZ);
+        this.rootGroup.rotation.set(
+          (this.data.rotX * Math.PI) / 180,
+          (this.data.rotY * Math.PI) / 180,
+          (this.data.rotZ * Math.PI) / 180
+        );
+
+        const needRebuild = !oldData ||
+          oldData.shape !== this.data.shape ||
+          oldData.width !== this.data.width ||
+          oldData.height !== this.data.height ||
+          oldData.radius !== this.data.radius ||
+          oldData.depth !== this.data.depth ||
+          oldData.frameColor !== this.data.frameColor ||
+          oldData.frameWidth !== this.data.frameWidth ||
+          oldData.frameDepth !== this.data.frameDepth ||
+          oldData.frameEmissive !== this.data.frameEmissive ||
+          oldData.frameEmissiveIntensity !== this.data.frameEmissiveIntensity ||
+          oldData.interiorType !== this.data.interiorType ||
+          oldData.skyboxUrl !== this.data.skyboxUrl ||
+          oldData.interiorColor !== this.data.interiorColor ||
+          oldData.wallColor !== this.data.wallColor ||
+          oldData.floorColor !== this.data.floorColor ||
+          oldData.gridColor !== this.data.gridColor ||
+          oldData.interiorModelType !== this.data.interiorModelType ||
+          oldData.artifactType !== this.data.artifactType ||
+          oldData.customModelUrl !== this.data.customModelUrl ||
+          oldData.currentModelUrl !== this.data.currentModelUrl ||
+          oldData.particles !== this.data.particles ||
+          oldData.particleCount !== this.data.particleCount ||
+          oldData.floatingText !== this.data.floatingText ||
+          oldData.showVideo !== this.data.showVideo ||
+          oldData.videoUrl !== this.data.videoUrl ||
+          oldData.videoScale !== this.data.videoScale ||
+          oldData.videoPosY !== this.data.videoPosY ||
+          oldData.videoPosZ !== this.data.videoPosZ;
+
+        if (needRebuild) {
+          this.buildPortal();
+        } else {
+          // Quick updates for transforms / materials without full geometry rebuild
+          if (this.activeArtifact) {
+            this.activeArtifact.scale.setScalar(this.data.modelScale);
+            this.activeArtifact.position.set(this.data.modelPosX, this.data.modelPosY, this.data.modelPosZ);
+          }
+          if (this.loadedCustomModel) {
+            this.loadedCustomModel.scale.setScalar(this.data.modelScale);
+            this.loadedCustomModel.position.set(this.data.modelPosX, this.data.modelPosY, this.data.modelPosZ);
+          }
+        }
+      },
+
+      applyStencilToMesh: function (mesh, stencilFunc) {
+        if (!mesh) return;
+        const THREE_LIB = getPortalThree();
+        const func = stencilFunc !== undefined ? stencilFunc : THREE_LIB.EqualStencilFunc;
+        mesh.renderOrder = 3;
+        mesh.traverse((node) => {
+          if (node.isMesh && node.material) {
+            const mats = Array.isArray(node.material) ? node.material : [node.material];
+            mats.forEach((m) => {
+              m.stencilWrite = true;
+              m.stencilRef = 1;
+              m.stencilFunc = func;
+              m.stencilZPass = THREE_LIB.KeepStencilOp;
+              m.stencilFail = THREE_LIB.KeepStencilOp;
+              m.stencilZFail = THREE_LIB.KeepStencilOp;
+            });
+          }
+        });
+      },
+
+      setStencilPassMode: function (isInside) {
+        const THREE_LIB = getPortalThree();
+        const func = isInside ? THREE_LIB.AlwaysStencilFunc : THREE_LIB.EqualStencilFunc;
+        this.interiorGroup.traverse((node) => {
+          if (node.isMesh && node.material) {
+            const mats = Array.isArray(node.material) ? node.material : [node.material];
+            mats.forEach((m) => {
+              m.stencilFunc = func;
+              m.needsUpdate = true;
+            });
+          }
+        });
+      },
+
+      clearGroup: function (group) {
+        while (group.children.length > 0) {
+          const child = group.children[0];
+          group.remove(child);
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            const mats = Array.isArray(child.material) ? child.material : [child.material];
+            mats.forEach((m) => {
+              if (m.map) m.map.dispose();
+              m.dispose();
+            });
+          }
+        }
+      },
+
+      buildPortal: function () {
+        const THREE_LIB = getPortalThree();
+        this.clearGroup(this.portalFrameGroup);
+        this.clearGroup(this.interiorGroup);
+        this.cyberCoreRings = [];
+        this.activeArtifact = null;
+        this.loadedCustomModel = null;
+
+        const data = this.data;
+        const width = Math.max(0.2, data.width);
+        const height = Math.max(0.2, data.height);
+        const radius = Math.max(0.15, data.radius);
+        const frameW = Math.max(0.02, data.frameWidth);
+        const frameD = Math.max(0.02, data.frameDepth);
+
+        // ---------------------------------------------------------------------
+        // 1. APERTURE & 3D FRAME GEOMETRIES ACCORDING TO SHAPE
+        // ---------------------------------------------------------------------
+        let apertureGeom = null;
+        let frameGeom = null;
+
+        if (data.shape === 'arch') {
+          const r = width / 2;
+          const straightH = Math.max(0.1, height - r);
+          const yBottom = -height / 2;
+          const yArchCenter = yBottom + straightH;
+
+          // Aperture Shape
+          const archShape = new THREE_LIB.Shape();
+          archShape.moveTo(-r, yBottom);
+          archShape.lineTo(r, yBottom);
+          archShape.lineTo(r, yArchCenter);
+          archShape.absarc(0, yArchCenter, r, 0, Math.PI, false);
+          archShape.lineTo(-r, yBottom);
+          apertureGeom = new THREE_LIB.ShapeGeometry(archShape, 32);
+
+          // Outer Arch Frame with Inner Cutout
+          const outerR = r + frameW;
+          const outerShape = new THREE_LIB.Shape();
+          outerShape.moveTo(-outerR, yBottom - frameW);
+          outerShape.lineTo(outerR, yBottom - frameW);
+          outerShape.lineTo(outerR, yArchCenter);
+          outerShape.absarc(0, yArchCenter, outerR, 0, Math.PI, false);
+          outerShape.lineTo(-outerR, yBottom - frameW);
+
+          const innerHole = new THREE_LIB.Path();
+          innerHole.moveTo(-r, yBottom);
+          innerHole.lineTo(r, yBottom);
+          innerHole.lineTo(r, yArchCenter);
+          innerHole.absarc(0, yArchCenter, r, 0, Math.PI, false);
+          innerHole.lineTo(-r, yBottom);
+          outerShape.holes.push(innerHole);
+
+          frameGeom = new THREE_LIB.ExtrudeGeometry(outerShape, {
+            depth: frameD,
+            bevelEnabled: true,
+            bevelThickness: 0.012,
+            bevelSize: 0.012,
+            curveSegments: 32
+          });
+          frameGeom.translate(0, 0, -frameD / 2);
+
+        } else if (data.shape === 'rectangle') {
+          apertureGeom = new THREE_LIB.PlaneGeometry(width, height);
+
+          const hw = width / 2 + frameW;
+          const hh = height / 2 + frameW;
+          const outerRect = new THREE_LIB.Shape();
+          outerRect.moveTo(-hw, -hh);
+          outerRect.lineTo(hw, -hh);
+          outerRect.lineTo(hw, hh);
+          outerRect.lineTo(-hw, hh);
+          outerRect.closePath();
+
+          const innerRect = new THREE_LIB.Path();
+          const ihw = width / 2;
+          const ihh = height / 2;
+          innerRect.moveTo(-ihw, -ihh);
+          innerRect.lineTo(ihw, -ihh);
+          innerRect.lineTo(ihw, ihh);
+          innerRect.lineTo(-ihw, ihh);
+          innerRect.closePath();
+          outerRect.holes.push(innerRect);
+
+          frameGeom = new THREE_LIB.ExtrudeGeometry(outerRect, {
+            depth: frameD,
+            bevelEnabled: true,
+            bevelThickness: 0.012,
+            bevelSize: 0.012
+          });
+          frameGeom.translate(0, 0, -frameD / 2);
+
+        } else if (data.shape === 'circle') {
+          apertureGeom = new THREE_LIB.CircleGeometry(radius, 48);
+          frameGeom = new THREE_LIB.TorusGeometry(radius, frameW / 2, 16, 48);
+
+        } else if (data.shape === 'hexagon') {
+          const r = radius;
+          apertureGeom = new THREE_LIB.CircleGeometry(r, 6);
+
+          const outerHex = new THREE_LIB.Shape();
+          for (let i = 0; i < 6; i++) {
+            const angle = (i * Math.PI) / 3;
+            const x = (r + frameW) * Math.cos(angle);
+            const y = (r + frameW) * Math.sin(angle);
+            if (i === 0) outerHex.moveTo(x, y);
+            else outerHex.lineTo(x, y);
+          }
+          outerHex.closePath();
+
+          const innerHex = new THREE_LIB.Path();
+          for (let i = 0; i < 6; i++) {
+            const angle = (i * Math.PI) / 3;
+            const x = r * Math.cos(angle);
+            const y = r * Math.sin(angle);
+            if (i === 0) innerHex.moveTo(x, y);
+            else innerHex.lineTo(x, y);
+          }
+          innerHex.closePath();
+          outerHex.holes.push(innerHex);
+
+          frameGeom = new THREE_LIB.ExtrudeGeometry(outerHex, {
+            depth: frameD,
+            bevelEnabled: true,
+            bevelThickness: 0.012,
+            bevelSize: 0.012
+          });
+          frameGeom.translate(0, 0, -frameD / 2);
+        }
+
+        // ---------------------------------------------------------------------
+        // 2. APERTURE MASK MESH (WRITES TO STENCIL BUFFER AT RENDERORDER 1)
+        // ---------------------------------------------------------------------
+        if (apertureGeom) {
+          const maskMat = new THREE_LIB.MeshBasicMaterial({
+            colorWrite: false,
+            depthWrite: false,
+            stencilWrite: true,
+            stencilRef: 1,
+            stencilFunc: THREE_LIB.AlwaysStencilFunc,
+            stencilZPass: THREE_LIB.ReplaceStencilOp,
+            side: THREE_LIB.DoubleSide
+          });
+          const maskMesh = new THREE_LIB.Mesh(apertureGeom, maskMat);
+          maskMesh.renderOrder = 1;
+          this.portalFrameGroup.add(maskMesh);
+
+          // Subtle glass pane tint layer
+          if (data.glassOpacity > 0.001) {
+            const glassMat = new THREE_LIB.MeshBasicMaterial({
+              color: new THREE_LIB.Color(data.glassTint),
+              transparent: true,
+              opacity: data.glassOpacity,
+              side: THREE_LIB.DoubleSide,
+              blending: THREE_LIB.AdditiveBlending,
+              depthWrite: false
+            });
+            const glassMesh = new THREE_LIB.Mesh(apertureGeom.clone(), glassMat);
+            glassMesh.renderOrder = 12;
+            this.portalFrameGroup.add(glassMesh);
+          }
+        }
+
+        // ---------------------------------------------------------------------
+        // 3. 3D PORTAL FRAME WITH METALLIC PBR & EMISSIVE GLOW (RENDERORDER 15)
+        // ---------------------------------------------------------------------
+        if (frameGeom) {
+          const frameMat = new THREE_LIB.MeshStandardMaterial({
+            color: new THREE_LIB.Color(data.frameColor),
+            metalness: 0.85,
+            roughness: 0.22,
+            emissive: new THREE_LIB.Color(data.frameEmissive),
+            emissiveIntensity: data.frameEmissiveIntensity,
+            side: THREE_LIB.DoubleSide
+          });
+          const frameMesh = new THREE_LIB.Mesh(frameGeom, frameMat);
+          frameMesh.renderOrder = 15;
+          this.portalFrameGroup.add(frameMesh);
+
+          // Outer glowing rim highlight
+          if (data.frameGlow) {
+            const glowMat = new THREE_LIB.MeshBasicMaterial({
+              color: new THREE_LIB.Color(data.frameEmissive),
+              transparent: true,
+              opacity: 0.25,
+              blending: THREE_LIB.AdditiveBlending,
+              wireframe: true,
+              depthWrite: false,
+              side: THREE_LIB.DoubleSide
+            });
+            const glowMesh = new THREE_LIB.Mesh(frameGeom.clone(), glowMat);
+            glowMesh.scale.multiplyScalar(1.02);
+            glowMesh.renderOrder = 16;
+            this.portalFrameGroup.add(glowMesh);
+          }
+        }
+
+        // ---------------------------------------------------------------------
+        // 4. INTERIOR ENVIRONMENT & CHAMBER (RENDERORDER 3, STENCIL = 1)
+        // ---------------------------------------------------------------------
+        const depth = Math.max(1.0, data.depth);
+        const chamberWidth = Math.max(width * 2.2, 3.0);
+        const chamberHeight = Math.max(height * 2.2, 3.0);
+
+        if (data.interiorType === 'nebula' || data.interiorType === 'starfield') {
+          const sphereGeom = new THREE_LIB.SphereGeometry(14, 32, 32);
+          let envTexture = null;
+          if (data.skyboxUrl) {
+            const loader = new THREE_LIB.TextureLoader();
+            envTexture = loader.load(data.skyboxUrl);
+            envTexture.colorSpace = THREE_LIB.SRGBColorSpace;
+          } else {
+            envTexture = generateProceduralNebulaTexture();
+          }
+
+          const sphereMat = new THREE_LIB.MeshBasicMaterial({
+            map: envTexture,
+            color: new THREE_LIB.Color(data.interiorColor),
+            side: THREE_LIB.DoubleSide
+          });
+          const sphereMesh = new THREE_LIB.Mesh(sphereGeom, sphereMat);
+          sphereMesh.position.set(0, 0, -depth / 2);
+          this.applyStencilToMesh(sphereMesh);
+          this.interiorGroup.add(sphereMesh);
+
+        } else if (data.interiorType === 'grid-room' || data.interiorType === 'matrix') {
+          const boxGeom = new THREE_LIB.BoxGeometry(chamberWidth, chamberHeight, depth);
+          const gridColor = data.interiorType === 'matrix' ? '#10b981' : data.gridColor;
+          const wallColor = data.interiorType === 'matrix' ? '#021810' : data.wallColor;
+          const gridTexture = generateProceduralGridTexture(gridColor, data.floorColor);
+
+          // Multi-material box with cyber grid on floor
+          const wallMat = new THREE_LIB.MeshStandardMaterial({
+            color: new THREE_LIB.Color(wallColor),
+            roughness: 0.8,
+            metalness: 0.2,
+            side: THREE_LIB.DoubleSide
+          });
+          const floorMat = new THREE_LIB.MeshStandardMaterial({
+            color: new THREE_LIB.Color(data.floorColor),
+            map: gridTexture,
+            roughness: 0.3,
+            metalness: 0.6,
+            emissive: new THREE_LIB.Color(gridColor),
+            emissiveIntensity: 0.35,
+            side: THREE_LIB.DoubleSide
+          });
+
+          // Box faces: [Right, Left, Top, Bottom, Front, Back]
+          const roomMaterials = [wallMat, wallMat, wallMat, floorMat, wallMat, wallMat];
+          const roomMesh = new THREE_LIB.Mesh(boxGeom, roomMaterials);
+          roomMesh.position.set(0, 0, -depth / 2);
+          this.applyStencilToMesh(roomMesh);
+          this.interiorGroup.add(roomMesh);
+
+          // Add glowing horizontal accent lines on chamber walls
+          const lineGeom = new THREE_LIB.BufferGeometry();
+          const lineY = [-height * 0.3, 0, height * 0.3];
+          const linePoints = [];
+          lineY.forEach((y) => {
+            linePoints.push(-chamberWidth / 2 + 0.05, y, 0);
+            linePoints.push(-chamberWidth / 2 + 0.05, y, -depth);
+            linePoints.push(chamberWidth / 2 - 0.05, y, 0);
+            linePoints.push(chamberWidth / 2 - 0.05, y, -depth);
+          });
+          lineGeom.setAttribute('position', new THREE_LIB.Float32BufferAttribute(linePoints, 3));
+          const lineMat = new THREE_LIB.LineBasicMaterial({
+            color: new THREE_LIB.Color(gridColor),
+            linewidth: 2,
+            transparent: true,
+            opacity: 0.8
+          });
+          const lines = new THREE_LIB.LineSegments(lineGeom, lineMat);
+          this.applyStencilToMesh(lines);
+          this.interiorGroup.add(lines);
+
+        } else if (data.interiorType === 'skybox') {
+          const sphereGeom = new THREE_LIB.SphereGeometry(15, 32, 32);
+          let skyTex = null;
+          if (data.skyboxUrl) {
+            const loader = new THREE_LIB.TextureLoader();
+            skyTex = loader.load(data.skyboxUrl);
+            skyTex.colorSpace = THREE_LIB.SRGBColorSpace;
+          } else {
+            skyTex = generateProceduralNebulaTexture();
+          }
+          const sphereMat = new THREE_LIB.MeshBasicMaterial({
+            map: skyTex,
+            side: THREE_LIB.DoubleSide
+          });
+          const skyMesh = new THREE_LIB.Mesh(sphereGeom, sphereMat);
+          skyMesh.position.set(0, 0, -depth / 2);
+          this.applyStencilToMesh(skyMesh);
+          this.interiorGroup.add(skyMesh);
+
+        } else {
+          // Minimalist Smooth Void
+          const sphereGeom = new THREE_LIB.SphereGeometry(12, 32, 32);
+          const sphereMat = new THREE_LIB.MeshStandardMaterial({
+            color: new THREE_LIB.Color(data.interiorColor),
+            roughness: 0.9,
+            metalness: 0.1,
+            side: THREE_LIB.DoubleSide
+          });
+          const voidMesh = new THREE_LIB.Mesh(sphereGeom, sphereMat);
+          voidMesh.position.set(0, 0, -depth / 2);
+          this.applyStencilToMesh(voidMesh);
+          this.interiorGroup.add(voidMesh);
+        }
+
+        // Interior Lighting
+        const pointLight = new THREE_LIB.PointLight(
+          new THREE_LIB.Color(data.interiorLightColor),
+          data.interiorLightIntensity,
+          depth * 2
+        );
+        pointLight.position.set(0, 0.4, -depth * 0.4);
+        this.interiorGroup.add(pointLight);
+
+        // ---------------------------------------------------------------------
+        // 5. INTERIOR 3D CONTENT & OBJECTS (RENDERORDER 3, STENCIL = 1)
+        // ---------------------------------------------------------------------
+        if (data.interiorModelType === 'artifact') {
+          const artifactGroup = new THREE_LIB.Group();
+          artifactGroup.position.set(data.modelPosX, data.modelPosY, data.modelPosZ);
+          artifactGroup.scale.setScalar(data.modelScale);
+          artifactGroup.rotation.set(
+            (data.modelRotX * Math.PI) / 180,
+            (data.modelRotY * Math.PI) / 180,
+            (data.modelRotZ * Math.PI) / 180
+          );
+
+          if (data.artifactType === 'crystal') {
+            const crystalGeom = new THREE_LIB.IcosahedronGeometry(0.42, 0);
+            const crystalMat = new THREE_LIB.MeshStandardMaterial({
+              color: new THREE_LIB.Color(data.frameColor),
+              metalness: 0.9,
+              roughness: 0.12,
+              emissive: new THREE_LIB.Color(data.frameEmissive),
+              emissiveIntensity: 0.6,
+              flatShading: true
+            });
+            const crystalMesh = new THREE_LIB.Mesh(crystalGeom, crystalMat);
+            artifactGroup.add(crystalMesh);
+            this.activeArtifact = artifactGroup;
+
+          } else if (data.artifactType === 'cyber-core') {
+            const coreGeom = new THREE_LIB.SphereGeometry(0.2, 24, 24);
+            const coreMat = new THREE_LIB.MeshStandardMaterial({
+              color: new THREE_LIB.Color(data.gridColor || data.frameColor),
+              emissive: new THREE_LIB.Color(data.gridColor || data.frameColor),
+              emissiveIntensity: 2.0,
+              roughness: 0.2
+            });
+            const coreMesh = new THREE_LIB.Mesh(coreGeom, coreMat);
+            artifactGroup.add(coreMesh);
+
+            const ring1Geom = new THREE_LIB.TorusGeometry(0.36, 0.018, 12, 36);
+            const ring2Geom = new THREE_LIB.TorusGeometry(0.46, 0.018, 12, 36);
+            const ringMat = new THREE_LIB.MeshStandardMaterial({
+              color: new THREE_LIB.Color(data.frameColor),
+              metalness: 0.9,
+              roughness: 0.2,
+              wireframe: true
+            });
+            const ring1 = new THREE_LIB.Mesh(ring1Geom, ringMat);
+            const ring2 = new THREE_LIB.Mesh(ring2Geom, ringMat);
+            artifactGroup.add(ring1);
+            artifactGroup.add(ring2);
+            this.cyberCoreRings = [ring1, ring2];
+            this.activeArtifact = artifactGroup;
+
+          } else if (data.artifactType === 'star-emblem') {
+            const starShape = new THREE_LIB.Shape();
+            const points = 5;
+            const outerR = 0.42;
+            const innerR = 0.2;
+            for (let i = 0; i < points * 2; i++) {
+              const r = i % 2 === 0 ? outerR : innerR;
+              const a = (i * Math.PI) / points - Math.PI / 2;
+              const x = r * Math.cos(a);
+              const y = r * Math.sin(a);
+              if (i === 0) starShape.moveTo(x, y);
+              else starShape.lineTo(x, y);
+            }
+            starShape.closePath();
+            const starGeom = new THREE_LIB.ExtrudeGeometry(starShape, {
+              depth: 0.08,
+              bevelEnabled: true,
+              bevelThickness: 0.02,
+              bevelSize: 0.02
+            });
+            starGeom.center();
+            const starMat = new THREE_LIB.MeshStandardMaterial({
+              color: new THREE_LIB.Color(data.frameColor),
+              metalness: 0.92,
+              roughness: 0.18,
+              emissive: new THREE_LIB.Color(data.frameEmissive),
+              emissiveIntensity: 0.7
+            });
+            const starMesh = new THREE_LIB.Mesh(starGeom, starMat);
+            artifactGroup.add(starMesh);
+            this.activeArtifact = artifactGroup;
+
+          } else if (data.artifactType === 'pedestal') {
+            // Hexagonal podium dais
+            const daisGeom = new THREE_LIB.CylinderGeometry(0.5, 0.6, 0.35, 6);
+            const daisMat = new THREE_LIB.MeshStandardMaterial({
+              color: new THREE_LIB.Color('#1e293b'),
+              metalness: 0.7,
+              roughness: 0.3,
+              emissive: new THREE_LIB.Color(data.frameColor),
+              emissiveIntensity: 0.3
+            });
+            const dais = new THREE_LIB.Mesh(daisGeom, daisMat);
+            dais.position.y = -0.3;
+            artifactGroup.add(dais);
+
+            // Floating octahedron relic above pedestal
+            const relicGeom = new THREE_LIB.OctahedronGeometry(0.24, 0);
+            const relicMat = new THREE_LIB.MeshStandardMaterial({
+              color: new THREE_LIB.Color(data.frameColor),
+              metalness: 0.9,
+              roughness: 0.1,
+              emissive: new THREE_LIB.Color(data.frameEmissive),
+              emissiveIntensity: 0.8
+            });
+            const relic = new THREE_LIB.Mesh(relicGeom, relicMat);
+            relic.position.y = 0.2;
+            artifactGroup.add(relic);
+            this.activeArtifact = artifactGroup;
+          }
+
+          this.applyStencilToMesh(artifactGroup);
+          this.interiorGroup.add(artifactGroup);
+
+        } else if ((data.interiorModelType === 'custom-glb' && data.customModelUrl) ||
+                   (data.interiorModelType === 'current-product' && data.currentModelUrl)) {
+          const modelUrl = data.interiorModelType === 'current-product' ? data.currentModelUrl : data.customModelUrl;
+          this.gltfLoader.load(
+            modelUrl,
+            (gltf) => {
+              const model = gltf.scene;
+              model.position.set(data.modelPosX, data.modelPosY, data.modelPosZ);
+              model.scale.setScalar(data.modelScale);
+              model.rotation.set(
+                (data.modelRotX * Math.PI) / 180,
+                (data.modelRotY * Math.PI) / 180,
+                (data.modelRotZ * Math.PI) / 180
+              );
+              this.applyStencilToMesh(model);
+              this.interiorGroup.add(model);
+              this.loadedCustomModel = model;
+            },
+            undefined,
+            (err) => {
+              console.warn('Could not load portal GLB model:', err);
+            }
+          );
+        }
+
+        // ---------------------------------------------------------------------
+        // 6. INTERIOR PARTICLES SYSTEM (RENDERORDER 3, STENCIL = 1)
+        // ---------------------------------------------------------------------
+        if (data.particles !== 'none' && data.particleCount > 0) {
+          const count = Math.max(10, Math.min(400, data.particleCount));
+          const pGeom = new THREE_LIB.BufferGeometry();
+          const posArray = new Float32Array(count * 3);
+          this.particleVelocities = [];
+
+          for (let i = 0; i < count; i++) {
+            posArray[i * 3 + 0] = (Math.random() - 0.5) * (chamberWidth * 0.9);
+            posArray[i * 3 + 1] = (Math.random() - 0.5) * (chamberHeight * 0.9);
+            posArray[i * 3 + 2] = -Math.random() * depth;
+            this.particleVelocities.push({
+              vx: (Math.random() - 0.5) * 0.005 * data.particleSpeed,
+              vy: (Math.random() - 0.5) * 0.005 * data.particleSpeed,
+              vz: (Math.random() * 0.008 + 0.002) * data.particleSpeed
+            });
+          }
+          pGeom.setAttribute('position', new THREE_LIB.BufferAttribute(posArray, 3));
+          const pMat = new THREE_LIB.PointsMaterial({
+            color: new THREE_LIB.Color(data.particleColor),
+            size: data.particles === 'cyber' ? 0.04 : 0.028,
+            transparent: true,
+            opacity: 0.85,
+            blending: THREE_LIB.AdditiveBlending,
+            depthWrite: false
+          });
+          this.particlesObj = new THREE_LIB.Points(pGeom, pMat);
+          this.applyStencilToMesh(this.particlesObj);
+          this.interiorGroup.add(this.particlesObj);
+        }
+
+        // ---------------------------------------------------------------------
+        // 7. FLOATING 3D HOLOGRAPHIC BANNER (RENDERORDER 3, STENCIL = 1)
+        // ---------------------------------------------------------------------
+        if (data.floatingText && data.floatingText.trim().length > 0) {
+          const textTex = generateHolographicTextTexture(data.floatingText.trim(), data.textColor);
+          if (textTex) {
+            const textGeom = new THREE_LIB.PlaneGeometry(1.2 * data.textScale, 0.3 * data.textScale);
+            const textMat = new THREE_LIB.MeshBasicMaterial({
+              map: textTex,
+              transparent: true,
+              side: THREE_LIB.DoubleSide,
+              depthWrite: false
+            });
+            const textMesh = new THREE_LIB.Mesh(textGeom, textMat);
+            textMesh.position.set(0, data.textPosY, data.textPosZ);
+            this.applyStencilToMesh(textMesh);
+            this.interiorGroup.add(textMesh);
+          }
+        }
+
+        // ---------------------------------------------------------------------
+        // 8. INTERIOR VIDEO SCREEN (RENDERORDER 3, STENCIL = 1)
+        // ---------------------------------------------------------------------
+        this.cleanupPortalVideo();
+
+        if (data.showVideo && data.videoUrl && data.videoUrl.trim() !== '') {
+          const cleanUrl = data.videoUrl.trim();
+          const screenScale = Math.max(0.1, data.videoScale || 1.0);
+          const screenW = 1.6 * screenScale;
+          const screenH = 0.9 * screenScale;
+
+          // 1. Sleek dark metallic bezel mesh with stencil clipping
+          const bezelGeom = new THREE_LIB.BoxGeometry(screenW + 0.06, screenH + 0.06, 0.02);
+          const bezelMat = new THREE_LIB.MeshStandardMaterial({
+            color: new THREE_LIB.Color('#0a0e1a'),
+            metalness: 0.85,
+            roughness: 0.25,
+            emissive: new THREE_LIB.Color(data.frameColor || '#38bdf8'),
+            emissiveIntensity: 0.15
+          });
+          const bezelMesh = new THREE_LIB.Mesh(bezelGeom, bezelMat);
+          bezelMesh.position.set(0, data.videoPosY, data.videoPosZ - 0.01);
+          this.applyStencilToMesh(bezelMesh);
+          this.interiorGroup.add(bezelMesh);
+
+          // 2. Interior video screen mesh
+          const vidGeom = new THREE_LIB.PlaneGeometry(screenW, screenH);
+
+          if (isYouTubeUrl(cleanUrl)) {
+            const ytId = extractYouTubeId(cleanUrl);
+            const vidMat = new THREE_LIB.MeshBasicMaterial({
+              color: new THREE_LIB.Color(0xffffff),
+              side: THREE_LIB.DoubleSide
+            });
+
+            if (ytId) {
+              const texLoader = new THREE_LIB.TextureLoader();
+              texLoader.load(
+                `https://img.youtube.com/vi/${ytId}/maxresdefault.jpg`,
+                (tex) => {
+                  if (THREE_LIB.SRGBColorSpace !== undefined) {
+                    tex.colorSpace = THREE_LIB.SRGBColorSpace;
+                  }
+                  vidMat.map = tex;
+                  vidMat.needsUpdate = true;
+                },
+                undefined,
+                () => {
+                  texLoader.load(`https://img.youtube.com/vi/${ytId}/hqdefault.jpg`, (fallbackTex) => {
+                    if (THREE_LIB.SRGBColorSpace !== undefined) {
+                      fallbackTex.colorSpace = THREE_LIB.SRGBColorSpace;
+                    }
+                    vidMat.map = fallbackTex;
+                    vidMat.needsUpdate = true;
+                  });
+                }
+              );
+            }
+
+            const vidMesh = new THREE_LIB.Mesh(vidGeom, vidMat);
+            vidMesh.position.set(0, data.videoPosY, data.videoPosZ);
+            this.applyStencilToMesh(vidMesh);
+            this.interiorGroup.add(vidMesh);
+            this.portalVideoMesh = vidMesh;
+
+            if (ytId) {
+              this.setupPortalCSS3DYouTube(ytId, vidMesh, screenW, screenH);
+            }
+          } else {
+            // Direct video file (mp4, webm, mov, Firebase Storage URL)
+            const videoEl = createOrActivateVideoElement(cleanUrl);
+            if (videoEl) {
+              this.portalVideo = videoEl;
+              const vTex = new THREE_LIB.VideoTexture(videoEl);
+              if (THREE_LIB.SRGBColorSpace !== undefined) {
+                vTex.colorSpace = THREE_LIB.SRGBColorSpace;
+              }
+              vTex.minFilter = THREE_LIB.LinearFilter;
+              vTex.magFilter = THREE_LIB.LinearFilter;
+              vTex.generateMipmaps = false;
+              this.portalVideoTexture = vTex;
+
+              const vidMat = new THREE_LIB.MeshBasicMaterial({
+                map: vTex,
+                side: THREE_LIB.DoubleSide
+              });
+              const vidMesh = new THREE_LIB.Mesh(vidGeom, vidMat);
+              vidMesh.position.set(0, data.videoPosY, data.videoPosZ);
+              this.applyStencilToMesh(vidMesh);
+              this.interiorGroup.add(vidMesh);
+              this.portalVideoMesh = vidMesh;
+            } else {
+              const fallbackMat = new THREE_LIB.MeshStandardMaterial({
+                color: new THREE_LIB.Color('#1e293b'),
+                metalness: 0.3,
+                roughness: 0.5,
+                side: THREE_LIB.DoubleSide
+              });
+              const vidMesh = new THREE_LIB.Mesh(vidGeom, fallbackMat);
+              vidMesh.position.set(0, data.videoPosY, data.videoPosZ);
+              this.applyStencilToMesh(vidMesh);
+              this.interiorGroup.add(vidMesh);
+              this.portalVideoMesh = vidMesh;
+            }
+          }
+        }
+      },
+
+      tick: function (time, timeDelta) {
+        if (!this.data.enabled) return;
+        const dt = (timeDelta || 16) / 1000;
+
+        // 1. Rotate active 3D Artifact
+        if (this.activeArtifact && this.data.modelRotSpeed > 0) {
+          const radPerSec = (Math.PI * 2) / (this.data.modelRotSpeed / 1000);
+          this.activeArtifact.rotation.y += radPerSec * dt;
+          // Gentle vertical floating bobbing
+          const bobOffset = Math.sin(time / 800) * 0.04;
+          this.activeArtifact.position.y = this.data.modelPosY + bobOffset;
+        }
+
+        // 2. Spin nested gyroscopic Cyber Core rings on alternating axes
+        if (this.cyberCoreRings.length >= 2) {
+          this.cyberCoreRings[0].rotation.x += dt * 1.8;
+          this.cyberCoreRings[1].rotation.y += dt * 2.2;
+        }
+
+        // 3. Rotate loaded custom model if present
+        if (this.loadedCustomModel && this.data.modelRotSpeed > 0) {
+          const radPerSec = (Math.PI * 2) / (this.data.modelRotSpeed / 1000);
+          this.loadedCustomModel.rotation.y += radPerSec * dt;
+        }
+
+        // 4. Drift and wrap interior particles
+        if (this.particlesObj && this.particlesObj.geometry) {
+          const posAttr = this.particlesObj.geometry.attributes.position;
+          const posArr = posAttr.array;
+          const depth = Math.max(1.0, this.data.depth);
+          for (let i = 0; i < this.particleVelocities.length; i++) {
+            const v = this.particleVelocities[i];
+            posArr[i * 3 + 0] += v.vx;
+            posArr[i * 3 + 1] += v.vy;
+            posArr[i * 3 + 2] += v.vz;
+
+            // Wrap particles when they reach front aperture or go too far
+            if (posArr[i * 3 + 2] > -0.05) {
+              posArr[i * 3 + 2] = -depth + 0.1;
+            } else if (posArr[i * 3 + 2] < -depth) {
+              posArr[i * 3 + 2] = -0.1;
+            }
+          }
+          posAttr.needsUpdate = true;
+        }
+
+        // 5. Camera Walk-Through & Step-Through Detection
+        const scene = this.el.sceneEl;
+        const cam = scene ? scene.camera : null;
+        if (cam && this.rootGroup && this.interiorGroup && this.el.object3D && this.el.object3D.visible !== false) {
+          try {
+            this.rootGroup.updateMatrixWorld(true);
+            cam.getWorldPosition(this.tempCamWorld);
+            this.rootGroup.worldToLocal(this.tempCamLocal.copy(this.tempCamWorld));
+
+            if (!Number.isNaN(this.tempCamLocal.z)) {
+              // When camera enters chamber behind portal plane (local z < -0.05 and within chamber volume):
+              const isInside = this.tempCamLocal.z < -0.05 &&
+                this.tempCamLocal.z > -this.data.depth - 1.5 &&
+                Math.abs(this.tempCamLocal.x) < (this.data.width * 1.5 + 1.2) &&
+                Math.abs(this.tempCamLocal.y) < (this.data.height * 1.5 + 1.2);
+
+              if (isInside !== this.isCameraInside) {
+                this.isCameraInside = isInside;
+                this.setStencilPassMode(isInside);
+              }
+            }
+          } catch {}
+        }
+
+        // 6. Update Interior Video Stream & CSS3D YouTube Overlay Synchronization
+        if (this.portalVideo && this.portalVideoTexture) {
+          if (this.portalVideo.paused && this.portalVideo.readyState >= 2) {
+            this.portalVideo.play().catch(() => {});
+          }
+          if (!this.portalVideo.paused) {
+            this.portalVideoTexture.needsUpdate = true;
+          }
+        }
+
+        if (this.portalCssObject && this.portalVideoMesh) {
+          const sceneEl = this.el.sceneEl;
+          const cam = sceneEl ? sceneEl.camera : null;
+
+          this.portalVideoMesh.getWorldPosition(this._portalPos);
+          this.portalVideoMesh.getWorldQuaternion(this._portalQuat);
+          this.portalVideoMesh.getWorldScale(this._portalScale);
+
+          this.portalCssObject.position.copy(this._portalPos);
+          this.portalCssObject.quaternion.copy(this._portalQuat);
+          const s = this.portalBaseScale * (this._portalScale.x || 1.0);
+          this.portalCssObject.scale.set(s, s, s);
+
+          // Culling check based on marker tracking, real-world card occlusion, & facing angle
+          if (cam && this.portalContainerDiv) {
+            if (this.isTargetLost || !this.data.enabled || (this.el.object3D && this.el.object3D.visible === false)) {
+              this.portalContainerDiv.style.opacity = '0';
+              this.portalContainerDiv.style.pointerEvents = 'none';
+            } else {
+              const isBehindPortalBack = !this.isCameraInside && this.tempCamLocal.z < -0.05;
+              this._portalForward.set(0, 0, 1).applyQuaternion(this._portalQuat).normalize();
+              this._portalCamToScreen.copy(this._portalPos).sub(cam.position).normalize();
+              const facingDot = this._portalForward.dot(this._portalCamToScreen);
+
+              if (isBehindPortalBack || facingDot >= -0.02) {
+                this.portalContainerDiv.style.opacity = '0';
+                this.portalContainerDiv.style.pointerEvents = 'none';
+              } else {
+                this.portalContainerDiv.style.opacity = '1';
+                this.portalContainerDiv.style.pointerEvents = 'auto';
+              }
+            }
+          }
+
+          if (sceneEl && sceneEl._css3dRenderer && sceneEl._css3dScene && cam) {
+            cam.updateWorldMatrix(true, false);
+            if (cam.matrixWorldInverse) {
+              cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
+            }
+            sceneEl._css3dRenderer.render(sceneEl._css3dScene, cam);
+          }
+        }
+      },
+
+      remove: function () {
+        this.cleanupPortalVideo();
+        if (this.onTargetFound) {
+          const sceneEl = this.el.sceneEl;
+          if (sceneEl) {
+            sceneEl.removeEventListener('targetFound', this.onTargetFound);
+            sceneEl.removeEventListener('targetLost', this.onTargetLost);
+          }
+          if (this.el.parentEl) {
+            this.el.parentEl.removeEventListener('targetFound', this.onTargetFound);
+            this.el.parentEl.removeEventListener('targetLost', this.onTargetLost);
+          }
+        }
+        if (this.rootGroup) {
+          this.clearGroup(this.portalFrameGroup);
+          this.clearGroup(this.interiorGroup);
+          this.el.removeObject3D('portalRoot');
+        }
+      }
+    });
+  }
 }
+
+// =========================================================================
+// 8. EXPORTED AR PORTAL CONFIGURATION PRESETS
+// =========================================================================
+export const PORTAL_PRESETS = {
+  'cosmic-nebula': {
+    name: 'Cosmic Nebula',
+    shape: 'arch',
+    width: 1.1,
+    height: 1.8,
+    radius: 0.7,
+    depth: 3.5,
+    frameColor: '#38bdf8',
+    frameWidth: 0.08,
+    frameEmissive: '#0284c7',
+    frameEmissiveIntensity: 1.5,
+    frameGlow: true,
+    interiorType: 'nebula',
+    skyboxUrl: '',
+    interiorColor: '#050714',
+    wallColor: '#0f172a',
+    floorColor: '#020617',
+    gridColor: '#38bdf8',
+    interiorLightColor: '#e0f2fe',
+    interiorLightIntensity: 2.0,
+    interiorModelType: 'artifact',
+    artifactType: 'crystal',
+    modelScale: 0.4,
+    modelPosX: 0.0,
+    modelPosY: 0.0,
+    modelPosZ: -1.3,
+    modelRotSpeed: 6000,
+    showVideo: false,
+    particles: 'stars',
+    particleCount: 180,
+    particleColor: '#38bdf8',
+    particleSpeed: 1.0,
+    floatingText: 'STAR weAR',
+    textColor: '#38bdf8'
+  },
+  'cyber-matrix': {
+    name: 'Cyberpunk Matrix',
+    shape: 'hexagon',
+    width: 1.2,
+    height: 1.4,
+    radius: 0.8,
+    depth: 4.0,
+    frameColor: '#10b981',
+    frameWidth: 0.08,
+    frameEmissive: '#059669',
+    frameEmissiveIntensity: 1.8,
+    frameGlow: true,
+    interiorType: 'grid-room',
+    skyboxUrl: '',
+    interiorColor: '#021810',
+    wallColor: '#022c22',
+    floorColor: '#020617',
+    gridColor: '#10b981',
+    interiorLightColor: '#6ee7b7',
+    interiorLightIntensity: 2.5,
+    interiorModelType: 'artifact',
+    artifactType: 'cyber-core',
+    modelScale: 0.45,
+    modelPosX: 0.0,
+    modelPosY: 0.0,
+    modelPosZ: -1.4,
+    modelRotSpeed: 4500,
+    showVideo: false,
+    particles: 'cyber',
+    particleCount: 180,
+    particleColor: '#34d399',
+    particleSpeed: 1.2,
+    floatingText: 'CYBER DIMENSION',
+    textColor: '#10b981'
+  },
+  'virtual-window': {
+    name: 'Virtual Window',
+    shape: 'rectangle',
+    width: 1.4,
+    height: 1.0,
+    radius: 0.7,
+    depth: 3.0,
+    frameColor: '#cbd5e1',
+    frameWidth: 0.06,
+    frameEmissive: '#475569',
+    frameEmissiveIntensity: 0.6,
+    frameGlow: false,
+    interiorType: 'nebula',
+    skyboxUrl: '',
+    interiorColor: '#0a0f1d',
+    wallColor: '#0f172a',
+    floorColor: '#020617',
+    gridColor: '#38bdf8',
+    interiorLightColor: '#ffffff',
+    interiorLightIntensity: 1.8,
+    interiorModelType: 'none',
+    artifactType: 'crystal',
+    modelScale: 0.35,
+    modelPosX: 0.0,
+    modelPosY: 0.0,
+    modelPosZ: -1.2,
+    modelRotSpeed: 0,
+    showVideo: false,
+    particles: 'none',
+    particleCount: 50,
+    particleColor: '#ffffff',
+    particleSpeed: 0.5,
+    floatingText: 'VIRTUAL WINDOW',
+    textColor: '#e2e8f0'
+  },
+  'luxury-gallery': {
+    name: 'Luxury Gallery',
+    shape: 'arch',
+    width: 1.2,
+    height: 1.9,
+    radius: 0.7,
+    depth: 3.5,
+    frameColor: '#f59e0b',
+    frameWidth: 0.09,
+    frameEmissive: '#b45309',
+    frameEmissiveIntensity: 1.4,
+    frameGlow: true,
+    interiorType: 'void',
+    skyboxUrl: '',
+    interiorColor: '#0c0a09',
+    wallColor: '#1c1917',
+    floorColor: '#0c0a09',
+    gridColor: '#f59e0b',
+    interiorLightColor: '#fef3c7',
+    interiorLightIntensity: 2.2,
+    interiorModelType: 'artifact',
+    artifactType: 'pedestal',
+    modelScale: 0.4,
+    modelPosX: 0.0,
+    modelPosY: -0.15,
+    modelPosZ: -1.4,
+    modelRotSpeed: 7000,
+    showVideo: false,
+    particles: 'embers',
+    particleCount: 120,
+    particleColor: '#fbbf24',
+    particleSpeed: 0.8,
+    floatingText: 'VIP SHOWROOM',
+    textColor: '#f59e0b'
+  },
+  'stargate-ring': {
+    name: 'Sci-Fi Stargate',
+    shape: 'circle',
+    width: 1.5,
+    height: 1.5,
+    radius: 0.85,
+    depth: 4.5,
+    frameColor: '#a855f7',
+    frameWidth: 0.08,
+    frameEmissive: '#7e22ce',
+    frameEmissiveIntensity: 2.0,
+    frameGlow: true,
+    interiorType: 'starfield',
+    skyboxUrl: '',
+    interiorColor: '#05021a',
+    wallColor: '#1e1035',
+    floorColor: '#090314',
+    gridColor: '#a855f7',
+    interiorLightColor: '#f3e8ff',
+    interiorLightIntensity: 2.5,
+    interiorModelType: 'artifact',
+    artifactType: 'star-emblem',
+    modelScale: 0.42,
+    modelPosX: 0.0,
+    modelPosY: 0.0,
+    modelPosZ: -1.5,
+    modelRotSpeed: 5000,
+    showVideo: false,
+    particles: 'stars',
+    particleCount: 220,
+    particleColor: '#c084fc',
+    particleSpeed: 1.4,
+    floatingText: 'STARGATE DIMENSION',
+    textColor: '#c084fc'
+  }
+};

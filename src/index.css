@@ -174,3 +174,7 @@ video,
 .cart-icon:hover {
   color: #fff;
 }
+
+.control-tabs {
+  overflow-x: scroll;
+}
