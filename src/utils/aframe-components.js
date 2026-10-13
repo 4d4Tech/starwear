@@ -4093,3 +4093,130 @@ export const PARTICLE_PRESETS = {
     twinkle: true
   }
 };
+
+// =========================================================================
+// AR STUDIO LIGHTING COMPONENT
+// Multi-source studio lighting rig (Ambient + Key Directional + Fill Directional)
+// that anchors directly to the model's parent entity (e.g. #target-entity in WebAR
+// or #preview-anchor in 3D). Directional light targets are explicitly parented to
+// the rig's Three.js group so their world-space positions track the model 1:1,
+// eliminating unanchored Three.js directional target bugs and camera headlight washout.
+// =========================================================================
+if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
+  AFRAME.registerComponent('ar-studio-lighting', {
+    schema: {
+      enabled: { type: 'boolean', default: true },
+      ambientColor: { type: 'string', default: '#ffffff' },
+      ambientIntensity: { type: 'number', default: 1.5 },
+      dir1Color: { type: 'string', default: '#ffffff' },
+      dir1Intensity: { type: 'number', default: 2.5 },
+      dir1Position: { type: 'string', default: '1 2 1' },
+      dir2Color: { type: 'string', default: '#ffffff' },
+      dir2Intensity: { type: 'number', default: 1.0 },
+      dir2Position: { type: 'string', default: '-1 -2 -1' }
+    },
+
+    init: function () {
+      const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE)
+        ? window.AFRAME.THREE
+        : THREE;
+
+      this.lightingGroup = new THREE_LIB.Group();
+      this.lightingGroup.name = 'ar_studio_lighting_group';
+
+      // 1. Ambient Light
+      this.ambientLight = new THREE_LIB.AmbientLight(this.data.ambientColor || '#ffffff', Number(this.data.ambientIntensity ?? 1.5));
+      this.ambientLight.name = 'studio_ambient_light';
+      this.lightingGroup.add(this.ambientLight);
+
+      // 2. Key Light (Directional 1)
+      this.dir1Light = new THREE_LIB.DirectionalLight(this.data.dir1Color || '#ffffff', Number(this.data.dir1Intensity ?? 2.5));
+      this.dir1Light.name = 'studio_dir1_light';
+      this.dir1Target = new THREE_LIB.Object3D();
+      this.dir1Target.name = 'studio_dir1_target';
+      this.dir1Target.position.set(0, 0, 0);
+      this.lightingGroup.add(this.dir1Target);
+      this.dir1Light.target = this.dir1Target;
+      this.lightingGroup.add(this.dir1Light);
+
+      // 3. Fill Light (Directional 2)
+      this.dir2Light = new THREE_LIB.DirectionalLight(this.data.dir2Color || '#ffffff', Number(this.data.dir2Intensity ?? 1.0));
+      this.dir2Light.name = 'studio_dir2_light';
+      this.dir2Target = new THREE_LIB.Object3D();
+      this.dir2Target.name = 'studio_dir2_target';
+      this.dir2Target.position.set(0, 0, 0);
+      this.lightingGroup.add(this.dir2Target);
+      this.dir2Light.target = this.dir2Target;
+      this.lightingGroup.add(this.dir2Light);
+
+      if (this.el && this.el.object3D) {
+        this.el.object3D.add(this.lightingGroup);
+      }
+
+      this.updateLights();
+    },
+
+    update: function () {
+      this.updateLights();
+    },
+
+    updateLights: function () {
+      if (!this.lightingGroup) return;
+      const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE)
+        ? window.AFRAME.THREE
+        : THREE;
+
+      this.lightingGroup.visible = this.data.enabled !== false;
+
+      // Ambient Light
+      if (this.ambientLight) {
+        this.ambientLight.color.set(this.data.ambientColor || '#ffffff');
+        this.ambientLight.intensity = Math.max(0, Number(this.data.ambientIntensity ?? 1.5));
+      }
+
+      const parsePos = (posStr, fallback) => {
+        if (!posStr) return fallback;
+        const parts = String(posStr).trim().split(/\s+/).map(Number);
+        if (parts.length === 3 && !parts.some(isNaN)) {
+          return new THREE_LIB.Vector3(parts[0], parts[1], parts[2]);
+        }
+        return fallback;
+      };
+
+      // Key Light
+      if (this.dir1Light) {
+        this.dir1Light.color.set(this.data.dir1Color || '#ffffff');
+        this.dir1Light.intensity = Math.max(0, Number(this.data.dir1Intensity ?? 2.5));
+        const p1 = parsePos(this.data.dir1Position, new THREE_LIB.Vector3(1, 2, 1));
+        this.dir1Light.position.copy(p1);
+        if (this.dir1Target) {
+          this.dir1Target.position.set(0, 0, 0);
+          this.dir1Target.updateMatrixWorld(true);
+        }
+        this.dir1Light.updateMatrixWorld(true);
+      }
+
+      // Fill Light
+      if (this.dir2Light) {
+        this.dir2Light.color.set(this.data.dir2Color || '#ffffff');
+        this.dir2Light.intensity = Math.max(0, Number(this.data.dir2Intensity ?? 1.0));
+        const p2 = parsePos(this.data.dir2Position, new THREE_LIB.Vector3(-1, -2, -1));
+        this.dir2Light.position.copy(p2);
+        if (this.dir2Target) {
+          this.dir2Target.position.set(0, 0, 0);
+          this.dir2Target.updateMatrixWorld(true);
+        }
+        this.dir2Light.updateMatrixWorld(true);
+      }
+    },
+
+    remove: function () {
+      if (this.lightingGroup && this.el && this.el.object3D) {
+        this.el.object3D.remove(this.lightingGroup);
+        if (this.ambientLight && typeof this.ambientLight.dispose === 'function') this.ambientLight.dispose();
+        if (this.dir1Light && typeof this.dir1Light.dispose === 'function') this.dir1Light.dispose();
+        if (this.dir2Light && typeof this.dir2Light.dispose === 'function') this.dir2Light.dispose();
+      }
+    }
+  });
+}

@@ -7778,13 +7778,13 @@ const ARTest = () => {
               position="0 0 0"
               orbit-camera-controls={`enableDamping: true; dampingFactor: 0.08; screenSpacePanning: true; autoRotate: ${cameraAutoRotate}; autoRotateSpeed: 1.2; minDistance: 0.2; maxDistance: 100; enableRotate: true; enablePan: true; enableZoom: true; rotateSpeed: 1.0; zoomSpeed: 1.0; panSpeed: 1.0`}
             >
-              <a-light type="directional" color="#ffffff" intensity="1.2" position="0 0 1"></a-light>
             </a-entity>
 
-            {/* Dynamic Lighting Rig */}
-            <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
-            <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
-            <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
+            {/* Dynamic Multi-Source Studio Lighting Rig */}
+            <a-entity
+              id="test-lighting-rig"
+              ar-studio-lighting={`enabled: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position};`}
+            ></a-entity>
 
             {/* Center Model Entity Anchor */}
             {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (

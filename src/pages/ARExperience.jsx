@@ -260,12 +260,14 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           logToScreen('FIRESTORE_BATCH_WARN', fsErr.message);
         }
 
+        const targetAssetId = batchDocData?.asset_id || batchDocData?.assetId || data?.asset_id || data?.assetId || batchId;
+
         try {
           let assetSnap = null;
           try {
-            assetSnap = await getDocFromServer(doc(db, 'assets', batchId));
+            assetSnap = await getDocFromServer(doc(db, 'assets', targetAssetId));
           } catch {
-            assetSnap = await getDoc(doc(db, 'assets', batchId));
+            assetSnap = await getDoc(doc(db, 'assets', targetAssetId));
           }
           if (assetSnap && assetSnap.exists()) {
             assetDocData = assetSnap.data();
@@ -274,15 +276,43 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           logToScreen('FIRESTORE_ASSET_WARN', fsErr.message);
         }
 
+        const extractConfigFields = (docData) => {
+          if (!docData || typeof docData !== 'object') return {};
+          const cfg = {};
+          if (docData.config && typeof docData.config === 'object') Object.assign(cfg, docData.config);
+          if (docData.arExperience?.config && typeof docData.arExperience.config === 'object') Object.assign(cfg, docData.arExperience.config);
+          if (docData.ar_config && typeof docData.ar_config === 'object') Object.assign(cfg, docData.ar_config);
+          if (docData.lighting && typeof docData.lighting === 'object') Object.assign(cfg, docData.lighting);
+          if (docData.lightingConfig && typeof docData.lightingConfig === 'object') Object.assign(cfg, docData.lightingConfig);
+          if (docData.portalConfig && typeof docData.portalConfig === 'object') cfg.portalConfig = docData.portalConfig;
+          if (docData.particleConfig && typeof docData.particleConfig === 'object') cfg.particleConfig = docData.particleConfig;
+
+          const directLightingKeys = [
+            'ambientColor', 'ambientIntensity',
+            'dir1Color', 'dir1Intensity', 'dir1Position',
+            'dir2Color', 'dir2Intensity', 'dir2Position'
+          ];
+          directLightingKeys.forEach((key) => {
+            if (docData[key] !== undefined && docData[key] !== null) {
+              cfg[key] = docData[key];
+            }
+          });
+          return cfg;
+        };
+
+        const assetCfg = extractConfigFields(assetDocData);
+        const batchCfg = extractConfigFields(batchDocData);
+
         const mergedFsConfig = {
-          ...(assetDocData?.ar_config || {}),
+          ...assetCfg,
+          ...batchCfg,
           ...(assetDocData?.portalConfig ? { portalConfig: assetDocData.portalConfig } : {}),
           ...(assetDocData?.particleConfig ? { particleConfig: assetDocData.particleConfig } : {}),
-          ...(batchDocData?.ar_config || {}),
           ...(batchDocData?.portalConfig ? { portalConfig: batchDocData.portalConfig } : {}),
           ...(batchDocData?.particleConfig ? { particleConfig: batchDocData.particleConfig } : {})
         };
-        if (Object.keys(mergedFsConfig).length > 0) {
+        const hasFsConfig = Object.keys(mergedFsConfig).length > 0;
+        if (hasFsConfig) {
           liveConfig = mergedFsConfig;
           logToScreen('FIRESTORE_CONFIG', 'Using live Firestore configuration merged from batches and assets.');
         }
@@ -290,10 +320,16 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         // Check local preview calibration config (for instant preview from AR Test editor)
         let localPreviewConfig = null;
         try {
-          const stored = localStorage.getItem(`starwear_live_preview_config_${batchId}`) || localStorage.getItem('starwear_live_preview_config_last');
-          if (stored) {
-            localPreviewConfig = JSON.parse(stored);
-            logToScreen('LOCAL_PREVIEW_CONFIG', 'Loaded active calibration config from AR Test session.');
+          const batchSpecificStored = localStorage.getItem(`starwear_live_preview_config_${batchId}`);
+          if (batchSpecificStored) {
+            localPreviewConfig = JSON.parse(batchSpecificStored);
+            logToScreen('LOCAL_PREVIEW_CONFIG', `Loaded active calibration config for ${batchId} from AR Test session.`);
+          } else if (!hasFsConfig) {
+            const lastStored = localStorage.getItem('starwear_live_preview_config_last');
+            if (lastStored) {
+              localPreviewConfig = JSON.parse(lastStored);
+              logToScreen('LOCAL_PREVIEW_CONFIG', 'Loaded fallback calibration config from AR Test session.');
+            }
           }
         } catch {}
 
@@ -698,6 +734,20 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         }
       });
 
+      // Ensure all studio lighting rigs refresh matrix & lights on marker lock
+      document.querySelectorAll('[ar-studio-lighting]').forEach((el) => {
+        if (el && el.components && el.components['ar-studio-lighting']) {
+          const comp = el.components['ar-studio-lighting'];
+          if (comp.lightingGroup) {
+            comp.lightingGroup.visible = true;
+            comp.lightingGroup.updateMatrixWorld(true);
+          }
+          if (typeof comp.updateLights === 'function') {
+            comp.updateLights();
+          }
+        }
+      });
+
       const isFlipX = !!(arData?.config?.videoFlipX);
       const targetMesh = arData?.config?.videoTargetMesh || 'auto';
 
@@ -1043,15 +1093,17 @@ useEffect(() => {
   // Extract Scene & Lighting Properties
   const cfg = arData.config || {};
   const ambientColor = cfg.ambientColor || '#ffffff';
-  const ambientIntensity = cfg.ambientIntensity ?? 1.2;
+  const ambientIntensity = cfg.ambientIntensity ?? 1.5;
 
   const dir1Color = cfg.dir1Color || '#ffffff';
   const dir1Intensity = cfg.dir1Intensity ?? 2.5;
-  const dir1Position = cfg.dir1Position || '2 4 3';
+  const dir1Position = cfg.dir1Position || '1 2 1';
 
   const dir2Color = cfg.dir2Color || '#ffffff';
   const dir2Intensity = cfg.dir2Intensity ?? 1.0;
-  const dir2Position = cfg.dir2Position || '-2 -1 -2';
+  const dir2Position = cfg.dir2Position || '-1 -2 -1';
+
+  const studioLightingAttr = `enabled: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position};`;
 
   const modelScale = cfg.modelScale ?? 0.4;
   const modelRotSpeed = cfg.modelRotSpeed ?? 10000;
@@ -1271,6 +1323,7 @@ useEffect(() => {
         </a-assets>
 
         {/* Camera with Studio4D4 OrbitControls in 3D Mode & MindAR Forward Anchor in AR Mode */}
+        {/* Camera with Studio4D4 OrbitControls in 3D Mode & MindAR Forward Anchor in AR Mode */}
         <a-camera
           id="experience-camera"
           position="0 0 0"
@@ -1278,16 +1331,14 @@ useEffect(() => {
           wasd-controls="enabled: false"
           orbit-camera-controls={`enabled: ${!cameraEnabled}; enableDamping: true; dampingFactor: 0.08; screenSpacePanning: true; autoRotate: ${cameraAutoRotate && !cameraEnabled}; autoRotateSpeed: 1.2; minDistance: 0.2; maxDistance: 100; enableRotate: ${!cameraEnabled}; enablePan: ${!cameraEnabled}; enableZoom: ${!cameraEnabled}; rotateSpeed: 1.0; zoomSpeed: 1.0; panSpeed: 1.0`}
         >
-          <a-light type="directional" color="#ffffff" intensity="1.2" position="0 0 1"></a-light>
         </a-camera>
 
-        {/* Multi-Source Studio Lighting Rig */}
-        <a-light type="ambient" color={ambientColor} intensity={ambientIntensity}></a-light>
-        <a-light type="directional" color={dir1Color} intensity={dir1Intensity} position={dir1Position}></a-light>
-        <a-light type="directional" color={dir2Color} intensity={dir2Intensity} position={dir2Position}></a-light>
-
         {/* MindAR Target Anchor: Active in Live AR Camera Mode */}
-        <a-entity id="target-entity" mindar-image-target={`targetIndex: ${targetIndex}`}>
+        <a-entity
+          id="target-entity"
+          mindar-image-target={`targetIndex: ${targetIndex}`}
+          ar-studio-lighting={studioLightingAttr}
+        >
           {cameraEnabled && !portalHideOutsideModel && (
             <a-gltf-model
               id="ar-model"
@@ -1326,7 +1377,11 @@ useEffect(() => {
 
         {/* Center 3D Model Anchor: Active in 3D Preview Mode (Studio4D4 OrbitControls) */}
         {!cameraEnabled && (
-          <a-entity id="preview-anchor" position="0 0 0">
+          <a-entity
+            id="preview-anchor"
+            position="0 0 0"
+            ar-studio-lighting={studioLightingAttr}
+          >
             {!portalHideOutsideModel && (
               <a-gltf-model
                 id="preview-model"
@@ -1366,7 +1421,10 @@ useEffect(() => {
 
         {/* Force Test Render Anchor (Bypasses marker requirement for testing) */}
         {forceShowModel && cameraEnabled && (
-          <a-entity position="0 0 -2">
+          <a-entity
+            position="0 0 -2"
+            ar-studio-lighting={studioLightingAttr}
+          >
             {!portalHideOutsideModel && (
               <a-gltf-model
                 id="ar-model-forced"
