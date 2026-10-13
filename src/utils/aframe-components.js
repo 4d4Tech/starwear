@@ -2106,6 +2106,7 @@ if (typeof AFRAME !== 'undefined') {
         skyboxRotX: { type: 'number', default: 0 },
         skyboxRotY: { type: 'number', default: 0 },
         skyboxRotZ: { type: 'number', default: 0 },
+        skyboxBlur: { type: 'number', default: 0.0 },
         interiorColor: { type: 'color', default: '#050714' },
         wallColor: { type: 'color', default: '#0f172a' },
         floorColor: { type: 'color', default: '#020617' },
@@ -2439,6 +2440,9 @@ if (typeof AFRAME !== 'undefined') {
               (this.data.skyboxRotY * Math.PI) / 180,
               (this.data.skyboxRotZ * Math.PI) / 180
             );
+            if (this.skyboxMesh.material && this.skyboxMesh.material.userData && this.skyboxMesh.material.userData.uSkyboxBlur) {
+              this.skyboxMesh.material.userData.uSkyboxBlur.value = Math.max(0, Number(this.data.skyboxBlur) || 0);
+            }
           }
         }
       },
@@ -2783,6 +2787,74 @@ if (typeof AFRAME !== 'undefined') {
             map: skyTex,
             side: THREE_LIB.DoubleSide
           });
+          if (skyTex) {
+            skyTex.minFilter = THREE_LIB.LinearMipmapLinearFilter;
+            skyTex.generateMipmaps = true;
+          }
+
+          // Gaussian blur shader integration
+          const blurUniform = { value: Math.max(0, Number(data.skyboxBlur) || 0) };
+          sphereMat.userData.uSkyboxBlur = blurUniform;
+          sphereMat.customProgramCacheKey = () => 'ar-portal-skybox-blur';
+          sphereMat.onBeforeCompile = (shader) => {
+            shader.uniforms.uSkyboxBlur = blurUniform;
+            shader.fragmentShader = `
+              uniform float uSkyboxBlur;
+              vec2 sampleEquirectBlur(vec2 uv, vec2 offset) {
+                return vec2(fract(uv.x + offset.x), clamp(uv.y + offset.y, 0.001, 0.999));
+              }
+            ` + shader.fragmentShader;
+
+            const blurCode = `
+              vec4 sampledDiffuseColor;
+              if (uSkyboxBlur <= 0.001) {
+                sampledDiffuseColor = texture2D( map, vMapUv );
+              } else {
+                float blurFactor = uSkyboxBlur;
+                float lod = min(4.5, blurFactor * 0.22);
+                vec2 bStep = vec2(blurFactor * 0.0006, blurFactor * 0.0012);
+
+                sampledDiffuseColor = texture2D( map, vMapUv, lod ) * 0.1636;
+                sampledDiffuseColor += texture2D( map, sampleEquirectBlur(vMapUv, vec2(bStep.x, 0.0)), lod ) * 0.1091;
+                sampledDiffuseColor += texture2D( map, sampleEquirectBlur(vMapUv, vec2(-bStep.x, 0.0)), lod ) * 0.1091;
+                sampledDiffuseColor += texture2D( map, sampleEquirectBlur(vMapUv, vec2(0.0, bStep.y)), lod ) * 0.1091;
+                sampledDiffuseColor += texture2D( map, sampleEquirectBlur(vMapUv, vec2(0.0, -bStep.y)), lod ) * 0.1091;
+
+                sampledDiffuseColor += texture2D( map, sampleEquirectBlur(vMapUv, vec2(bStep.x * 0.707, bStep.y * 0.707)), lod ) * 0.0636;
+                sampledDiffuseColor += texture2D( map, sampleEquirectBlur(vMapUv, vec2(-bStep.x * 0.707, bStep.y * 0.707)), lod ) * 0.0636;
+                sampledDiffuseColor += texture2D( map, sampleEquirectBlur(vMapUv, vec2(bStep.x * 0.707, -bStep.y * 0.707)), lod ) * 0.0636;
+                sampledDiffuseColor += texture2D( map, sampleEquirectBlur(vMapUv, vec2(-bStep.x * 0.707, -bStep.y * 0.707)), lod ) * 0.0636;
+
+                sampledDiffuseColor += texture2D( map, sampleEquirectBlur(vMapUv, vec2(bStep.x * 1.6, 0.0)), lod ) * 0.0364;
+                sampledDiffuseColor += texture2D( map, sampleEquirectBlur(vMapUv, vec2(-bStep.x * 1.6, 0.0)), lod ) * 0.0364;
+                sampledDiffuseColor += texture2D( map, sampleEquirectBlur(vMapUv, vec2(0.0, bStep.y * 1.6)), lod ) * 0.0364;
+                sampledDiffuseColor += texture2D( map, sampleEquirectBlur(vMapUv, vec2(0.0, -bStep.y * 1.6)), lod ) * 0.0364;
+              }
+            `;
+
+            if (shader.fragmentShader.includes('vec4 sampledDiffuseColor = texture2D( map, vMapUv );')) {
+              shader.fragmentShader = shader.fragmentShader.replace(
+                'vec4 sampledDiffuseColor = texture2D( map, vMapUv );',
+                blurCode
+              );
+            } else if (shader.fragmentShader.includes('vec4 sampledDiffuseColor = texture2D(map, vMapUv);')) {
+              shader.fragmentShader = shader.fragmentShader.replace(
+                'vec4 sampledDiffuseColor = texture2D(map, vMapUv);',
+                blurCode
+              );
+            } else {
+              shader.fragmentShader = shader.fragmentShader.replace(
+                '#include <map_fragment>',
+                `#ifdef USE_MAP
+                  ${blurCode}
+                  #ifdef DECODE_VIDEO_TEXTURE
+                    sampledDiffuseColor = colorToOutput( sampledDiffuseColor );
+                  #endif
+                  diffuseColor *= sampledDiffuseColor;
+                #endif`
+              );
+            }
+          };
           const skyMesh = new THREE_LIB.Mesh(sphereGeom, sphereMat);
           const s = Math.max(0.05, data.skyboxScale || 1.0);
           skyMesh.scale.set(s, s, s);
@@ -2991,7 +3063,12 @@ if (typeof AFRAME !== 'undefined') {
             size: data.particles === 'cyber' ? 0.04 : 0.028,
             transparent: true,
             opacity: 0.85,
-            blending: THREE_LIB.AdditiveBlending,
+            blending: THREE_LIB.CustomBlending,
+            blendEquation: THREE_LIB.AddEquation,
+            blendSrc: THREE_LIB.SrcAlphaFactor,
+            blendDst: THREE_LIB.OneFactor,
+            blendSrcAlpha: THREE_LIB.OneFactor,
+            blendDstAlpha: THREE_LIB.OneFactor,
             depthWrite: false
           });
           this.particlesObj = new THREE_LIB.Points(pGeom, pMat);
@@ -3389,11 +3466,16 @@ if (typeof AFRAME !== 'undefined') {
         this.el.setObject3D('particleSystemRoot', this.particleGroup);
         this.particlesObj = null;
         this.velocities = [];
-        this.buildParticles();
+        this.dummy = new THREE_LIB.Object3D();
+        this.uniformSize = { value: Math.max(0.005, Number(this.data.size) || 0.04) };
 
         this.onTargetFound = () => {
           if (this.particleGroup && this.data.enabled) {
+            this.el.object3D.visible = true;
             this.particleGroup.visible = true;
+            if (this.particlesObj) {
+              this.particlesObj.visible = true;
+            }
             this.particleGroup.updateMatrixWorld(true);
           }
         };
@@ -3409,6 +3491,8 @@ if (typeof AFRAME !== 'undefined') {
         if (targetEl && targetEl !== this.el.parentEl) {
           targetEl.addEventListener('targetFound', this.onTargetFound);
         }
+
+        this.buildParticles();
       },
 
       update: function (oldData) {
@@ -3416,7 +3500,11 @@ if (typeof AFRAME !== 'undefined') {
           this.particleGroup.visible = false;
           return;
         }
+        this.el.object3D.visible = true;
         this.particleGroup.visible = true;
+        if (this.particlesObj) {
+          this.particlesObj.visible = true;
+        }
         this.particleGroup.position.set(this.data.posX, this.data.posY, this.data.posZ);
         this.particleGroup.rotation.set(
           (this.data.rotX * Math.PI) / 180,
@@ -3437,9 +3525,13 @@ if (typeof AFRAME !== 'undefined') {
 
         if (needRebuild) {
           this.buildParticles();
-        } else if (this.particlesObj && this.particlesObj.material) {
-          this.particlesObj.material.size = Math.max(0.005, this.data.size);
-          this.particlesObj.material.opacity = Math.max(0.05, this.data.opacity);
+        } else {
+          if (this.uniformSize) {
+            this.uniformSize.value = Math.max(0.005, Number(this.data.size) || 0.04);
+          }
+          if (this.particlesObj && this.particlesObj.material) {
+            this.particlesObj.material.opacity = Math.max(0.05, Number(this.data.opacity) || 0.85);
+          }
         }
       },
 
@@ -3460,43 +3552,93 @@ if (typeof AFRAME !== 'undefined') {
         if (!this.data.enabled) return;
 
         const count = Math.max(10, Math.min(2500, this.data.count));
-        const pGeom = new THREE_LIB.BufferGeometry();
-        const positions = new Float32Array(count * 3);
-        const colors = new Float32Array(count * 3);
+        const quadGeom = new THREE_LIB.PlaneGeometry(1, 1);
+        const spriteTex = generateParticleSprite(this.data.shape);
+
+        const pMat = new THREE_LIB.MeshBasicMaterial({
+          map: spriteTex,
+          transparent: true,
+          opacity: Math.max(0.05, Number(this.data.opacity) || 0.85),
+          depthWrite: false,
+          depthTest: true,
+          side: THREE_LIB.DoubleSide
+        });
+
+        // Robust alpha compositing for WebAR transparent canvas:
+        if (this.data.blending === 'normal') {
+          pMat.blending = THREE_LIB.NormalBlending;
+        } else {
+          pMat.blending = THREE_LIB.CustomBlending;
+          pMat.blendEquation = THREE_LIB.AddEquation;
+          pMat.blendSrc = THREE_LIB.SrcAlphaFactor;
+          pMat.blendDst = THREE_LIB.OneFactor;
+          pMat.blendSrcAlpha = THREE_LIB.OneFactor;
+          pMat.blendDstAlpha = THREE_LIB.OneFactor;
+        }
+
+        const uniformSize = this.uniformSize || { value: Math.max(0.005, Number(this.data.size) || 0.04) };
+        uniformSize.value = Math.max(0.005, Number(this.data.size) || 0.04);
+        this.uniformSize = uniformSize;
+
+        pMat.customProgramCacheKey = () => 'ar-billboard-particle-v1';
+        pMat.onBeforeCompile = (shader) => {
+          shader.uniforms.uParticleSize = uniformSize;
+          shader.vertexShader = shader.vertexShader.replace(
+            '#include <common>',
+            `#include <common>
+            uniform float uParticleSize;`
+          );
+          shader.vertexShader = shader.vertexShader.replace(
+            '#include <project_vertex>',
+            `#ifdef USE_INSTANCING
+              vec4 instanceCenter = instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );
+              vec4 mvPosition = modelViewMatrix * instanceCenter;
+              float instScale = max(0.01, length( instanceMatrix[0].xyz ));
+              mvPosition.xy += position.xy * (uParticleSize * instScale);
+            #else
+              vec4 mvPosition = modelViewMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );
+              mvPosition.xy += position.xy * uParticleSize;
+            #endif
+            gl_Position = projectionMatrix * mvPosition;`
+          );
+        };
+
+        const instMesh = new THREE_LIB.InstancedMesh(quadGeom, pMat, count);
 
         const colA = new THREE_LIB.Color(this.data.color);
         const colB = new THREE_LIB.Color(this.data.colorSecondary || this.data.color);
         const tempCol = new THREE_LIB.Color();
 
-        const spreadX = Math.max(0.5, this.data.spreadX);
-        const spreadY = Math.max(0.5, this.data.spreadY);
-        const spreadZ = Math.max(0.5, this.data.spreadZ);
+        const spreadX = Math.max(0.2, this.data.spreadX);
+        const spreadY = Math.max(0.2, this.data.spreadY);
+        const spreadZ = Math.max(0.2, this.data.spreadZ);
 
         for (let i = 0; i < count; i++) {
           const t = Math.random();
           tempCol.copy(colA).lerp(colB, t);
-          colors[i * 3 + 0] = tempCol.r;
-          colors[i * 3 + 1] = tempCol.g;
-          colors[i * 3 + 2] = tempCol.b;
+          instMesh.setColorAt(i, tempCol);
 
           const px = (Math.random() - 0.5) * spreadX;
           const py = (Math.random() - 0.5) * spreadY;
           const pz = (Math.random() - 0.5) * spreadZ;
+          const scaleVar = 0.75 + Math.random() * 0.5;
 
-          positions[i * 3 + 0] = px;
-          positions[i * 3 + 1] = py;
-          positions[i * 3 + 2] = pz;
+          this.dummy.position.set(px, py, pz);
+          this.dummy.scale.set(scaleVar, scaleVar, scaleVar);
+          this.dummy.updateMatrix();
+          instMesh.setMatrixAt(i, this.dummy.matrix);
 
           const orbitRadius = Math.sqrt(px * px + pz * pz);
           const orbitAngle = Math.atan2(pz, px);
 
           this.velocities.push({
+            x: px,
+            y: py,
+            z: pz,
+            scale: scaleVar,
             vx: (Math.random() - 0.5) * 0.25,
             vy: Math.random() * 0.8 + 0.2,
             vz: (Math.random() - 0.5) * 0.25,
-            baseX: px,
-            baseY: py,
-            baseZ: pz,
             phase: Math.random() * Math.PI * 2,
             orbitRadius: Math.max(0.2, orbitRadius),
             orbitAngle: orbitAngle,
@@ -3504,56 +3646,31 @@ if (typeof AFRAME !== 'undefined') {
           });
         }
 
-        pGeom.setAttribute('position', new THREE_LIB.BufferAttribute(positions, 3));
-        pGeom.setAttribute('color', new THREE_LIB.BufferAttribute(colors, 3));
-        try {
-          pGeom.computeBoundingSphere();
-          pGeom.computeBoundingBox();
-        } catch {}
-
-        const spriteTex = generateParticleSprite(this.data.shape);
-        const blendMode = this.data.blending === 'normal' ? THREE_LIB.NormalBlending : THREE_LIB.AdditiveBlending;
-
-        const pMat = new THREE_LIB.PointsMaterial({
-          size: Math.max(0.005, this.data.size),
-          map: spriteTex,
-          transparent: true,
-          opacity: Math.max(0.05, this.data.opacity),
-          vertexColors: true,
-          blending: blendMode,
-          depthWrite: false,
-          depthTest: true
-        });
-
-        // In WebAR with transparent canvas composited over <video>, additive blending must set destination alpha
-        // so browser compositor does not treat the particle pixels as 100% transparent.
-        if (blendMode === THREE_LIB.AdditiveBlending) {
-          pMat.blendEquation = THREE_LIB.AddEquation;
-          pMat.blendSrc = THREE_LIB.SrcAlphaFactor;
-          pMat.blendDst = THREE_LIB.OneFactor;
-          pMat.blendSrcAlpha = THREE_LIB.OneFactor;
-          pMat.blendDstAlpha = THREE_LIB.OneMinusSrcAlphaFactor;
+        instMesh.instanceMatrix.needsUpdate = true;
+        if (instMesh.instanceColor) {
+          instMesh.instanceColor.needsUpdate = true;
         }
 
-        this.particlesObj = new THREE_LIB.Points(pGeom, pMat);
-        this.particlesObj.frustumCulled = false;
-        this.particlesObj.renderOrder = 999;
+        instMesh.frustumCulled = false;
+        instMesh.renderOrder = 999;
+        this.particlesObj = instMesh;
         this.particleGroup.add(this.particlesObj);
       },
 
       tick: function (time, timeDelta) {
-        if (!this.data.enabled || !this.particlesObj || !this.particlesObj.geometry) return;
+        if (!this.data.enabled || !this.particlesObj) return;
         if (!this.particleGroup.visible) {
           this.particleGroup.visible = true;
         }
-        const dt = (timeDelta || 16) / 1000;
+        if (!this.particlesObj.visible) {
+          this.particlesObj.visible = true;
+        }
+        const dt = Math.min(0.1, (timeDelta || 16) / 1000);
         const speed = Math.max(0.05, this.data.speed);
-        const posAttr = this.particlesObj.geometry.attributes.position;
-        const posArr = posAttr.array;
         const dir = this.data.direction;
-        const spreadX = this.data.spreadX;
-        const spreadY = this.data.spreadY;
-        const spreadZ = this.data.spreadZ;
+        const spreadX = Math.max(0.2, this.data.spreadX);
+        const spreadY = Math.max(0.2, this.data.spreadY);
+        const spreadZ = Math.max(0.2, this.data.spreadZ);
         const halfY = spreadY / 2;
         const count = this.velocities.length;
 
@@ -3562,60 +3679,67 @@ if (typeof AFRAME !== 'undefined') {
           this.particleGroup.rotation.y += this.data.rotationSpeed * dt;
         }
 
+        const dummy = this.dummy;
         for (let i = 0; i < count; i++) {
           const v = this.velocities[i];
-          const idx = i * 3;
 
           if (dir === 'up') {
-            posArr[idx + 1] += v.vy * speed * dt;
-            posArr[idx + 0] += Math.sin(time * 0.002 + v.phase) * 0.08 * dt * speed;
-            posArr[idx + 2] += Math.cos(time * 0.002 + v.phase) * 0.08 * dt * speed;
+            v.y += v.vy * speed * dt;
+            v.x += Math.sin(time * 0.002 + v.phase) * 0.08 * dt * speed;
+            v.z += Math.cos(time * 0.002 + v.phase) * 0.08 * dt * speed;
 
-            if (posArr[idx + 1] > halfY) {
-              posArr[idx + 1] = -halfY;
-              posArr[idx + 0] = (Math.random() - 0.5) * spreadX;
-              posArr[idx + 2] = (Math.random() - 0.5) * spreadZ;
+            if (v.y > halfY) {
+              v.y = -halfY;
+              v.x = (Math.random() - 0.5) * spreadX;
+              v.z = (Math.random() - 0.5) * spreadZ;
             }
           } else if (dir === 'down') {
-            posArr[idx + 1] -= v.vy * speed * dt;
-            posArr[idx + 0] += Math.sin(time * 0.0015 + v.phase) * 0.06 * dt * speed;
-            posArr[idx + 2] += Math.cos(time * 0.0015 + v.phase) * 0.06 * dt * speed;
+            v.y -= v.vy * speed * dt;
+            v.x += Math.sin(time * 0.0015 + v.phase) * 0.06 * dt * speed;
+            v.z += Math.cos(time * 0.0015 + v.phase) * 0.06 * dt * speed;
 
-            if (posArr[idx + 1] < -halfY) {
-              posArr[idx + 1] = halfY;
-              posArr[idx + 0] = (Math.random() - 0.5) * spreadX;
-              posArr[idx + 2] = (Math.random() - 0.5) * spreadZ;
+            if (v.y < -halfY) {
+              v.y = halfY;
+              v.x = (Math.random() - 0.5) * spreadX;
+              v.z = (Math.random() - 0.5) * spreadZ;
             }
           } else if (dir === 'vortex') {
             v.orbitAngle += v.orbitSpeed * speed * dt;
-            posArr[idx + 0] = Math.cos(v.orbitAngle) * v.orbitRadius;
-            posArr[idx + 2] = Math.sin(v.orbitAngle) * v.orbitRadius;
-            posArr[idx + 1] += Math.sin(time * 0.001 + v.phase) * 0.05 * dt * speed;
-            if (posArr[idx + 1] > halfY) posArr[idx + 1] = -halfY;
-            if (posArr[idx + 1] < -halfY) posArr[idx + 1] = halfY;
+            v.x = Math.cos(v.orbitAngle) * v.orbitRadius;
+            v.z = Math.sin(v.orbitAngle) * v.orbitRadius;
+            v.y += Math.sin(time * 0.001 + v.phase) * 0.05 * dt * speed;
+            if (v.y > halfY) v.y = -halfY;
+            if (v.y < -halfY) v.y = halfY;
           } else if (dir === 'explode') {
-            posArr[idx + 0] += v.vx * speed * dt * 2;
-            posArr[idx + 1] += v.vy * speed * dt * 2;
-            posArr[idx + 2] += v.vz * speed * dt * 2;
-            const distSq = posArr[idx + 0] * posArr[idx + 0] + posArr[idx + 1] * posArr[idx + 1] + posArr[idx + 2] * posArr[idx + 2];
-            if (distSq > (spreadX * spreadX)) {
-              posArr[idx + 0] = (Math.random() - 0.5) * 0.2;
-              posArr[idx + 1] = (Math.random() - 0.5) * 0.2;
-              posArr[idx + 2] = (Math.random() - 0.5) * 0.2;
+            v.x += v.vx * speed * dt * 2;
+            v.y += v.vy * speed * dt * 2;
+            v.z += v.vz * speed * dt * 2;
+            const distSq = v.x * v.x + v.y * v.y + v.z * v.z;
+            if (distSq > (spreadX * spreadX * 0.5)) {
+              v.x = (Math.random() - 0.5) * 0.2;
+              v.y = (Math.random() - 0.5) * 0.2;
+              v.z = (Math.random() - 0.5) * 0.2;
             }
           } else {
             // 'float' - organic floating harmonic bobbing
-            posArr[idx + 0] += Math.sin(time * 0.001 + v.phase) * 0.06 * dt * speed;
-            posArr[idx + 1] += Math.cos(time * 0.0012 + v.phase) * 0.08 * dt * speed;
-            posArr[idx + 2] += Math.sin(time * 0.0009 + v.phase) * 0.06 * dt * speed;
+            v.x += Math.sin(time * 0.001 + v.phase) * 0.06 * dt * speed;
+            v.y += Math.cos(time * 0.0012 + v.phase) * 0.08 * dt * speed;
+            v.z += Math.sin(time * 0.0009 + v.phase) * 0.06 * dt * speed;
           }
+
+          dummy.position.set(v.x, v.y, v.z);
+          dummy.scale.set(v.scale, v.scale, v.scale);
+          dummy.updateMatrix();
+          this.particlesObj.setMatrixAt(i, dummy.matrix);
         }
-        posAttr.needsUpdate = true;
+        this.particlesObj.instanceMatrix.needsUpdate = true;
 
         // Subtle shimmering twinkle
         if (this.data.twinkle && this.particlesObj.material) {
           const shimmer = 0.85 + Math.sin(time * 0.005) * 0.15;
-          this.particlesObj.material.opacity = this.data.opacity * shimmer;
+          this.particlesObj.material.opacity = (Number(this.data.opacity) || 0.85) * shimmer;
+        } else if (!this.data.twinkle && this.particlesObj.material) {
+          this.particlesObj.material.opacity = Number(this.data.opacity) || 0.85;
         }
       },
 
@@ -3624,11 +3748,13 @@ if (typeof AFRAME !== 'undefined') {
           const sceneEl = this.el.sceneEl;
           if (sceneEl) {
             sceneEl.removeEventListener('targetFound', this.onTargetFound);
-            sceneEl.removeEventListener('targetLost', this.onTargetLost);
           }
           if (this.el.parentEl) {
             this.el.parentEl.removeEventListener('targetFound', this.onTargetFound);
-            this.el.parentEl.removeEventListener('targetLost', this.onTargetLost);
+          }
+          const targetEl = document.getElementById('target-entity');
+          if (targetEl && targetEl !== this.el.parentEl) {
+            targetEl.removeEventListener('targetFound', this.onTargetFound);
           }
         }
         if (this.particleGroup) {

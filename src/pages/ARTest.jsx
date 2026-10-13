@@ -857,6 +857,7 @@ const ARTest = () => {
   const [portalSkyboxRotX, setPortalSkyboxRotX] = useState(0);
   const [portalSkyboxRotY, setPortalSkyboxRotY] = useState(0);
   const [portalSkyboxRotZ, setPortalSkyboxRotZ] = useState(0);
+  const [portalSkyboxBlur, setPortalSkyboxBlur] = useState(0);
   const [portalInteriorColor, setPortalInteriorColor] = useState('#050714');
   const [portalWallColor, setPortalWallColor] = useState('#0f172a');
   const [portalFloorColor, setPortalFloorColor] = useState('#020617');
@@ -968,6 +969,7 @@ const ARTest = () => {
     if (p.skyboxRotX !== undefined) setPortalSkyboxRotX(p.skyboxRotX);
     if (p.skyboxRotY !== undefined) setPortalSkyboxRotY(p.skyboxRotY);
     if (p.skyboxRotZ !== undefined) setPortalSkyboxRotZ(p.skyboxRotZ);
+    if (p.skyboxBlur !== undefined) setPortalSkyboxBlur(p.skyboxBlur);
     if (p.interiorColor !== undefined) setPortalInteriorColor(p.interiorColor);
     if (p.wallColor !== undefined) setPortalWallColor(p.wallColor);
     if (p.floorColor !== undefined) setPortalFloorColor(p.floorColor);
@@ -2935,6 +2937,7 @@ const ARTest = () => {
         if (pCfg.skyboxRotX !== undefined) setPortalSkyboxRotX(Number(pCfg.skyboxRotX));
         if (pCfg.skyboxRotY !== undefined) setPortalSkyboxRotY(Number(pCfg.skyboxRotY));
         if (pCfg.skyboxRotZ !== undefined) setPortalSkyboxRotZ(Number(pCfg.skyboxRotZ));
+        if (pCfg.skyboxBlur !== undefined) setPortalSkyboxBlur(Number(pCfg.skyboxBlur));
         if (pCfg.interiorColor) setPortalInteriorColor(pCfg.interiorColor);
         if (pCfg.wallColor) setPortalWallColor(pCfg.wallColor);
         if (pCfg.floorColor) setPortalFloorColor(pCfg.floorColor);
@@ -3135,6 +3138,7 @@ const ARTest = () => {
         skyboxRotX: Number(portalSkyboxRotX),
         skyboxRotY: Number(portalSkyboxRotY),
         skyboxRotZ: Number(portalSkyboxRotZ),
+        skyboxBlur: Number(portalSkyboxBlur),
         interiorColor: portalInteriorColor,
         wallColor: portalWallColor,
         floorColor: portalFloorColor,
@@ -3450,6 +3454,7 @@ const ARTest = () => {
           skyboxRotX: Number(portalSkyboxRotX),
           skyboxRotY: Number(portalSkyboxRotY),
           skyboxRotZ: Number(portalSkyboxRotZ),
+          skyboxBlur: Number(portalSkyboxBlur),
           interiorColor: portalInteriorColor,
           wallColor: portalWallColor,
           floorColor: portalFloorColor,
@@ -6692,6 +6697,7 @@ const ARTest = () => {
                             setPortalSkyboxRotX(0);
                             setPortalSkyboxRotY(0);
                             setPortalSkyboxRotZ(0);
+                            setPortalSkyboxBlur(0);
                           }}
                           className="text-[10px] text-neutral-400 hover:text-white flex items-center gap-0.5 px-1.5 py-0.5 bg-neutral-800/80 rounded"
                           title="Reset Panorama to default scale and center position"
@@ -6726,6 +6732,35 @@ const ARTest = () => {
                           resetValue={0}
                           showRange={true}
                         />
+                      </div>
+
+                      {/* Gaussian Blur Control */}
+                      <div className="p-2.5 bg-neutral-900/90 rounded-lg border border-sky-500/30 shadow-inner">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[11px] font-bold text-sky-300 flex items-center gap-1.5">
+                            <span className="material-symbols-outlined text-sm text-sky-400">blur_on</span>
+                            360 Environment Gaussian Blur
+                          </span>
+                          <span className="text-[10px] font-mono text-sky-300 bg-sky-950/80 px-2 py-0.5 rounded-full border border-sky-800/50">
+                            {portalSkyboxBlur > 0 ? `${portalSkyboxBlur}px Blur` : 'Sharp (0px)'}
+                          </span>
+                        </div>
+                        <NumberSliderInput
+                          label="Gaussian Blur Amount"
+                          value={portalSkyboxBlur}
+                          onChange={setPortalSkyboxBlur}
+                          min={0}
+                          max={20}
+                          step={0.5}
+                          unit="px"
+                          color="sky"
+                          precision={1}
+                          resetValue={0}
+                          showRange={true}
+                        />
+                        <p className="text-[10px] text-neutral-400 mt-1 leading-tight">
+                          Diffuses the 360 photo background to give depth-of-field separation for interior models & holographic video screens.
+                        </p>
                       </div>
 
                       <div className="grid grid-cols-3 gap-2">
@@ -7780,7 +7815,7 @@ const ARTest = () => {
             {portalEnabled && (
               <a-entity
                 id="ar-portal-anchor"
-                ar-portal={`enabled: ${portalEnabled}; shape: ${portalShape}; width: ${portalWidth}; height: ${portalHeight}; radius: ${portalRadius}; depth: ${portalDepth}; frameColor: ${portalFrameColor}; frameWidth: ${portalFrameWidth}; frameDepth: 0.08; frameEmissive: ${portalFrameEmissive}; frameEmissiveIntensity: ${portalFrameEmissiveIntensity}; frameGlow: ${portalFrameGlow}; glassTint: ${portalGlassTint}; glassOpacity: ${portalGlassOpacity}; interiorType: ${portalInteriorType}; skyboxUrl: ${portalSkyboxUrl}; skyboxScale: ${portalSkyboxScale}; skyboxPosX: ${portalSkyboxPosX}; skyboxPosY: ${portalSkyboxPosY}; skyboxPosZ: ${portalSkyboxPosZ}; skyboxRotX: ${portalSkyboxRotX}; skyboxRotY: ${portalSkyboxRotY}; skyboxRotZ: ${portalSkyboxRotZ}; interiorColor: ${portalInteriorColor}; wallColor: ${portalWallColor}; floorColor: ${portalFloorColor}; gridColor: ${portalGridColor}; interiorLightColor: ${portalLightColor}; interiorLightIntensity: ${portalLightIntensity}; interiorModelType: ${portalModelType}; artifactType: ${portalArtifactType}; customModelUrl: ${portalCustomModelUrl}; currentModelUrl: ${localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || ''}; modelScale: ${portalModelScale}; modelPosX: ${portalModelPosX}; modelPosY: ${portalModelPosY}; modelPosZ: ${portalModelPosZ}; modelRotSpeed: ${portalModelRotSpeed}; modelRotX: ${portalModelRotX}; modelRotY: ${portalModelRotY}; modelRotZ: ${portalModelRotZ}; showVideo: ${portalShowVideo}; videoUrl: ${portalVideoUrl || activeVideoUrl || ''}; videoScale: ${portalVideoScale}; videoPosY: ${portalVideoPosY}; videoPosZ: ${portalVideoPosZ}; particles: ${portalParticles}; particleCount: ${portalParticleCount}; particleColor: ${portalParticleColor}; particleSpeed: ${portalParticleSpeed}; floatingText: ${portalFloatingText}; textColor: ${portalTextColor}; textScale: ${portalTextScale}; textPosY: ${portalTextPosY}; textPosZ: ${portalTextPosZ}; posX: ${portalPosX}; posY: ${portalPosY}; posZ: ${portalPosZ}; rotX: ${portalRotX}; rotY: ${portalRotY}; rotZ: ${portalRotZ};`}
+                ar-portal={`enabled: ${portalEnabled}; shape: ${portalShape}; width: ${portalWidth}; height: ${portalHeight}; radius: ${portalRadius}; depth: ${portalDepth}; frameColor: ${portalFrameColor}; frameWidth: ${portalFrameWidth}; frameDepth: 0.08; frameEmissive: ${portalFrameEmissive}; frameEmissiveIntensity: ${portalFrameEmissiveIntensity}; frameGlow: ${portalFrameGlow}; glassTint: ${portalGlassTint}; glassOpacity: ${portalGlassOpacity}; interiorType: ${portalInteriorType}; skyboxUrl: ${portalSkyboxUrl}; skyboxScale: ${portalSkyboxScale}; skyboxPosX: ${portalSkyboxPosX}; skyboxPosY: ${portalSkyboxPosY}; skyboxPosZ: ${portalSkyboxPosZ}; skyboxRotX: ${portalSkyboxRotX}; skyboxRotY: ${portalSkyboxRotY}; skyboxRotZ: ${portalSkyboxRotZ}; skyboxBlur: ${portalSkyboxBlur}; interiorColor: ${portalInteriorColor}; wallColor: ${portalWallColor}; floorColor: ${portalFloorColor}; gridColor: ${portalGridColor}; interiorLightColor: ${portalLightColor}; interiorLightIntensity: ${portalLightIntensity}; interiorModelType: ${portalModelType}; artifactType: ${portalArtifactType}; customModelUrl: ${portalCustomModelUrl}; currentModelUrl: ${localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || ''}; modelScale: ${portalModelScale}; modelPosX: ${portalModelPosX}; modelPosY: ${portalModelPosY}; modelPosZ: ${portalModelPosZ}; modelRotSpeed: ${portalModelRotSpeed}; modelRotX: ${portalModelRotX}; modelRotY: ${portalModelRotY}; modelRotZ: ${portalModelRotZ}; showVideo: ${portalShowVideo}; videoUrl: ${portalVideoUrl || activeVideoUrl || ''}; videoScale: ${portalVideoScale}; videoPosY: ${portalVideoPosY}; videoPosZ: ${portalVideoPosZ}; particles: ${portalParticles}; particleCount: ${portalParticleCount}; particleColor: ${portalParticleColor}; particleSpeed: ${portalParticleSpeed}; floatingText: ${portalFloatingText}; textColor: ${portalTextColor}; textScale: ${portalTextScale}; textPosY: ${portalTextPosY}; textPosZ: ${portalTextPosZ}; posX: ${portalPosX}; posY: ${portalPosY}; posZ: ${portalPosZ}; rotX: ${portalRotX}; rotY: ${portalRotY}; rotZ: ${portalRotZ};`}
               ></a-entity>
             )}
 

@@ -683,11 +683,17 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
       // Ensure all particle systems refresh matrix & visibility on marker lock
       document.querySelectorAll('[ar-particle-system]').forEach((el) => {
+        if (el && el.object3D) {
+          el.object3D.visible = true;
+        }
         if (el && el.components && el.components['ar-particle-system']) {
           const comp = el.components['ar-particle-system'];
           if (comp.particleGroup) {
             comp.particleGroup.visible = true;
             comp.particleGroup.updateMatrixWorld(true);
+          }
+          if (comp.particlesObj) {
+            comp.particlesObj.visible = true;
           }
         }
       });
@@ -1095,28 +1101,48 @@ useEffect(() => {
   const portalEnabled = !!(portalCfg && (portalCfg.enabled === true || portalCfg.enabled === 'true' || portalCfg.enabled === 1 || portalCfg.enabled === '1'));
   const portalHideOutsideModel = portalEnabled && !!portalCfg?.hideOutsideModel;
   const portalAttr = portalEnabled
-    ? `enabled: true; shape: ${portalCfg.shape || 'arch'}; width: ${portalCfg.width ?? 1.1}; height: ${portalCfg.height ?? 1.8}; radius: ${portalCfg.radius ?? 0.7}; depth: ${portalCfg.depth ?? 3.5}; frameColor: ${portalCfg.frameColor || '#38bdf8'}; frameWidth: ${portalCfg.frameWidth ?? 0.08}; frameDepth: 0.08; frameEmissive: ${portalCfg.frameEmissive || '#0284c7'}; frameEmissiveIntensity: ${portalCfg.frameEmissiveIntensity ?? 1.5}; frameGlow: ${portalCfg.frameGlow ?? true}; glassTint: ${portalCfg.glassTint || '#38bdf8'}; glassOpacity: ${portalCfg.glassOpacity ?? 0.05}; interiorType: ${portalCfg.interiorType || 'nebula'}; skyboxUrl: ${portalCfg.skyboxUrl || ''}; skyboxScale: ${portalCfg.skyboxScale ?? 1.0}; skyboxPosX: ${portalCfg.skyboxPosX ?? 0}; skyboxPosY: ${portalCfg.skyboxPosY ?? 0}; skyboxPosZ: ${portalCfg.skyboxPosZ ?? 0}; skyboxRotX: ${portalCfg.skyboxRotX ?? 0}; skyboxRotY: ${portalCfg.skyboxRotY ?? 0}; skyboxRotZ: ${portalCfg.skyboxRotZ ?? 0}; interiorColor: ${portalCfg.interiorColor || '#050714'}; wallColor: ${portalCfg.wallColor || '#0f172a'}; floorColor: ${portalCfg.floorColor || '#020617'}; gridColor: ${portalCfg.gridColor || '#38bdf8'}; interiorLightColor: ${portalCfg.interiorLightColor || '#e0f2fe'}; interiorLightIntensity: ${portalCfg.interiorLightIntensity ?? 2.0}; interiorModelType: ${portalCfg.interiorModelType || 'artifact'}; artifactType: ${portalCfg.artifactType || 'crystal'}; customModelUrl: ${portalCfg.customModelUrl || ''}; currentModelUrl: ${arData?.gltfPath || ''}; modelScale: ${portalCfg.modelScale ?? 0.4}; modelPosX: ${portalCfg.modelPosX ?? 0}; modelPosY: ${portalCfg.modelPosY ?? 0}; modelPosZ: ${portalCfg.modelPosZ ?? -1.3}; modelRotSpeed: ${portalCfg.modelRotSpeed ?? 6000}; modelRotX: ${portalCfg.modelRotX ?? 0}; modelRotY: ${portalCfg.modelRotY ?? 0}; modelRotZ: ${portalCfg.modelRotZ ?? 0}; showVideo: ${portalCfg.showVideo ?? false}; videoUrl: ${portalCfg.videoUrl || arData?.videoUrl || ''}; videoScale: ${portalCfg.videoScale ?? 1.0}; videoPosY: ${portalCfg.videoPosY ?? 0}; videoPosZ: ${portalCfg.videoPosZ ?? -1.8}; particles: ${portalCfg.particles || 'stars'}; particleCount: ${portalCfg.particleCount ?? 180}; particleColor: ${portalCfg.particleColor || '#38bdf8'}; particleSpeed: ${portalCfg.particleSpeed ?? 1.0}; floatingText: ${portalCfg.floatingText || 'STAR weAR'}; textColor: ${portalCfg.textColor || '#38bdf8'}; textScale: ${portalCfg.textScale ?? 1.0}; textPosY: ${portalCfg.textPosY ?? 0.65}; textPosZ: ${portalCfg.textPosZ ?? -1.2}; posX: ${portalCfg.posX ?? 0}; posY: ${portalCfg.posY ?? 0}; posZ: ${portalCfg.posZ ?? 0}; rotX: ${portalCfg.rotX ?? 0}; rotY: ${portalCfg.rotY ?? 0}; rotZ: ${portalCfg.rotZ ?? 0};`
+    ? `enabled: true; shape: ${portalCfg.shape || 'arch'}; width: ${portalCfg.width ?? 1.1}; height: ${portalCfg.height ?? 1.8}; radius: ${portalCfg.radius ?? 0.7}; depth: ${portalCfg.depth ?? 3.5}; frameColor: ${portalCfg.frameColor || '#38bdf8'}; frameWidth: ${portalCfg.frameWidth ?? 0.08}; frameDepth: 0.08; frameEmissive: ${portalCfg.frameEmissive || '#0284c7'}; frameEmissiveIntensity: ${portalCfg.frameEmissiveIntensity ?? 1.5}; frameGlow: ${portalCfg.frameGlow ?? true}; glassTint: ${portalCfg.glassTint || '#38bdf8'}; glassOpacity: ${portalCfg.glassOpacity ?? 0.05}; interiorType: ${portalCfg.interiorType || 'nebula'}; skyboxUrl: ${portalCfg.skyboxUrl || ''}; skyboxScale: ${portalCfg.skyboxScale ?? 1.0}; skyboxPosX: ${portalCfg.skyboxPosX ?? 0}; skyboxPosY: ${portalCfg.skyboxPosY ?? 0}; skyboxPosZ: ${portalCfg.skyboxPosZ ?? 0}; skyboxRotX: ${portalCfg.skyboxRotX ?? 0}; skyboxRotY: ${portalCfg.skyboxRotY ?? 0}; skyboxRotZ: ${portalCfg.skyboxRotZ ?? 0}; skyboxBlur: ${portalCfg.skyboxBlur ?? 0}; interiorColor: ${portalCfg.interiorColor || '#050714'}; wallColor: ${portalCfg.wallColor || '#0f172a'}; floorColor: ${portalCfg.floorColor || '#020617'}; gridColor: ${portalCfg.gridColor || '#38bdf8'}; interiorLightColor: ${portalCfg.interiorLightColor || '#e0f2fe'}; interiorLightIntensity: ${portalCfg.interiorLightIntensity ?? 2.0}; interiorModelType: ${portalCfg.interiorModelType || 'artifact'}; artifactType: ${portalCfg.artifactType || 'crystal'}; customModelUrl: ${portalCfg.customModelUrl || ''}; currentModelUrl: ${arData?.gltfPath || ''}; modelScale: ${portalCfg.modelScale ?? 0.4}; modelPosX: ${portalCfg.modelPosX ?? 0}; modelPosY: ${portalCfg.modelPosY ?? 0}; modelPosZ: ${portalCfg.modelPosZ ?? -1.3}; modelRotSpeed: ${portalCfg.modelRotSpeed ?? 6000}; modelRotX: ${portalCfg.modelRotX ?? 0}; modelRotY: ${portalCfg.modelRotY ?? 0}; modelRotZ: ${portalCfg.modelRotZ ?? 0}; showVideo: ${portalCfg.showVideo ?? false}; videoUrl: ${portalCfg.videoUrl || arData?.videoUrl || ''}; videoScale: ${portalCfg.videoScale ?? 1.0}; videoPosY: ${portalCfg.videoPosY ?? 0}; videoPosZ: ${portalCfg.videoPosZ ?? -1.8}; particles: ${portalCfg.particles || 'stars'}; particleCount: ${portalCfg.particleCount ?? 180}; particleColor: ${portalCfg.particleColor || '#38bdf8'}; particleSpeed: ${portalCfg.particleSpeed ?? 1.0}; floatingText: ${portalCfg.floatingText || 'STAR weAR'}; textColor: ${portalCfg.textColor || '#38bdf8'}; textScale: ${portalCfg.textScale ?? 1.0}; textPosY: ${portalCfg.textPosY ?? 0.65}; textPosZ: ${portalCfg.textPosZ ?? -1.2}; posX: ${portalCfg.posX ?? 0}; posY: ${portalCfg.posY ?? 0}; posZ: ${portalCfg.posZ ?? 0}; rotX: ${portalCfg.rotX ?? 0}; rotY: ${portalCfg.rotY ?? 0}; rotZ: ${portalCfg.rotZ ?? 0};`
     : '';
 
+  const getValidParticleObj = (val) => (val && typeof val === 'object' && !Array.isArray(val) ? val : null);
+
   const particleCfg =
-    arData?.config?.particleConfig ||
-    arData?.config?.particles ||
-    arData?.config?.particle_config ||
-    arData?.config?.ar_config?.particleConfig ||
-    arData?.particleConfig ||
-    arData?.particles ||
-    arData?.particle_config ||
-    arData?.arExperience?.config?.particleConfig ||
-    arData?.arExperience?.config?.particles ||
-    arData?.arExperience?.particleConfig ||
+    getValidParticleObj(arData?.config?.particleConfig) ||
+    getValidParticleObj(arData?.config?.particle_config) ||
+    getValidParticleObj(arData?.config?.ar_config?.particleConfig) ||
+    getValidParticleObj(arData?.particleConfig) ||
+    getValidParticleObj(arData?.particle_config) ||
+    getValidParticleObj(arData?.arExperience?.config?.particleConfig) ||
+    getValidParticleObj(arData?.arExperience?.particleConfig) ||
+    getValidParticleObj(arData?.config?.particles) ||
+    getValidParticleObj(arData?.particles) ||
     null;
-  const particleEnabled = !!(
-    (particleCfg && (particleCfg.enabled === true || particleCfg.enabled === 'true' || particleCfg.enabled === 1 || particleCfg.enabled === '1')) ||
-    (typeof window !== 'undefined' && (new URLSearchParams(window.location.search).get('particles') === '1' || new URLSearchParams(window.location.search).get('particle') === '1'))
-  );
-  const particleRotX = particleCfg?.rotX !== undefined ? particleCfg.rotX : (cameraEnabled ? modelRotX : 0);
-  const particleRotY = particleCfg?.rotY !== undefined ? particleCfg.rotY : (cameraEnabled ? modelRotY : 0);
-  const particleRotZ = particleCfg?.rotZ !== undefined ? particleCfg.rotZ : (cameraEnabled ? modelRotZ : 0);
+
+  let urlParticlesFlag = null;
+  if (typeof window !== 'undefined') {
+    const sp = new URLSearchParams(window.location.search);
+    const pVal = sp.get('particles') || sp.get('particle');
+    if (pVal === '1' || pVal === 'true') urlParticlesFlag = true;
+    else if (pVal === '0' || pVal === 'false') urlParticlesFlag = false;
+  }
+
+  const particleEnabled = urlParticlesFlag !== null
+    ? urlParticlesFlag
+    : !!(
+        particleCfg &&
+        (particleCfg.enabled === true ||
+          particleCfg.enabled === 'true' ||
+          particleCfg.enabled === 1 ||
+          particleCfg.enabled === '1' ||
+          (particleCfg.enabled !== false &&
+            particleCfg.enabled !== 'false' &&
+            particleCfg.enabled !== 0 &&
+            (Boolean(particleCfg.preset) || (Number(particleCfg.count) > 0))))
+      );
+
+  const particleRotX = particleCfg?.rotX !== undefined ? Number(particleCfg.rotX) : 0;
+  const particleRotY = particleCfg?.rotY !== undefined ? Number(particleCfg.rotY) : 0;
+  const particleRotZ = particleCfg?.rotZ !== undefined ? Number(particleCfg.rotZ) : 0;
   const particleAttr = particleEnabled
     ? `enabled: true; preset: ${particleCfg?.preset || 'cosmic-stardust'}; count: ${particleCfg?.count ?? 300}; size: ${particleCfg?.size ?? 0.04}; color: ${particleCfg?.color || particleCfg?.colorA || '#38bdf8'}; colorSecondary: ${particleCfg?.colorSecondary || particleCfg?.colorB || '#c084fc'}; opacity: ${particleCfg?.opacity ?? 0.85}; shape: ${particleCfg?.shape || 'sparkle'}; blending: ${particleCfg?.blending || 'additive'}; direction: ${particleCfg?.direction || particleCfg?.motionType || 'float'}; speed: ${particleCfg?.speed ?? 1.0}; rotationSpeed: ${particleCfg?.rotationSpeed ?? 0.2}; spreadX: ${particleCfg?.spreadX ?? 3.0}; spreadY: ${particleCfg?.spreadY ?? 3.0}; spreadZ: ${particleCfg?.spreadZ ?? 3.0}; posX: ${particleCfg?.posX ?? 0}; posY: ${particleCfg?.posY ?? 0}; posZ: ${particleCfg?.posZ ?? 0}; rotX: ${particleRotX}; rotY: ${particleRotY}; rotZ: ${particleRotZ}; twinkle: ${particleCfg?.twinkle ?? true};`
     : '';
