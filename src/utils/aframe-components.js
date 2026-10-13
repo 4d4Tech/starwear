@@ -610,8 +610,9 @@ if (typeof AFRAME !== 'undefined') {
   if (!AFRAME.components['scene-environment']) {
     AFRAME.registerComponent('scene-environment', {
       schema: {
-        exposure: { type: 'number', default: 1.0 },
-        hdrIntensity: { type: 'number', default: 1.0 }
+        exposure: { type: 'number', default: 1.1 },
+        hdrIntensity: { type: 'number', default: 0.0 },
+        enabled: { type: 'boolean', default: false }
       },
       init: function () {
         this.setupEnvironment = this.setupEnvironment.bind(this);
@@ -627,7 +628,12 @@ if (typeof AFRAME !== 'undefined') {
       update: function () {
         const renderer = this.el.renderer;
         if (renderer) {
-          renderer.toneMappingExposure = this.data.exposure;
+          renderer.toneMappingExposure = this.data.exposure !== undefined ? this.data.exposure : 1.1;
+        }
+        if (this.el.object3D) {
+          if (!this.data.enabled || this.data.hdrIntensity <= 0) {
+            this.el.object3D.environment = null;
+          }
         }
       },
       setupEnvironment: function () {
@@ -637,27 +643,31 @@ if (typeof AFRAME !== 'undefined') {
 
         const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
 
-        // Configure Tone Mapping & Color Space
+        // Configure Tone Mapping & Color Space (matching ProductViewer)
         if (THREE_LIB.ACESFilmicToneMapping !== undefined) {
           renderer.toneMapping = THREE_LIB.ACESFilmicToneMapping;
         }
-        renderer.toneMappingExposure = this.data.exposure;
+        renderer.toneMappingExposure = this.data.exposure !== undefined ? this.data.exposure : 1.1;
 
         if (renderer.outputColorSpace !== undefined && THREE_LIB.SRGBColorSpace !== undefined) {
           renderer.outputColorSpace = THREE_LIB.SRGBColorSpace;
         }
 
-        // Generate procedural studio environment (PMREM RoomEnvironment)
-        try {
-          const pmremGenerator = new THREE_LIB.PMREMGenerator(renderer);
-          pmremGenerator.compileEquirectangularShader();
-          const roomEnv = new RoomEnvironment();
-          const envTexture = pmremGenerator.fromScene(roomEnv, 0.04).texture;
-          scene.environment = envTexture;
-          this.envTexture = envTexture;
-          this.pmremGenerator = pmremGenerator;
-        } catch (err) {
-          console.warn('[scene-environment] Could not initialize RoomEnvironment:', err);
+        // Only attach procedural RoomEnvironment if explicitly enabled with hdrIntensity > 0
+        if (this.data.enabled && this.data.hdrIntensity > 0) {
+          try {
+            const pmremGenerator = new THREE_LIB.PMREMGenerator(renderer);
+            pmremGenerator.compileEquirectangularShader();
+            const roomEnv = new RoomEnvironment();
+            const envTexture = pmremGenerator.fromScene(roomEnv, 0.04).texture;
+            scene.environment = envTexture;
+            this.envTexture = envTexture;
+            this.pmremGenerator = pmremGenerator;
+          } catch (err) {
+            console.warn('[scene-environment] Could not initialize RoomEnvironment:', err);
+          }
+        } else {
+          scene.environment = null;
         }
       },
       remove: function () {
@@ -2453,7 +2463,7 @@ if (typeof AFRAME !== 'undefined') {
         const func = stencilFunc !== undefined ? stencilFunc : THREE_LIB.EqualStencilFunc;
         mesh.renderOrder = 3;
         mesh.traverse((node) => {
-          if (node.isMesh && node.material) {
+          if ((node.isMesh || node.isPoints || node.isLine) && node.material) {
             const mats = Array.isArray(node.material) ? node.material : [node.material];
             mats.forEach((m) => {
               m.stencilWrite = true;
@@ -2471,7 +2481,7 @@ if (typeof AFRAME !== 'undefined') {
         const THREE_LIB = getPortalThree();
         const func = isInside ? THREE_LIB.AlwaysStencilFunc : THREE_LIB.EqualStencilFunc;
         this.interiorGroup.traverse((node) => {
-          if (node.isMesh && node.material) {
+          if ((node.isMesh || node.isPoints || node.isLine) && node.material) {
             const mats = Array.isArray(node.material) ? node.material : [node.material];
             mats.forEach((m) => {
               m.stencilFunc = func;
@@ -3058,20 +3068,18 @@ if (typeof AFRAME !== 'undefined') {
             });
           }
           pGeom.setAttribute('position', new THREE_LIB.BufferAttribute(posArray, 3));
+          const spriteTex = generateParticleSprite('sparkle', THREE_LIB);
           const pMat = new THREE_LIB.PointsMaterial({
             color: new THREE_LIB.Color(data.particleColor),
-            size: data.particles === 'cyber' ? 0.04 : 0.028,
+            map: spriteTex,
+            size: data.particles === 'cyber' ? 0.045 : 0.035,
             transparent: true,
             opacity: 0.85,
-            blending: THREE_LIB.CustomBlending,
-            blendEquation: THREE_LIB.AddEquation,
-            blendSrc: THREE_LIB.SrcAlphaFactor,
-            blendDst: THREE_LIB.OneFactor,
-            blendSrcAlpha: THREE_LIB.OneFactor,
-            blendDstAlpha: THREE_LIB.OneFactor,
+            blending: THREE_LIB.AdditiveBlending,
             depthWrite: false
           });
           this.particlesObj = new THREE_LIB.Points(pGeom, pMat);
+          this.particlesObj.frustumCulled = false;
           this.applyStencilToMesh(this.particlesObj);
           this.interiorGroup.add(this.particlesObj);
         }
@@ -3463,11 +3471,10 @@ if (typeof AFRAME !== 'undefined') {
       init: function () {
         const THREE_LIB = getPortalThree();
         this.particleGroup = new THREE_LIB.Group();
+        this.particleGroup.name = 'ar_particle_group';
         this.el.setObject3D('particleSystemRoot', this.particleGroup);
         this.particlesObj = null;
         this.velocities = [];
-        this.dummy = new THREE_LIB.Object3D();
-        this.uniformSize = { value: Math.max(0.005, Number(this.data.size) || 0.04) };
 
         this.onTargetFound = () => {
           if (this.particleGroup && this.data.enabled) {
@@ -3526,10 +3533,8 @@ if (typeof AFRAME !== 'undefined') {
         if (needRebuild) {
           this.buildParticles();
         } else {
-          if (this.uniformSize) {
-            this.uniformSize.value = Math.max(0.005, Number(this.data.size) || 0.04);
-          }
           if (this.particlesObj && this.particlesObj.material) {
+            this.particlesObj.material.size = Math.max(0.01, Number(this.data.size) || 0.04);
             this.particlesObj.material.opacity = Math.max(0.05, Number(this.data.opacity) || 0.85);
           }
         }
@@ -3551,188 +3556,129 @@ if (typeof AFRAME !== 'undefined') {
 
         if (!this.data.enabled) return;
 
-        const count = Math.max(10, Math.min(2500, this.data.count));
-        const quadGeom = new THREE_LIB.PlaneGeometry(1, 1);
-        const spriteTex = generateParticleSprite(this.data.shape);
+        const count = Math.max(10, Math.min(2500, Number(this.data.count) || 300));
+        const geom = new THREE_LIB.BufferGeometry();
+        const posArr = new Float32Array(count * 3);
+        const colArr = new Float32Array(count * 3);
 
-        const pMat = new THREE_LIB.MeshBasicMaterial({
-          map: spriteTex,
-          transparent: true,
-          opacity: Math.max(0.05, Number(this.data.opacity) || 0.85),
-          depthWrite: false,
-          depthTest: true,
-          side: THREE_LIB.DoubleSide
-        });
-
-        // Robust alpha compositing for WebAR transparent canvas:
-        if (this.data.blending === 'normal') {
-          pMat.blending = THREE_LIB.NormalBlending;
-        } else {
-          pMat.blending = THREE_LIB.CustomBlending;
-          pMat.blendEquation = THREE_LIB.AddEquation;
-          pMat.blendSrc = THREE_LIB.SrcAlphaFactor;
-          pMat.blendDst = THREE_LIB.OneFactor;
-          pMat.blendSrcAlpha = THREE_LIB.OneFactor;
-          pMat.blendDstAlpha = THREE_LIB.OneFactor;
-        }
-
-        const uniformSize = this.uniformSize || { value: Math.max(0.005, Number(this.data.size) || 0.04) };
-        uniformSize.value = Math.max(0.005, Number(this.data.size) || 0.04);
-        this.uniformSize = uniformSize;
-
-        pMat.customProgramCacheKey = () => 'ar-billboard-particle-v1';
-        pMat.onBeforeCompile = (shader) => {
-          shader.uniforms.uParticleSize = uniformSize;
-          shader.vertexShader = shader.vertexShader.replace(
-            '#include <common>',
-            `#include <common>
-            uniform float uParticleSize;`
-          );
-          shader.vertexShader = shader.vertexShader.replace(
-            '#include <project_vertex>',
-            `#ifdef USE_INSTANCING
-              vec4 instanceCenter = instanceMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );
-              vec4 mvPosition = modelViewMatrix * instanceCenter;
-              float instScale = max(0.01, length( instanceMatrix[0].xyz ));
-              mvPosition.xy += position.xy * (uParticleSize * instScale);
-            #else
-              vec4 mvPosition = modelViewMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );
-              mvPosition.xy += position.xy * uParticleSize;
-            #endif
-            gl_Position = projectionMatrix * mvPosition;`
-          );
-        };
-
-        const instMesh = new THREE_LIB.InstancedMesh(quadGeom, pMat, count);
-
-        const colA = new THREE_LIB.Color(this.data.color);
-        const colB = new THREE_LIB.Color(this.data.colorSecondary || this.data.color);
+        const colA = new THREE_LIB.Color(this.data.color || '#38bdf8');
+        const colB = new THREE_LIB.Color(this.data.colorSecondary || this.data.color || '#c084fc');
         const tempCol = new THREE_LIB.Color();
 
-        const spreadX = Math.max(0.2, this.data.spreadX);
-        const spreadY = Math.max(0.2, this.data.spreadY);
-        const spreadZ = Math.max(0.2, this.data.spreadZ);
+        const spreadX = Math.max(0.2, Number(this.data.spreadX) || 3.0);
+        const spreadY = Math.max(0.2, Number(this.data.spreadY) || 3.0);
+        const spreadZ = Math.max(0.2, Number(this.data.spreadZ) || 3.0);
+        const speed = Math.max(0.05, Number(this.data.speed) || 1.0);
 
         for (let i = 0; i < count; i++) {
+          posArr[i * 3 + 0] = (Math.random() - 0.5) * spreadX;
+          posArr[i * 3 + 1] = (Math.random() - 0.5) * spreadY;
+          posArr[i * 3 + 2] = (Math.random() - 0.5) * spreadZ;
+
           const t = Math.random();
           tempCol.copy(colA).lerp(colB, t);
-          instMesh.setColorAt(i, tempCol);
+          colArr[i * 3 + 0] = tempCol.r;
+          colArr[i * 3 + 1] = tempCol.g;
+          colArr[i * 3 + 2] = tempCol.b;
 
-          const px = (Math.random() - 0.5) * spreadX;
-          const py = (Math.random() - 0.5) * spreadY;
-          const pz = (Math.random() - 0.5) * spreadZ;
-          const scaleVar = 0.75 + Math.random() * 0.5;
+          let vx = (Math.random() - 0.5) * 0.008 * speed;
+          let vy = (Math.random() - 0.5) * 0.008 * speed;
+          let vz = (Math.random() - 0.5) * 0.008 * speed;
 
-          this.dummy.position.set(px, py, pz);
-          this.dummy.scale.set(scaleVar, scaleVar, scaleVar);
-          this.dummy.updateMatrix();
-          instMesh.setMatrixAt(i, this.dummy.matrix);
-
-          const orbitRadius = Math.sqrt(px * px + pz * pz);
-          const orbitAngle = Math.atan2(pz, px);
+          if (this.data.direction === 'up') vy = (Math.random() * 0.015 + 0.005) * speed;
+          else if (this.data.direction === 'down') vy = -(Math.random() * 0.015 + 0.005) * speed;
+          else if (this.data.direction === 'vortex') {
+            vx = (Math.random() - 0.5) * 0.01 * speed;
+            vy = (Math.random() * 0.006 + 0.002) * speed;
+          } else if (this.data.direction === 'explode') {
+            vx = (Math.random() - 0.5) * 0.02 * speed;
+            vy = (Math.random() - 0.5) * 0.02 * speed;
+            vz = (Math.random() - 0.5) * 0.02 * speed;
+          }
 
           this.velocities.push({
-            x: px,
-            y: py,
-            z: pz,
-            scale: scaleVar,
-            vx: (Math.random() - 0.5) * 0.25,
-            vy: Math.random() * 0.8 + 0.2,
-            vz: (Math.random() - 0.5) * 0.25,
-            phase: Math.random() * Math.PI * 2,
-            orbitRadius: Math.max(0.2, orbitRadius),
-            orbitAngle: orbitAngle,
-            orbitSpeed: (Math.random() * 0.6 + 0.4) * (Math.random() > 0.5 ? 1 : -1)
+            vx,
+            vy,
+            vz,
+            phase: Math.random() * Math.PI * 2
           });
         }
 
-        instMesh.instanceMatrix.needsUpdate = true;
-        if (instMesh.instanceColor) {
-          instMesh.instanceColor.needsUpdate = true;
-        }
+        geom.setAttribute('position', new THREE_LIB.BufferAttribute(posArr, 3));
+        geom.setAttribute('color', new THREE_LIB.BufferAttribute(colArr, 3));
 
-        instMesh.frustumCulled = false;
-        instMesh.renderOrder = 999;
-        this.particlesObj = instMesh;
-        this.particleGroup.add(this.particlesObj);
+        const spriteTex = generateParticleSprite(this.data.shape, THREE_LIB);
+        const pMat = new THREE_LIB.PointsMaterial({
+          size: Math.max(0.01, Number(this.data.size) || 0.04),
+          map: spriteTex,
+          vertexColors: true,
+          transparent: true,
+          opacity: Math.max(0.05, Number(this.data.opacity) || 0.85),
+          blending: this.data.blending === 'normal' ? THREE_LIB.NormalBlending : THREE_LIB.AdditiveBlending,
+          depthWrite: false,
+          depthTest: true
+        });
+
+        const pointsMesh = new THREE_LIB.Points(geom, pMat);
+        pointsMesh.frustumCulled = false;
+        pointsMesh.renderOrder = 999;
+        this.particlesObj = pointsMesh;
+        this.particleGroup.add(pointsMesh);
       },
 
       tick: function (time, timeDelta) {
-        if (!this.data.enabled || !this.particlesObj) return;
+        if (!this.data.enabled || !this.particlesObj || !this.particlesObj.geometry) return;
         if (!this.particleGroup.visible) {
           this.particleGroup.visible = true;
         }
         if (!this.particlesObj.visible) {
           this.particlesObj.visible = true;
         }
-        const dt = Math.min(0.1, (timeDelta || 16) / 1000);
-        const speed = Math.max(0.05, this.data.speed);
-        const dir = this.data.direction;
-        const spreadX = Math.max(0.2, this.data.spreadX);
-        const spreadY = Math.max(0.2, this.data.spreadY);
-        const spreadZ = Math.max(0.2, this.data.spreadZ);
-        const halfY = spreadY / 2;
+
+        const posAttr = this.particlesObj.geometry.attributes.position;
+        if (!posAttr) return;
+        const pos = posAttr.array;
+
         const count = this.velocities.length;
+        const spreadX = Math.max(0.2, Number(this.data.spreadX) || 3.0);
+        const spreadY = Math.max(0.2, Number(this.data.spreadY) || 3.0);
+        const spreadZ = Math.max(0.2, Number(this.data.spreadZ) || 3.0);
+        const halfX = spreadX / 2;
+        const halfY = spreadY / 2;
+        const halfZ = spreadZ / 2;
+        const speed = Math.max(0.05, Number(this.data.speed) || 1.0);
+        const rotSpeed = Number(this.data.rotationSpeed ?? 0.2);
 
-        // Subtle rotation of entire particle cloud
-        if (this.data.rotationSpeed !== 0) {
-          this.particleGroup.rotation.y += this.data.rotationSpeed * dt;
-        }
-
-        const dummy = this.dummy;
         for (let i = 0; i < count; i++) {
           const v = this.velocities[i];
-
-          if (dir === 'up') {
-            v.y += v.vy * speed * dt;
-            v.x += Math.sin(time * 0.002 + v.phase) * 0.08 * dt * speed;
-            v.z += Math.cos(time * 0.002 + v.phase) * 0.08 * dt * speed;
-
-            if (v.y > halfY) {
-              v.y = -halfY;
-              v.x = (Math.random() - 0.5) * spreadX;
-              v.z = (Math.random() - 0.5) * spreadZ;
-            }
-          } else if (dir === 'down') {
-            v.y -= v.vy * speed * dt;
-            v.x += Math.sin(time * 0.0015 + v.phase) * 0.06 * dt * speed;
-            v.z += Math.cos(time * 0.0015 + v.phase) * 0.06 * dt * speed;
-
-            if (v.y < -halfY) {
-              v.y = halfY;
-              v.x = (Math.random() - 0.5) * spreadX;
-              v.z = (Math.random() - 0.5) * spreadZ;
-            }
-          } else if (dir === 'vortex') {
-            v.orbitAngle += v.orbitSpeed * speed * dt;
-            v.x = Math.cos(v.orbitAngle) * v.orbitRadius;
-            v.z = Math.sin(v.orbitAngle) * v.orbitRadius;
-            v.y += Math.sin(time * 0.001 + v.phase) * 0.05 * dt * speed;
-            if (v.y > halfY) v.y = -halfY;
-            if (v.y < -halfY) v.y = halfY;
-          } else if (dir === 'explode') {
-            v.x += v.vx * speed * dt * 2;
-            v.y += v.vy * speed * dt * 2;
-            v.z += v.vz * speed * dt * 2;
-            const distSq = v.x * v.x + v.y * v.y + v.z * v.z;
-            if (distSq > (spreadX * spreadX * 0.5)) {
-              v.x = (Math.random() - 0.5) * 0.2;
-              v.y = (Math.random() - 0.5) * 0.2;
-              v.z = (Math.random() - 0.5) * 0.2;
-            }
+          if (this.data.direction === 'vortex') {
+            const x = pos[i * 3 + 0];
+            const z = pos[i * 3 + 2];
+            const angle = 0.02 * rotSpeed;
+            pos[i * 3 + 0] = x * Math.cos(angle) - z * Math.sin(angle);
+            pos[i * 3 + 2] = x * Math.sin(angle) + z * Math.cos(angle);
+            pos[i * 3 + 1] += v.vy;
           } else {
-            // 'float' - organic floating harmonic bobbing
-            v.x += Math.sin(time * 0.001 + v.phase) * 0.06 * dt * speed;
-            v.y += Math.cos(time * 0.0012 + v.phase) * 0.08 * dt * speed;
-            v.z += Math.sin(time * 0.0009 + v.phase) * 0.06 * dt * speed;
+            pos[i * 3 + 0] += v.vx;
+            pos[i * 3 + 1] += v.vy;
+            pos[i * 3 + 2] += v.vz;
           }
 
-          dummy.position.set(v.x, v.y, v.z);
-          dummy.scale.set(v.scale, v.scale, v.scale);
-          dummy.updateMatrix();
-          this.particlesObj.setMatrixAt(i, dummy.matrix);
+          // Boundary wrap
+          if (pos[i * 3 + 0] > halfX) pos[i * 3 + 0] = -halfX;
+          else if (pos[i * 3 + 0] < -halfX) pos[i * 3 + 0] = halfX;
+
+          if (pos[i * 3 + 1] > halfY) pos[i * 3 + 1] = -halfY;
+          else if (pos[i * 3 + 1] < -halfY) pos[i * 3 + 1] = halfY;
+
+          if (pos[i * 3 + 2] > halfZ) pos[i * 3 + 2] = -halfZ;
+          else if (pos[i * 3 + 2] < -halfZ) pos[i * 3 + 2] = halfZ;
         }
-        this.particlesObj.instanceMatrix.needsUpdate = true;
+        posAttr.needsUpdate = true;
+
+        if (rotSpeed > 0) {
+          this.particleGroup.rotation.y += 0.005 * rotSpeed;
+        }
 
         // Subtle shimmering twinkle
         if (this.data.twinkle && this.particlesObj.material) {
@@ -4107,13 +4053,16 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
     schema: {
       enabled: { type: 'boolean', default: true },
       ambientColor: { type: 'string', default: '#ffffff' },
-      ambientIntensity: { type: 'number', default: 1.5 },
+      ambientIntensity: { type: 'number', default: 1.4 },
       dir1Color: { type: 'string', default: '#ffffff' },
-      dir1Intensity: { type: 'number', default: 2.5 },
-      dir1Position: { type: 'string', default: '1 2 1' },
+      dir1Intensity: { type: 'number', default: 2.2 },
+      dir1Position: { type: 'string', default: '2 4 3' },
       dir2Color: { type: 'string', default: '#ffffff' },
-      dir2Intensity: { type: 'number', default: 1.0 },
-      dir2Position: { type: 'string', default: '-1 -2 -1' }
+      dir2Intensity: { type: 'number', default: 1.2 },
+      dir2Position: { type: 'string', default: '-2 -1 -2' },
+      rimColor: { type: 'string', default: '#818cf8' },
+      rimIntensity: { type: 'number', default: 1.0 },
+      rimPosition: { type: 'string', default: '0 3 -3' }
     },
 
     init: function () {
@@ -4125,38 +4074,73 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
       this.lightingGroup.name = 'ar_studio_lighting_group';
 
       // 1. Ambient Light
-      this.ambientLight = new THREE_LIB.AmbientLight(this.data.ambientColor || '#ffffff', Number(this.data.ambientIntensity ?? 1.5));
+      this.ambientLight = new THREE_LIB.AmbientLight(this.data.ambientColor || '#ffffff', Number(this.data.ambientIntensity ?? 1.4));
       this.ambientLight.name = 'studio_ambient_light';
       this.lightingGroup.add(this.ambientLight);
 
       // 2. Key Light (Directional 1)
-      this.dir1Light = new THREE_LIB.DirectionalLight(this.data.dir1Color || '#ffffff', Number(this.data.dir1Intensity ?? 2.5));
+      this.dir1Light = new THREE_LIB.DirectionalLight(this.data.dir1Color || '#ffffff', Number(this.data.dir1Intensity ?? 2.2));
       this.dir1Light.name = 'studio_dir1_light';
       this.dir1Target = new THREE_LIB.Object3D();
       this.dir1Target.name = 'studio_dir1_target';
       this.dir1Target.position.set(0, 0, 0);
-      this.lightingGroup.add(this.dir1Target);
       this.dir1Light.target = this.dir1Target;
       this.lightingGroup.add(this.dir1Light);
+      this.lightingGroup.add(this.dir1Target);
 
       // 3. Fill Light (Directional 2)
-      this.dir2Light = new THREE_LIB.DirectionalLight(this.data.dir2Color || '#ffffff', Number(this.data.dir2Intensity ?? 1.0));
+      this.dir2Light = new THREE_LIB.DirectionalLight(this.data.dir2Color || '#ffffff', Number(this.data.dir2Intensity ?? 1.2));
       this.dir2Light.name = 'studio_dir2_light';
       this.dir2Target = new THREE_LIB.Object3D();
       this.dir2Target.name = 'studio_dir2_target';
       this.dir2Target.position.set(0, 0, 0);
-      this.lightingGroup.add(this.dir2Target);
       this.dir2Light.target = this.dir2Target;
       this.lightingGroup.add(this.dir2Light);
+      this.lightingGroup.add(this.dir2Target);
 
-      if (this.el && this.el.object3D) {
-        this.el.object3D.add(this.lightingGroup);
+      // 4. Rim / Specular Backlight (Directional 3 - matches ProductViewer signature edge sheen)
+      this.rimLight = new THREE_LIB.DirectionalLight(this.data.rimColor || '#818cf8', Number(this.data.rimIntensity ?? 1.0));
+      this.rimLight.name = 'studio_rim_light';
+      this.rimTarget = new THREE_LIB.Object3D();
+      this.rimTarget.name = 'studio_rim_target';
+      this.rimTarget.position.set(0, 0, 0);
+      this.rimLight.target = this.rimTarget;
+      this.lightingGroup.add(this.rimLight);
+      this.lightingGroup.add(this.rimTarget);
+
+      if (this.el) {
+        if (typeof this.el.setObject3D === 'function') {
+          this.el.setObject3D('lightingGroup', this.lightingGroup);
+        } else if (this.el.object3D) {
+          this.el.object3D.add(this.lightingGroup);
+        }
+      }
+
+      // Purge any default A-Frame ambient / directional lights so user lighting is 100% pure
+      this.removeDefaultLights = () => {
+        try {
+          if (this.el && this.el.sceneEl && this.el.sceneEl.systems && this.el.sceneEl.systems.light) {
+            this.el.sceneEl.systems.light.removeDefaultLights();
+            this.el.sceneEl.systems.light.userDefinedLights = true;
+          }
+          const defLights = document.querySelectorAll('[data-aframe-default-light]');
+          defLights.forEach((l) => {
+            if (l && l.parentNode) l.parentNode.removeChild(l);
+          });
+        } catch {}
+      };
+
+      this.removeDefaultLights();
+      if (this.el && this.el.sceneEl) {
+        this.el.sceneEl.addEventListener('loaded', this.removeDefaultLights);
+        this.el.sceneEl.addEventListener('render-target-loaded', this.removeDefaultLights);
       }
 
       this.updateLights();
     },
 
     update: function () {
+      if (this.removeDefaultLights) this.removeDefaultLights();
       this.updateLights();
     },
 
@@ -4168,27 +4152,36 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
 
       this.lightingGroup.visible = this.data.enabled !== false;
 
-      // Ambient Light
+      // 1. Ambient Light
       if (this.ambientLight) {
         this.ambientLight.color.set(this.data.ambientColor || '#ffffff');
-        this.ambientLight.intensity = Math.max(0, Number(this.data.ambientIntensity ?? 1.5));
+        this.ambientLight.intensity = Math.max(0, Number(this.data.ambientIntensity ?? 1.4));
       }
 
       const parsePos = (posStr, fallback) => {
         if (!posStr) return fallback;
-        const parts = String(posStr).trim().split(/\s+/).map(Number);
+        if (typeof posStr === 'object' && posStr !== null && typeof posStr.x === 'number') {
+          return new THREE_LIB.Vector3(posStr.x, posStr.y, posStr.z);
+        }
+        if (Array.isArray(posStr) && posStr.length === 3) {
+          return new THREE_LIB.Vector3(Number(posStr[0]), Number(posStr[1]), Number(posStr[2]));
+        }
+        const parts = String(posStr).replace(/,/g, ' ').trim().split(/\s+/).map(Number);
         if (parts.length === 3 && !parts.some(isNaN)) {
           return new THREE_LIB.Vector3(parts[0], parts[1], parts[2]);
         }
         return fallback;
       };
 
-      // Key Light
+      this.p1 = parsePos(this.data.dir1Position, new THREE_LIB.Vector3(2, 4, 3));
+      this.p2 = parsePos(this.data.dir2Position, new THREE_LIB.Vector3(-2, -1, -2));
+      this.rimP = parsePos(this.data.rimPosition, new THREE_LIB.Vector3(0, 3, -3));
+
+      // 2. Key Light
       if (this.dir1Light) {
         this.dir1Light.color.set(this.data.dir1Color || '#ffffff');
-        this.dir1Light.intensity = Math.max(0, Number(this.data.dir1Intensity ?? 2.5));
-        const p1 = parsePos(this.data.dir1Position, new THREE_LIB.Vector3(1, 2, 1));
-        this.dir1Light.position.copy(p1);
+        this.dir1Light.intensity = Math.max(0, Number(this.data.dir1Intensity ?? 2.2));
+        this.dir1Light.position.copy(this.p1);
         if (this.dir1Target) {
           this.dir1Target.position.set(0, 0, 0);
           this.dir1Target.updateMatrixWorld(true);
@@ -4196,26 +4189,101 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
         this.dir1Light.updateMatrixWorld(true);
       }
 
-      // Fill Light
+      // 3. Fill Light
       if (this.dir2Light) {
         this.dir2Light.color.set(this.data.dir2Color || '#ffffff');
-        this.dir2Light.intensity = Math.max(0, Number(this.data.dir2Intensity ?? 1.0));
-        const p2 = parsePos(this.data.dir2Position, new THREE_LIB.Vector3(-1, -2, -1));
-        this.dir2Light.position.copy(p2);
+        this.dir2Light.intensity = Math.max(0, Number(this.data.dir2Intensity ?? 1.2));
+        this.dir2Light.position.copy(this.p2);
         if (this.dir2Target) {
           this.dir2Target.position.set(0, 0, 0);
           this.dir2Target.updateMatrixWorld(true);
         }
         this.dir2Light.updateMatrixWorld(true);
       }
+
+      // 4. Rim Light
+      if (this.rimLight) {
+        this.rimLight.color.set(this.data.rimColor || '#818cf8');
+        this.rimLight.intensity = Math.max(0, Number(this.data.rimIntensity ?? 1.0));
+        this.rimLight.position.copy(this.rimP);
+        if (this.rimTarget) {
+          this.rimTarget.position.set(0, 0, 0);
+          this.rimTarget.updateMatrixWorld(true);
+        }
+        this.rimLight.updateMatrixWorld(true);
+      }
+    },
+
+    tick: function () {
+      if (!this.lightingGroup || this.data.enabled === false) return;
+      const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE)
+        ? window.AFRAME.THREE
+        : THREE;
+
+      if (!this.tempTargetPos) this.tempTargetPos = new THREE_LIB.Vector3();
+
+      // Find the active 3D model entity in the scene
+      let targetObj = null;
+      const candidates = ['ar-model', 'preview-model', 'ar-model-forced', 'target-entity', 'preview-anchor'];
+      for (let i = 0; i < candidates.length; i++) {
+        const candidateEl = document.getElementById(candidates[i]);
+        if (candidateEl && candidateEl.object3D && candidateEl.object3D.visible !== false) {
+          targetObj = candidateEl.object3D;
+          break;
+        }
+      }
+
+      if (targetObj) {
+        targetObj.getWorldPosition(this.tempTargetPos);
+      } else {
+        this.tempTargetPos.set(0, 0, 0);
+      }
+
+      const p1 = this.p1 || new THREE_LIB.Vector3(2, 4, 3);
+      const p2 = this.p2 || new THREE_LIB.Vector3(-2, -1, -2);
+      const rimP = this.rimP || new THREE_LIB.Vector3(0, 3, -3);
+
+      const tX = this.tempTargetPos.x;
+      const tY = this.tempTargetPos.y;
+      const tZ = this.tempTargetPos.z;
+
+      if (this.dir1Light && this.dir1Target) {
+        this.dir1Target.position.set(tX, tY, tZ);
+        this.dir1Light.position.set(tX + p1.x, tY + p1.y, tZ + p1.z);
+        this.dir1Target.updateMatrixWorld(true);
+        this.dir1Light.updateMatrixWorld(true);
+      }
+
+      if (this.dir2Light && this.dir2Target) {
+        this.dir2Target.position.set(tX, tY, tZ);
+        this.dir2Light.position.set(tX + p2.x, tY + p2.y, tZ + p2.z);
+        this.dir2Target.updateMatrixWorld(true);
+        this.dir2Light.updateMatrixWorld(true);
+      }
+
+      if (this.rimLight && this.rimTarget) {
+        this.rimTarget.position.set(tX, tY, tZ);
+        this.rimLight.position.set(tX + rimP.x, tY + rimP.y, tZ + rimP.z);
+        this.rimTarget.updateMatrixWorld(true);
+        this.rimLight.updateMatrixWorld(true);
+      }
     },
 
     remove: function () {
-      if (this.lightingGroup && this.el && this.el.object3D) {
-        this.el.object3D.remove(this.lightingGroup);
+      if (this.lightingGroup && this.el) {
+        if (typeof this.el.removeObject3D === 'function') {
+          this.el.removeObject3D('lightingGroup');
+        } else if (this.el.object3D) {
+          this.el.object3D.remove(this.lightingGroup);
+        }
         if (this.ambientLight && typeof this.ambientLight.dispose === 'function') this.ambientLight.dispose();
         if (this.dir1Light && typeof this.dir1Light.dispose === 'function') this.dir1Light.dispose();
         if (this.dir2Light && typeof this.dir2Light.dispose === 'function') this.dir2Light.dispose();
+        if (this.rimLight && typeof this.rimLight.dispose === 'function') this.rimLight.dispose();
+      }
+      if (this.el && this.el.sceneEl && this.removeDefaultLights) {
+        this.el.sceneEl.removeEventListener('loaded', this.removeDefaultLights);
+        this.el.sceneEl.removeEventListener('render-target-loaded', this.removeDefaultLights);
       }
     }
   });

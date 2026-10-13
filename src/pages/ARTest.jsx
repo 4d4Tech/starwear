@@ -594,15 +594,19 @@ const ARTest = () => {
 
   // Scene Lighting Properties State
   const [ambientColor, setAmbientColor] = useState('#ffffff');
-  const [ambientIntensity, setAmbientIntensity] = useState(1.5);
+  const [ambientIntensity, setAmbientIntensity] = useState(1.4);
 
   const [dir1Color, setDir1Color] = useState('#ffffff');
-  const [dir1Intensity, setDir1Intensity] = useState(2.5);
-  const [dir1Position, setDir1Position] = useState('1 2 1');
+  const [dir1Intensity, setDir1Intensity] = useState(2.2);
+  const [dir1Position, setDir1Position] = useState('2 4 3');
 
   const [dir2Color, setDir2Color] = useState('#ffffff');
-  const [dir2Intensity, setDir2Intensity] = useState(1.0);
-  const [dir2Position, setDir2Position] = useState('-1 -2 -1');
+  const [dir2Intensity, setDir2Intensity] = useState(1.2);
+  const [dir2Position, setDir2Position] = useState('-2 -1 -2');
+
+  const [rimColor, setRimColor] = useState('#818cf8');
+  const [rimIntensity, setRimIntensity] = useState(1.0);
+  const [rimPosition, setRimPosition] = useState('0 3 -3');
 
   // Material Properties (-1 means preserve GLTF asset PBR settings)
   const [useNativePBR, setUseNativePBR] = useState(true);
@@ -2835,6 +2839,9 @@ const ARTest = () => {
       if (cfg.dir2Color !== undefined) setDir2Color(cfg.dir2Color);
       if (cfg.dir2Intensity !== undefined) setDir2Intensity(cfg.dir2Intensity);
       if (cfg.dir2Position !== undefined) setDir2Position(cfg.dir2Position);
+      if (cfg.rimColor !== undefined) setRimColor(cfg.rimColor);
+      if (cfg.rimIntensity !== undefined) setRimIntensity(cfg.rimIntensity);
+      if (cfg.rimPosition !== undefined) setRimPosition(cfg.rimPosition);
       if (cfg.modelScale !== undefined) setModelScale(cfg.modelScale);
       if (cfg.modelRotSpeed !== undefined) setModelRotSpeed(cfg.modelRotSpeed);
       if (cfg.modelRotX !== undefined) setModelRotX(cfg.modelRotX);
@@ -3073,6 +3080,9 @@ const ARTest = () => {
       dir2Color,
       dir2Intensity,
       dir2Position,
+      rimColor,
+      rimIntensity,
+      rimPosition,
       modelScale,
       modelRotSpeed,
       modelRotX,
@@ -3389,6 +3399,9 @@ const ARTest = () => {
         dir2Color,
         dir2Intensity,
         dir2Position,
+        rimColor,
+        rimIntensity,
+        rimPosition,
         modelScale,
         modelRotSpeed,
         modelRotX,
@@ -3526,10 +3539,17 @@ const ARTest = () => {
       const batchRef = doc(db, 'batches', batchId.trim());
       const assetRef = doc(db, 'assets', batchId.trim());
 
-      await Promise.all([
+      const savePromises = [
         setDoc(batchRef, payload, { merge: true }),
         setDoc(assetRef, payload, { merge: true })
-      ]);
+      ];
+
+      const altAssetId = arData?.asset_id || arData?.assetId || arData?.product_id || arData?.productId;
+      if (altAssetId && typeof altAssetId === 'string' && altAssetId.trim() !== batchId.trim()) {
+        savePromises.push(setDoc(doc(db, 'assets', altAssetId.trim()), payload, { merge: true }));
+      }
+
+      await Promise.all(savePromises);
 
       // Save to localStorage for instant preview sync
       try {
@@ -4549,7 +4569,7 @@ const ARTest = () => {
                   unit="x"
                   color="amber"
                   precision={1}
-                  resetValue={1.5}
+                  resetValue={1.4}
                 />
               </div>
 
@@ -4580,7 +4600,7 @@ const ARTest = () => {
                   unit="x"
                   color="amber"
                   precision={1}
-                  resetValue={2.5}
+                  resetValue={2.2}
                 />
                 <div className="flex flex-col gap-1 p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
                   <span className="text-xs font-semibold text-neutral-300">Light 1 3D Position (X Y Z)</span>
@@ -4620,7 +4640,7 @@ const ARTest = () => {
                   unit="x"
                   color="sky"
                   precision={1}
-                  resetValue={1.0}
+                  resetValue={1.2}
                 />
                 <div className="flex flex-col gap-1 p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
                   <span className="text-xs font-semibold text-neutral-300">Light 2 3D Position (X Y Z)</span>
@@ -4629,6 +4649,46 @@ const ARTest = () => {
                     value={dir2Position}
                     onChange={(e) => setDir2Position(e.target.value)}
                     className="px-2.5 py-1.5 bg-black border border-neutral-700 rounded text-xs font-mono text-sky-300 focus:outline-none focus:border-sky-400"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3 pt-3 border-t border-neutral-800/80">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-indigo-400">flare</span>
+                  Specular Rim Light (Source 3)
+                </h2>
+                <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                  <span className="text-xs font-semibold text-neutral-300">Light Color</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono text-neutral-400">{rimColor}</span>
+                    <input
+                      type="color"
+                      value={rimColor}
+                      onChange={(e) => setRimColor(e.target.value)}
+                      className="w-10 h-7 bg-transparent cursor-pointer rounded border border-neutral-700"
+                    />
+                  </div>
+                </div>
+                <NumberSliderInput
+                  label="Rim Light Intensity"
+                  value={rimIntensity}
+                  onChange={setRimIntensity}
+                  min={0.0}
+                  max={10.0}
+                  step={0.1}
+                  unit="x"
+                  color="indigo"
+                  precision={1}
+                  resetValue={1.0}
+                />
+                <div className="flex flex-col gap-1 p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                  <span className="text-xs font-semibold text-neutral-300">Rim Light 3D Position (X Y Z)</span>
+                  <input
+                    type="text"
+                    value={rimPosition}
+                    onChange={(e) => setRimPosition(e.target.value)}
+                    className="px-2.5 py-1.5 bg-black border border-neutral-700 rounded text-xs font-mono text-indigo-300 focus:outline-none focus:border-indigo-400"
                   />
                 </div>
               </div>
@@ -7765,10 +7825,11 @@ const ARTest = () => {
             key={batchId || localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || (portalEnabled ? 'portal-active' : '') || (particleSystemEnabled ? 'particles-active' : '') || 'ar-portal-scene'}
             embedded
             color-space="sRGB"
-            renderer="colorManagement: true; physicallyCorrectLights: true; antialias: true; stencil: true;"
+            renderer="colorManagement: true; antialias: true; stencil: true;"
+            light="defaultLightsEnabled: false"
             vr-mode-ui="enabled: false"
             device-orientation-permission-ui="enabled: false"
-            scene-environment="exposure: 1.0"
+            scene-environment="exposure: 1.1; hdrIntensity: 0.0; enabled: false"
             fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
             style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
           >
@@ -7783,7 +7844,26 @@ const ARTest = () => {
             {/* Dynamic Multi-Source Studio Lighting Rig */}
             <a-entity
               id="test-lighting-rig"
-              ar-studio-lighting={`enabled: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position};`}
+              ar-studio-lighting={`enabled: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${rimIntensity}; rimPosition: ${rimPosition};`}
+            ></a-entity>
+            <a-entity
+              id="test-ambient-light"
+              light={`type: ambient; color: ${ambientColor}; intensity: ${ambientIntensity};`}
+            ></a-entity>
+            <a-entity
+              id="test-dir1-light"
+              light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false;`}
+              position={dir1Position}
+            ></a-entity>
+            <a-entity
+              id="test-dir2-light"
+              light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false;`}
+              position={dir2Position}
+            ></a-entity>
+            <a-entity
+              id="test-rim-light"
+              light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false;`}
+              position={rimPosition}
             ></a-entity>
 
             {/* Center Model Entity Anchor */}

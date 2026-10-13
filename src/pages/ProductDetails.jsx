@@ -84,14 +84,36 @@ function ProductDetails() {
         }
 
         // Also fetch associated batch config to get fine-tuned AR transforms/lighting
-        let mergedConfig = assetData.ar_config || {};
+        const extractLighting = (data) => {
+          if (!data || typeof data !== 'object') return {};
+          const res = {};
+          if (data.config && typeof data.config === 'object') Object.assign(res, data.config);
+          if (data.arExperience?.config && typeof data.arExperience.config === 'object') Object.assign(res, data.arExperience.config);
+          if (data.ar_config && typeof data.ar_config === 'object') Object.assign(res, data.ar_config);
+          if (data.lighting && typeof data.lighting === 'object') Object.assign(res, data.lighting);
+          if (data.lightingConfig && typeof data.lightingConfig === 'object') Object.assign(res, data.lightingConfig);
+          if (data.portalConfig && typeof data.portalConfig === 'object') res.portalConfig = data.portalConfig;
+          if (data.particleConfig && typeof data.particleConfig === 'object') res.particleConfig = data.particleConfig;
+          const keys = [
+            'ambientColor', 'ambientIntensity',
+            'dir1Color', 'dir1Intensity', 'dir1Position',
+            'dir2Color', 'dir2Intensity', 'dir2Position',
+            'rimColor', 'rimIntensity', 'rimPosition'
+          ];
+          keys.forEach((k) => {
+            if (data[k] !== undefined && data[k] !== null) res[k] = data[k];
+          });
+          return res;
+        };
+
+        let mergedConfig = extractLighting(assetData);
         try {
           const bSnap = await getDoc(doc(db, 'batches', targetId));
           if (bSnap.exists()) {
             const bData = bSnap.data();
             mergedConfig = {
               ...(mergedConfig || {}),
-              ...(bData.ar_config || bData.arExperience?.config || {})
+              ...extractLighting(bData)
             };
           }
         } catch (bErr) {

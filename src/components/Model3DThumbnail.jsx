@@ -8,6 +8,7 @@ import {
 
 export default function Model3DThumbnail({
   modelUrl,
+  lightingConfig = null,
   fallbackImageUrl,
   category = 'Apparel',
   subcategory = '',
@@ -24,11 +25,12 @@ export default function Model3DThumbnail({
   const procedural = getCategoryProcedural3D(category, subcategory);
   const displayName = cleanName || alt || procedural.label;
 
-  // 1. Synchronous initial resolution: check if pre-rendered or cached
-  const initialThumb =
-    getPreRenderedThumbnail(modelUrl) ||
-    getPreRenderedThumbnail(cleanName) ||
-    getPreRenderedThumbnail(displayName);
+  // 1. Synchronous initial resolution: check if pre-rendered or cached (only when no custom lighting is configured)
+  const initialThumb = !lightingConfig
+    ? (getPreRenderedThumbnail(modelUrl) ||
+       getPreRenderedThumbnail(cleanName) ||
+       getPreRenderedThumbnail(displayName))
+    : null;
 
   const [thumbnailSrc, setThumbnailSrc] = useState(initialThumb);
   const [isLoading, setIsLoading] = useState(!initialThumb && !!modelUrl);
@@ -39,17 +41,19 @@ export default function Model3DThumbnail({
   useEffect(() => {
     let isMounted = true;
 
-    // Check pre-rendered static catalog again if props changed
-    const staticMatch =
-      getPreRenderedThumbnail(modelUrl) ||
-      getPreRenderedThumbnail(cleanName) ||
-      getPreRenderedThumbnail(displayName);
+    // Check pre-rendered static catalog again if props changed (only if no custom lighting)
+    if (!lightingConfig) {
+      const staticMatch =
+        getPreRenderedThumbnail(modelUrl) ||
+        getPreRenderedThumbnail(cleanName) ||
+        getPreRenderedThumbnail(displayName);
 
-    if (staticMatch) {
-      setThumbnailSrc(staticMatch);
-      setIsLoading(false);
-      setLoadFailed(false);
-      return;
+      if (staticMatch) {
+        setThumbnailSrc(staticMatch);
+        setIsLoading(false);
+        setLoadFailed(false);
+        return;
+      }
     }
 
     if (!modelUrl) {
@@ -66,7 +70,7 @@ export default function Model3DThumbnail({
     setIsLoading(true);
     setLoadFailed(false);
 
-    captureModelThumbnail(modelUrl)
+    captureModelThumbnail(modelUrl, lightingConfig)
       .then((dataUrl) => {
         if (!isMounted) return;
         if (dataUrl) {
@@ -94,7 +98,7 @@ export default function Model3DThumbnail({
     return () => {
       isMounted = false;
     };
-  }, [modelUrl, fallbackImageUrl, cleanName, displayName]);
+  }, [modelUrl, fallbackImageUrl, cleanName, displayName, JSON.stringify(lightingConfig)]);
 
   const activeBadgeText =
     typeof badge === 'string'

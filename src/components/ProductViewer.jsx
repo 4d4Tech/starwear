@@ -6,6 +6,7 @@ import { OrbitControls, Html } from '@react-three/drei';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { computeGeometrySurfaceFrame } from '../utils/aframe-components';
+import { createPortalObject3D, createParticleSystemObject3D } from '../utils/portalThreeHelper';
 
 // YouTube URL parser & ID extractor
 export function isYouTubeUrl(url) {
@@ -420,6 +421,78 @@ function SceneContent({
 
   const gridY = modelBoundingData ? -modelBoundingData.maxDim / 2 - 0.05 : -0.5;
 
+  const parsePos = (pos, fallback) => {
+    if (Array.isArray(pos) && pos.length === 3) return pos;
+    if (typeof pos === 'string') {
+      const parts = pos.trim().split(/\s+/).map(Number);
+      if (parts.length === 3 && !parts.some(isNaN)) return parts;
+    }
+    return fallback;
+  };
+
+  const dir1Pos = parsePos(config.dir1Position, [2, 4, 3]);
+  const dir2Pos = parsePos(config.dir2Position, [-2, -1, -2]);
+  const rimPos = parsePos(config.rimPosition, [0, 3, -3]);
+
+  // Portal & Particle System Configuration
+  const portalCfg = config?.portalConfig || config?.portal;
+  const isPortalEnabled = !!(
+    portalCfg &&
+    (portalCfg.enabled === true ||
+      portalCfg.enabled === 'true' ||
+      portalCfg.enabled === 1 ||
+      portalCfg.enabled === '1' ||
+      (portalCfg.enabled !== false &&
+        portalCfg.enabled !== 'false' &&
+        portalCfg.enabled !== 0 &&
+        (Boolean(portalCfg.shape) || Boolean(portalCfg.interiorType) || Boolean(portalCfg.preset))))
+  );
+  const portalHideOutsideModel = isPortalEnabled && !!portalCfg?.hideOutsideModel;
+
+  const particleCfg = config?.particleConfig || config?.particle;
+  const isParticleEnabled = !!(
+    particleCfg &&
+    (particleCfg.enabled === true ||
+      particleCfg.enabled === 'true' ||
+      particleCfg.enabled === 1 ||
+      particleCfg.enabled === '1' ||
+      (particleCfg.enabled !== false &&
+        particleCfg.enabled !== 'false' &&
+        particleCfg.enabled !== 0 &&
+        (Boolean(particleCfg.preset) || Number(particleCfg.count) > 0)))
+  );
+
+  const portalInstance = useMemo(() => {
+    if (!isPortalEnabled) return null;
+    return createPortalObject3D(portalCfg, THREE, modelGroup);
+  }, [isPortalEnabled, JSON.stringify(portalCfg), modelGroup]);
+
+  useEffect(() => {
+    return () => {
+      if (portalInstance) portalInstance.dispose();
+    };
+  }, [portalInstance]);
+
+  const particleInstance = useMemo(() => {
+    if (!isParticleEnabled) return null;
+    return createParticleSystemObject3D(particleCfg, THREE);
+  }, [isParticleEnabled, JSON.stringify(particleCfg)]);
+
+  useEffect(() => {
+    return () => {
+      if (particleInstance) particleInstance.dispose();
+    };
+  }, [particleInstance]);
+
+  useFrame((state, delta) => {
+    if (portalInstance) {
+      portalInstance.update(state.clock.elapsedTime * 1000, delta * 1000, state.camera);
+    }
+    if (particleInstance) {
+      particleInstance.update(state.clock.elapsedTime * 1000, delta * 1000, state.camera);
+    }
+  });
+
   return (
     <>
       <color attach="background" args={['#0d1117']} />
@@ -430,16 +503,20 @@ function SceneContent({
         intensity={config.ambientIntensity !== undefined ? config.ambientIntensity : 1.4}
       />
       <directionalLight
-        position={[2, 4, 3]}
+        position={dir1Pos}
         color={config.dir1Color || 0xffffff}
         intensity={config.dir1Intensity !== undefined ? config.dir1Intensity : 2.2}
       />
       <directionalLight
-        position={[-2, -1, -2]}
+        position={dir2Pos}
         color={config.dir2Color || 0xffffff}
         intensity={config.dir2Intensity !== undefined ? config.dir2Intensity : 1.2}
       />
-      <directionalLight position={[0, 3, -3]} color={0x818cf8} intensity={1.0} />
+      <directionalLight
+        position={rimPos}
+        color={config.rimColor || 0x818cf8}
+        intensity={config.rimIntensity !== undefined ? config.rimIntensity : 1.0}
+      />
 
       {/* Floor Grid */}
       <gridHelper args={[4, 16, 0x312e81, 0x1e293b]} position={[0, gridY, 0]} />
@@ -456,11 +533,23 @@ function SceneContent({
         minDistance={0.2}
       />
 
+      {/* 3D Portal Gateway */}
+      {portalInstance && (
+        <primitive object={portalInstance.group} />
+      )}
+
+      {/* Standalone Particle System */}
+      {particleInstance && (
+        <primitive object={particleInstance.group} />
+      )}
+
       {/* 3D Asset or Stylized Placeholder */}
-      {modelGroup ? (
-        <primitive object={modelGroup} />
-      ) : (
-        <StylizedPlaceholder isWireframe={isWireframe} />
+      {!portalHideOutsideModel && (
+        modelGroup ? (
+          <primitive object={modelGroup} />
+        ) : (
+          <StylizedPlaceholder isWireframe={isWireframe} />
+        )
       )}
 
       {/* 3D YouTube Screen Overlay via Drei Html */}
@@ -801,9 +890,10 @@ export default function ProductViewer({
       {/* React Three Fiber Canvas */}
       <div className="w-full h-full cursor-grab active:cursor-grabbing relative">
         <Canvas
-          gl={{ antialias: true, alpha: true, powerPreference: 'default' }}
+          gl={{ antialias: true, alpha: true, stencil: true, powerPreference: 'default' }}
           camera={{ fov: 45, near: 0.05, far: 100, position: [0, 1.2, 2.5] }}
           onCreated={({ gl }) => {
+            gl.localClippingEnabled = true;
             gl.toneMapping = THREE.ACESFilmicToneMapping;
             gl.toneMappingExposure = 1.1;
             gl.outputColorSpace = THREE.SRGBColorSpace;

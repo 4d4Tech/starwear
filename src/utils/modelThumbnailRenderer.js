@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { ref, getDownloadURL } from 'firebase/storage';
 import { storage } from '../firebase';
+import { createPortalObject3D, createParticleSystemObject3D } from './portalThreeHelper';
 
 // Static mapping of pre-rendered 3D model snapshots
 const PRE_RENDERED_THUMBNAILS = {
@@ -104,9 +105,11 @@ function getOffscreenRenderer() {
       canvas,
       antialias: true,
       alpha: true,
+      stencil: true,
       preserveDrawingBuffer: true,
       powerPreference: 'low-power'
     });
+    offscreenRenderer.localClippingEnabled = true;
     offscreenRenderer.setSize(384, 384, false);
     offscreenRenderer.setPixelRatio(1);
     offscreenRenderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -116,23 +119,23 @@ function getOffscreenRenderer() {
     offscreenScene = new THREE.Scene();
     offscreenCamera = new THREE.PerspectiveCamera(40, 1, 0.05, 50);
 
-    // Studio Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
+    // Dynamic 4-Source Studio Lighting (Ambient + Key + Fill + Rim + Top)
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
     offscreenScene.add(ambientLight);
 
-    const keyLight = new THREE.DirectionalLight(0xffffff, 2.5);
-    keyLight.position.set(2.5, 3.5, 3.0);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 2.2);
+    keyLight.position.set(2, 4, 3);
     offscreenScene.add(keyLight);
 
-    const fillLight = new THREE.DirectionalLight(0x818cf8, 1.3);
-    fillLight.position.set(-3, 1, -2);
+    const fillLight = new THREE.DirectionalLight(0x818cf8, 1.2);
+    fillLight.position.set(-2, -1, -2);
     offscreenScene.add(fillLight);
 
-    const rimLight = new THREE.DirectionalLight(0x38bdf8, 1.2);
-    rimLight.position.set(0, -1, -3);
+    const rimLight = new THREE.DirectionalLight(0x38bdf8, 1.0);
+    rimLight.position.set(0, 3, -3);
     offscreenScene.add(rimLight);
 
-    const topLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    const topLight = new THREE.DirectionalLight(0xffffff, 0.8);
     topLight.position.set(0, 5, 0);
     offscreenScene.add(topLight);
 
@@ -141,13 +144,22 @@ function getOffscreenRenderer() {
 
     gltfLoaderInstance = new GLTFLoader();
     gltfLoaderInstance.setDRACOLoader(dracoLoader);
+
+    offscreenRenderer._lights = {
+      ambientLight,
+      keyLight,
+      fillLight,
+      rimLight,
+      topLight
+    };
   }
 
   return {
     renderer: offscreenRenderer,
     scene: offscreenScene,
     camera: offscreenCamera,
-    loader: gltfLoaderInstance
+    loader: gltfLoaderInstance,
+    lights: offscreenRenderer._lights
   };
 }
 
@@ -169,29 +181,46 @@ export async function resolveModelUrl(rawPathOrUrl) {
   }
 }
 
+function parseVec3(val, defaultArr) {
+  if (!val) return defaultArr;
+  if (Array.isArray(val) && val.length === 3) return val.map(Number);
+  if (typeof val === 'object' && val.x !== undefined) return [Number(val.x), Number(val.y), Number(val.z)];
+  if (typeof val === 'string') {
+    const parts = val.trim().split(/\s+/).map(Number);
+    if (parts.length === 3 && !parts.some(isNaN)) return parts;
+  }
+  return defaultArr;
+}
+
 /**
  * Dynamically captures a 3D model snapshot client-side using offscreen Three.js WebGLRenderer.
  * Returns a data URL (image/png or image/webp).
+ * Accepts optional customConfig containing lighting or material overrides.
  */
-export async function captureModelThumbnail(modelUrlOrFile) {
+export async function captureModelThumbnail(modelUrlOrFile, customConfig = null) {
   if (!modelUrlOrFile) return null;
 
   let url = '';
-  let cacheKey = '';
+  let baseKey = '';
 
   if (typeof modelUrlOrFile === 'string') {
     url = await resolveModelUrl(modelUrlOrFile);
-    cacheKey = url.split('?')[0] || url;
+    baseKey = url.split('?')[0] || url;
   } else if (modelUrlOrFile instanceof File || modelUrlOrFile instanceof Blob) {
     url = URL.createObjectURL(modelUrlOrFile);
-    cacheKey = `${modelUrlOrFile.name || 'blob'}_${modelUrlOrFile.size}_${modelUrlOrFile.lastModified || 0}`;
+    baseKey = `${modelUrlOrFile.name || 'blob'}_${modelUrlOrFile.size}_${modelUrlOrFile.lastModified || 0}`;
   }
 
   if (!url) return null;
 
-  // 1. Check pre-rendered static catalog
-  const preRendered = getPreRenderedThumbnail(cacheKey || url);
-  if (preRendered) return preRendered;
+  const configHash = customConfig ? JSON.stringify(customConfig) : '';
+  const cacheKey = configHash ? `${baseKey}_cfg_${configHash}` : baseKey;
+
+  // 1. Check pre-rendered static catalog (only when no custom lighting/materials requested)
+  if (!customConfig) {
+    const preRendered = getPreRenderedThumbnail(baseKey || url);
+    if (preRendered) return preRendered;
+  }
 
   // 2. Check in-memory cache
   if (inMemoryCache.has(cacheKey)) {
@@ -216,11 +245,69 @@ export async function captureModelThumbnail(modelUrlOrFile) {
       const gl = getOffscreenRenderer();
       if (!gl) return null;
 
+      // Apply dynamic studio lighting matching ProductViewer/ARTest/ARExperience
+      if (customConfig && gl.lights) {
+        const { ambientLight, keyLight, fillLight, rimLight } = gl.lights;
+        if (customConfig.ambientColor) ambientLight.color.set(customConfig.ambientColor);
+        if (customConfig.ambientIntensity !== undefined) ambientLight.intensity = Number(customConfig.ambientIntensity);
+
+        if (customConfig.dir1Color) keyLight.color.set(customConfig.dir1Color);
+        if (customConfig.dir1Intensity !== undefined) keyLight.intensity = Number(customConfig.dir1Intensity);
+        const p1 = parseVec3(customConfig.dir1Position, [2, 4, 3]);
+        keyLight.position.set(p1[0], p1[1], p1[2]);
+
+        if (customConfig.dir2Color) fillLight.color.set(customConfig.dir2Color);
+        if (customConfig.dir2Intensity !== undefined) fillLight.intensity = Number(customConfig.dir2Intensity);
+        const p2 = parseVec3(customConfig.dir2Position, [-2, -1, -2]);
+        fillLight.position.set(p2[0], p2[1], p2[2]);
+
+        if (customConfig.rimColor) rimLight.color.set(customConfig.rimColor);
+        if (customConfig.rimIntensity !== undefined) rimLight.intensity = Number(customConfig.rimIntensity);
+        const pRim = parseVec3(customConfig.rimPosition, [0, 3, -3]);
+        rimLight.position.set(pRim[0], pRim[1], pRim[2]);
+      } else if (gl.lights) {
+        gl.lights.ambientLight.color.set(0xffffff);
+        gl.lights.ambientLight.intensity = 1.4;
+        gl.lights.keyLight.color.set(0xffffff);
+        gl.lights.keyLight.intensity = 2.2;
+        gl.lights.keyLight.position.set(2, 4, 3);
+        gl.lights.fillLight.color.set(0x818cf8);
+        gl.lights.fillLight.intensity = 1.2;
+        gl.lights.fillLight.position.set(-2, -1, -2);
+        gl.lights.rimLight.color.set(0x38bdf8);
+        gl.lights.rimLight.intensity = 1.0;
+        gl.lights.rimLight.position.set(0, 3, -3);
+      }
+
       const gltf = await new Promise((resolve, reject) => {
         gl.loader.load(url, resolve, undefined, reject);
       });
 
       const model = gltf.scene;
+
+      // Apply material overrides if present in customConfig
+      if (customConfig) {
+        model.traverse((node) => {
+          if (node.isMesh && node.material) {
+            const mats = Array.isArray(node.material) ? node.material : [node.material];
+            mats.forEach((m) => {
+              if (customConfig.matMetalness !== undefined || customConfig.metalness !== undefined) {
+                m.metalness = Number(customConfig.matMetalness ?? customConfig.metalness);
+              }
+              if (customConfig.matRoughness !== undefined || customConfig.roughness !== undefined) {
+                m.roughness = Number(customConfig.matRoughness ?? customConfig.roughness);
+              }
+              if (customConfig.matEmissive || customConfig.emissive) {
+                m.emissive.set(customConfig.matEmissive || customConfig.emissive);
+              }
+              if (customConfig.matEmissiveIntensity !== undefined || customConfig.emissiveIntensity !== undefined) {
+                m.emissiveIntensity = Number(customConfig.matEmissiveIntensity ?? customConfig.emissiveIntensity);
+              }
+              m.needsUpdate = true;
+            });
+          }
+        });
+      }
 
       // Calculate Bounding Box and scale normalization
       const box = new THREE.Box3().setFromObject(model);
@@ -234,6 +321,32 @@ export async function captureModelThumbnail(modelUrlOrFile) {
 
       gl.scene.add(model);
 
+      // Support AR Portal and Particle Systems in thumbnail captures
+      const portalCfg = customConfig?.portalConfig || customConfig?.ar_config?.portalConfig || (customConfig?.portalPreset ? customConfig : null);
+      const particleCfg = customConfig?.particleConfig || customConfig?.ar_config?.particleConfig || (customConfig?.particlePreset ? customConfig : null);
+
+      let portalInstance = null;
+      let particleInstance = null;
+
+      if (portalCfg && (portalCfg.enabled !== false || portalCfg.portalPreset || portalCfg.preset)) {
+        portalInstance = createPortalObject3D(portalCfg, THREE, model);
+        if (portalInstance?.group) {
+          gl.scene.add(portalInstance.group);
+          if (portalInstance.update) portalInstance.update(100, 16, gl.camera);
+          if (portalCfg.hideOutsideModel) {
+            model.visible = false;
+          }
+        }
+      }
+
+      if (particleCfg && (particleCfg.enabled !== false || particleCfg.type || particleCfg.particlePreset || particleCfg.preset)) {
+        particleInstance = createParticleSystemObject3D(particleCfg, THREE);
+        if (particleInstance?.group) {
+          gl.scene.add(particleInstance.group);
+          if (particleInstance.update) particleInstance.update(100, 16, gl.camera);
+        }
+      }
+
       // Three-quarter dynamic showroom perspective angle
       gl.camera.position.set(0.55, 0.22, 1.55);
       gl.camera.lookAt(0, 0, 0);
@@ -246,6 +359,15 @@ export async function captureModelThumbnail(modelUrlOrFile) {
       }
 
       // Cleanup scene
+      if (portalInstance) {
+        if (portalInstance.group) gl.scene.remove(portalInstance.group);
+        if (portalInstance.dispose) portalInstance.dispose();
+      }
+      if (particleInstance) {
+        if (particleInstance.group) gl.scene.remove(particleInstance.group);
+        if (particleInstance.dispose) particleInstance.dispose();
+      }
+
       gl.scene.remove(model);
       model.traverse((node) => {
         if (node.isMesh) {

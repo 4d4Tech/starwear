@@ -290,7 +290,8 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           const directLightingKeys = [
             'ambientColor', 'ambientIntensity',
             'dir1Color', 'dir1Intensity', 'dir1Position',
-            'dir2Color', 'dir2Intensity', 'dir2Position'
+            'dir2Color', 'dir2Intensity', 'dir2Position',
+            'rimColor', 'rimIntensity', 'rimPosition'
           ];
           directLightingKeys.forEach((key) => {
             if (docData[key] !== undefined && docData[key] !== null) {
@@ -404,6 +405,8 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           ...(batchDocData?.particleConfig ? { particleConfig: batchDocData.particleConfig } : {}),
           ...(liveConfig || {}),
           ...(localPreviewConfig || {}),
+          ...(localPreviewConfig?.ar_config?.portalConfig ? { portalConfig: localPreviewConfig.ar_config.portalConfig } : {}),
+          ...(localPreviewConfig?.portalConfig ? { portalConfig: localPreviewConfig.portalConfig } : {}),
           ...(localPreviewConfig?.ar_config?.particleConfig ? { particleConfig: localPreviewConfig.ar_config.particleConfig } : {}),
           ...(localPreviewConfig?.particleConfig ? { particleConfig: localPreviewConfig.particleConfig } : {}),
           ...(urlPortalOverride ? { portalConfig: { ...(liveConfig?.portalConfig || {}), ...(localPreviewConfig?.portalConfig || {}), ...urlPortalOverride } } : {}),
@@ -734,6 +737,23 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         }
       });
 
+      // Ensure all portal systems refresh matrix & visibility on marker lock
+      document.querySelectorAll('[ar-portal]').forEach((el) => {
+        if (el && el.object3D) {
+          el.object3D.visible = true;
+        }
+        if (el && el.components && el.components['ar-portal']) {
+          const comp = el.components['ar-portal'];
+          if (comp.rootGroup) {
+            comp.rootGroup.visible = true;
+            comp.rootGroup.updateMatrixWorld(true);
+          }
+          if (typeof comp.onTargetFound === 'function') {
+            comp.onTargetFound();
+          }
+        }
+      });
+
       // Ensure all studio lighting rigs refresh matrix & lights on marker lock
       document.querySelectorAll('[ar-studio-lighting]').forEach((el) => {
         if (el && el.components && el.components['ar-studio-lighting']) {
@@ -765,6 +785,14 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     const onTargetLost = (e) => {
       logToScreen('TARGET_LOST', `Marker lost. Searching...`);
       setTrackingStatus('SCANNING');
+      document.querySelectorAll('[ar-portal]').forEach((el) => {
+        if (el && el.components && el.components['ar-portal']) {
+          const comp = el.components['ar-portal'];
+          if (typeof comp.onTargetLost === 'function') {
+            comp.onTargetLost();
+          }
+        }
+      });
     };
 
     const onModelLoad = () => {
@@ -1093,17 +1121,21 @@ useEffect(() => {
   // Extract Scene & Lighting Properties
   const cfg = arData.config || {};
   const ambientColor = cfg.ambientColor || '#ffffff';
-  const ambientIntensity = cfg.ambientIntensity ?? 1.5;
+  const ambientIntensity = cfg.ambientIntensity ?? 1.4;
 
   const dir1Color = cfg.dir1Color || '#ffffff';
-  const dir1Intensity = cfg.dir1Intensity ?? 2.5;
-  const dir1Position = cfg.dir1Position || '1 2 1';
+  const dir1Intensity = cfg.dir1Intensity ?? 2.2;
+  const dir1Position = cfg.dir1Position || '2 4 3';
 
   const dir2Color = cfg.dir2Color || '#ffffff';
-  const dir2Intensity = cfg.dir2Intensity ?? 1.0;
-  const dir2Position = cfg.dir2Position || '-1 -2 -1';
+  const dir2Intensity = cfg.dir2Intensity ?? 1.2;
+  const dir2Position = cfg.dir2Position || '-2 -1 -2';
 
-  const studioLightingAttr = `enabled: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position};`;
+  const rimColor = cfg.rimColor || '#818cf8';
+  const rimIntensity = cfg.rimIntensity ?? 1.0;
+  const rimPosition = cfg.rimPosition || '0 3 -3';
+
+  const studioLightingAttr = `enabled: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${rimIntensity}; rimPosition: ${rimPosition};`;
 
   const modelScale = cfg.modelScale ?? 0.4;
   const modelRotSpeed = cfg.modelRotSpeed ?? 10000;
@@ -1150,7 +1182,26 @@ useEffect(() => {
     arData?.arExperience?.config?.portalConfig ||
     arData?.arExperience?.config?.portal ||
     null;
-  const portalEnabled = !!(portalCfg && (portalCfg.enabled === true || portalCfg.enabled === 'true' || portalCfg.enabled === 1 || portalCfg.enabled === '1'));
+  let urlPortalFlag = null;
+  if (typeof window !== 'undefined') {
+    const sp = new URLSearchParams(window.location.search);
+    const pVal = sp.get('portal');
+    if (pVal === '1' || pVal === 'true') urlPortalFlag = true;
+    else if (pVal === '0' || pVal === 'false') urlPortalFlag = false;
+  }
+  const portalEnabled = urlPortalFlag !== null
+    ? urlPortalFlag
+    : !!(
+        portalCfg &&
+        (portalCfg.enabled === true ||
+          portalCfg.enabled === 'true' ||
+          portalCfg.enabled === 1 ||
+          portalCfg.enabled === '1' ||
+          (portalCfg.enabled !== false &&
+            portalCfg.enabled !== 'false' &&
+            portalCfg.enabled !== 0 &&
+            (Boolean(portalCfg.shape) || Boolean(portalCfg.interiorType) || Boolean(portalCfg.preset))))
+      );
   const portalHideOutsideModel = portalEnabled && !!portalCfg?.hideOutsideModel;
   const portalAttr = portalEnabled
     ? `enabled: true; shape: ${portalCfg.shape || 'arch'}; width: ${portalCfg.width ?? 1.1}; height: ${portalCfg.height ?? 1.8}; radius: ${portalCfg.radius ?? 0.7}; depth: ${portalCfg.depth ?? 3.5}; frameColor: ${portalCfg.frameColor || '#38bdf8'}; frameWidth: ${portalCfg.frameWidth ?? 0.08}; frameDepth: 0.08; frameEmissive: ${portalCfg.frameEmissive || '#0284c7'}; frameEmissiveIntensity: ${portalCfg.frameEmissiveIntensity ?? 1.5}; frameGlow: ${portalCfg.frameGlow ?? true}; glassTint: ${portalCfg.glassTint || '#38bdf8'}; glassOpacity: ${portalCfg.glassOpacity ?? 0.05}; interiorType: ${portalCfg.interiorType || 'nebula'}; skyboxUrl: ${portalCfg.skyboxUrl || ''}; skyboxScale: ${portalCfg.skyboxScale ?? 1.0}; skyboxPosX: ${portalCfg.skyboxPosX ?? 0}; skyboxPosY: ${portalCfg.skyboxPosY ?? 0}; skyboxPosZ: ${portalCfg.skyboxPosZ ?? 0}; skyboxRotX: ${portalCfg.skyboxRotX ?? 0}; skyboxRotY: ${portalCfg.skyboxRotY ?? 0}; skyboxRotZ: ${portalCfg.skyboxRotZ ?? 0}; skyboxBlur: ${portalCfg.skyboxBlur ?? 0}; interiorColor: ${portalCfg.interiorColor || '#050714'}; wallColor: ${portalCfg.wallColor || '#0f172a'}; floorColor: ${portalCfg.floorColor || '#020617'}; gridColor: ${portalCfg.gridColor || '#38bdf8'}; interiorLightColor: ${portalCfg.interiorLightColor || '#e0f2fe'}; interiorLightIntensity: ${portalCfg.interiorLightIntensity ?? 2.0}; interiorModelType: ${portalCfg.interiorModelType || 'artifact'}; artifactType: ${portalCfg.artifactType || 'crystal'}; customModelUrl: ${portalCfg.customModelUrl || ''}; currentModelUrl: ${arData?.gltfPath || ''}; modelScale: ${portalCfg.modelScale ?? 0.4}; modelPosX: ${portalCfg.modelPosX ?? 0}; modelPosY: ${portalCfg.modelPosY ?? 0}; modelPosZ: ${portalCfg.modelPosZ ?? -1.3}; modelRotSpeed: ${portalCfg.modelRotSpeed ?? 6000}; modelRotX: ${portalCfg.modelRotX ?? 0}; modelRotY: ${portalCfg.modelRotY ?? 0}; modelRotZ: ${portalCfg.modelRotZ ?? 0}; showVideo: ${portalCfg.showVideo ?? false}; videoUrl: ${portalCfg.videoUrl || arData?.videoUrl || ''}; videoScale: ${portalCfg.videoScale ?? 1.0}; videoPosY: ${portalCfg.videoPosY ?? 0}; videoPosZ: ${portalCfg.videoPosZ ?? -1.8}; particles: ${portalCfg.particles || 'stars'}; particleCount: ${portalCfg.particleCount ?? 180}; particleColor: ${portalCfg.particleColor || '#38bdf8'}; particleSpeed: ${portalCfg.particleSpeed ?? 1.0}; floatingText: ${portalCfg.floatingText || 'STAR weAR'}; textColor: ${portalCfg.textColor || '#38bdf8'}; textScale: ${portalCfg.textScale ?? 1.0}; textPosY: ${portalCfg.textPosY ?? 0.65}; textPosZ: ${portalCfg.textPosZ ?? -1.2}; posX: ${portalCfg.posX ?? 0}; posY: ${portalCfg.posY ?? 0}; posZ: ${portalCfg.posZ ?? 0}; rotX: ${portalCfg.rotX ?? 0}; rotY: ${portalCfg.rotY ?? 0}; rotZ: ${portalCfg.rotZ ?? 0};`
@@ -1304,11 +1355,12 @@ useEffect(() => {
         ref={sceneRef}
         mindar-image={`imageTargetSrc: ${arData.mindPath}; autoStart: true; uiLoading: ${uiLoading}; uiScanning: ${uiScanning}; uiError: ${uiError}; filterMinCF: ${filterMinCF}; filterBeta: ${filterBeta}; missTolerance: ${missTolerance}; warmupTolerance: ${warmupTolerance}; maxTrack: ${maxTrack}; showStats: ${showStats};`}
         color-space="sRGB"
-        renderer="colorManagement: true; physicallyCorrectLights: true; alpha: true; antialias: true; stencil: true;"
+        renderer="colorManagement: true; alpha: true; antialias: true; stencil: true;"
+        light="defaultLightsEnabled: false"
         vr-mode-ui="enabled: false"
         device-orientation-permission-ui="enabled: false"
         loading-screen="enabled: false"
-        scene-environment="exposure: 1.0"
+        scene-environment="exposure: 1.1; hdrIntensity: 0.0; enabled: false"
         style={{
           position: 'absolute',
           top: 0,
@@ -1323,7 +1375,6 @@ useEffect(() => {
         </a-assets>
 
         {/* Camera with Studio4D4 OrbitControls in 3D Mode & MindAR Forward Anchor in AR Mode */}
-        {/* Camera with Studio4D4 OrbitControls in 3D Mode & MindAR Forward Anchor in AR Mode */}
         <a-camera
           id="experience-camera"
           position="0 0 0"
@@ -1333,12 +1384,41 @@ useEffect(() => {
         >
         </a-camera>
 
+        {/* Dynamic Multi-Source Studio Lighting Rig: Illuminates models across all viewing and tracking modes */}
+        <a-entity
+          id="experience-lighting-rig"
+          ar-studio-lighting={studioLightingAttr}
+        ></a-entity>
+        <a-entity
+          id="experience-ambient-light"
+          light={`type: ambient; color: ${ambientColor}; intensity: ${ambientIntensity};`}
+        ></a-entity>
+
         {/* MindAR Target Anchor: Active in Live AR Camera Mode */}
         <a-entity
           id="target-entity"
           mindar-image-target={`targetIndex: ${targetIndex}`}
-          ar-studio-lighting={studioLightingAttr}
         >
+          {cameraEnabled && (
+            <>
+              <a-entity
+                id="target-dir1-light"
+                light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false;`}
+                position={dir1Position}
+              ></a-entity>
+              <a-entity
+                id="target-dir2-light"
+                light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false;`}
+                position={dir2Position}
+              ></a-entity>
+              <a-entity
+                id="target-rim-light"
+                light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false;`}
+                position={rimPosition}
+              ></a-entity>
+            </>
+          )}
+
           {cameraEnabled && !portalHideOutsideModel && (
             <a-gltf-model
               id="ar-model"
@@ -1380,8 +1460,23 @@ useEffect(() => {
           <a-entity
             id="preview-anchor"
             position="0 0 0"
-            ar-studio-lighting={studioLightingAttr}
           >
+            <a-entity
+              id="preview-dir1-light"
+              light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false;`}
+              position={dir1Position}
+            ></a-entity>
+            <a-entity
+              id="preview-dir2-light"
+              light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false;`}
+              position={dir2Position}
+            ></a-entity>
+            <a-entity
+              id="preview-rim-light"
+              light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false;`}
+              position={rimPosition}
+            ></a-entity>
+
             {!portalHideOutsideModel && (
               <a-gltf-model
                 id="preview-model"
@@ -1423,8 +1518,22 @@ useEffect(() => {
         {forceShowModel && cameraEnabled && (
           <a-entity
             position="0 0 -2"
-            ar-studio-lighting={studioLightingAttr}
           >
+            <a-entity
+              id="force-dir1-light"
+              light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false;`}
+              position={dir1Position}
+            ></a-entity>
+            <a-entity
+              id="force-dir2-light"
+              light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false;`}
+              position={dir2Position}
+            ></a-entity>
+            <a-entity
+              id="force-rim-light"
+              light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false;`}
+              position={rimPosition}
+            ></a-entity>
             {!portalHideOutsideModel && (
               <a-gltf-model
                 id="ar-model-forced"

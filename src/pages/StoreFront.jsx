@@ -255,7 +255,28 @@ export default function StoreFront() {
                   <ProductViewer
                     modelUrl={featuredModelUrl}
                     videoUrl={featuredVideoUrl}
-                    config={featuredAsset?.ar_config || {}}
+                    config={{
+                      ...(featuredAsset?.config || {}),
+                      ...(featuredAsset?.arExperience?.config || {}),
+                      ...(featuredAsset?.ar_config || {}),
+                      ...(featuredAsset?.lighting || {}),
+                      ...(featuredAsset?.lightingConfig || {}),
+                      ...(featuredAsset?.portalConfig ? { portalConfig: featuredAsset.portalConfig } : {}),
+                      ...(featuredAsset?.particleConfig ? { particleConfig: featuredAsset.particleConfig } : {}),
+                      ...(featuredAsset?.ar_config?.portalConfig ? { portalConfig: featuredAsset.ar_config.portalConfig } : {}),
+                      ...(featuredAsset?.ar_config?.particleConfig ? { particleConfig: featuredAsset.ar_config.particleConfig } : {}),
+                      ...(featuredAsset?.ambientColor ? { ambientColor: featuredAsset.ambientColor } : {}),
+                      ...(featuredAsset?.ambientIntensity !== undefined ? { ambientIntensity: featuredAsset.ambientIntensity } : {}),
+                      ...(featuredAsset?.dir1Color ? { dir1Color: featuredAsset.dir1Color } : {}),
+                      ...(featuredAsset?.dir1Intensity !== undefined ? { dir1Intensity: featuredAsset.dir1Intensity } : {}),
+                      ...(featuredAsset?.dir1Position ? { dir1Position: featuredAsset.dir1Position } : {}),
+                      ...(featuredAsset?.dir2Color ? { dir2Color: featuredAsset.dir2Color } : {}),
+                      ...(featuredAsset?.dir2Intensity !== undefined ? { dir2Intensity: featuredAsset.dir2Intensity } : {}),
+                      ...(featuredAsset?.dir2Position ? { dir2Position: featuredAsset.dir2Position } : {}),
+                      ...(featuredAsset?.rimColor ? { rimColor: featuredAsset.rimColor } : {}),
+                      ...(featuredAsset?.rimIntensity !== undefined ? { rimIntensity: featuredAsset.rimIntensity } : {}),
+                      ...(featuredAsset?.rimPosition ? { rimPosition: featuredAsset.rimPosition } : {})
+                    }}
                     assetName={featuredAsset?.name || featuredAsset?.id || 'Featured Digital Asset'}
                     assetId={featuredAsset?.id || ''}
                   />
@@ -394,6 +415,7 @@ export default function StoreFront() {
                             className="w-full h-full"
                             aspectRatio="aspect-[4/3]"
                             badge="3D GLB"
+                            lightingConfig={item.ar_config || item.config || item.lightingConfig || item}
                           />
 
                           {/* Hover Overlay: Click To Inspect In 3D */}

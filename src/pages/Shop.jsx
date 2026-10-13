@@ -1096,7 +1096,28 @@ export default function Shop() {
                 <ProductViewer
                   modelUrl={activeModelUrl}
                   videoUrl={activeVideoUrl || selectedProduct?.video_url || selectedProduct?.videoUrl || ''}
-                  config={selectedProduct?.ar_config || {}}
+                  config={{
+                    ...(selectedProduct?.config || {}),
+                    ...(selectedProduct?.arExperience?.config || {}),
+                    ...(selectedProduct?.ar_config || {}),
+                    ...(selectedProduct?.lighting || {}),
+                    ...(selectedProduct?.lightingConfig || {}),
+                    ...(selectedProduct?.portalConfig ? { portalConfig: selectedProduct.portalConfig } : {}),
+                    ...(selectedProduct?.particleConfig ? { particleConfig: selectedProduct.particleConfig } : {}),
+                    ...(selectedProduct?.ar_config?.portalConfig ? { portalConfig: selectedProduct.ar_config.portalConfig } : {}),
+                    ...(selectedProduct?.ar_config?.particleConfig ? { particleConfig: selectedProduct.ar_config.particleConfig } : {}),
+                    ...(selectedProduct?.ambientColor ? { ambientColor: selectedProduct.ambientColor } : {}),
+                    ...(selectedProduct?.ambientIntensity !== undefined ? { ambientIntensity: selectedProduct.ambientIntensity } : {}),
+                    ...(selectedProduct?.dir1Color ? { dir1Color: selectedProduct.dir1Color } : {}),
+                    ...(selectedProduct?.dir1Intensity !== undefined ? { dir1Intensity: selectedProduct.dir1Intensity } : {}),
+                    ...(selectedProduct?.dir1Position ? { dir1Position: selectedProduct.dir1Position } : {}),
+                    ...(selectedProduct?.dir2Color ? { dir2Color: selectedProduct.dir2Color } : {}),
+                    ...(selectedProduct?.dir2Intensity !== undefined ? { dir2Intensity: selectedProduct.dir2Intensity } : {}),
+                    ...(selectedProduct?.dir2Position ? { dir2Position: selectedProduct.dir2Position } : {}),
+                    ...(selectedProduct?.rimColor ? { rimColor: selectedProduct.rimColor } : {}),
+                    ...(selectedProduct?.rimIntensity !== undefined ? { rimIntensity: selectedProduct.rimIntensity } : {}),
+                    ...(selectedProduct?.rimPosition ? { rimPosition: selectedProduct.rimPosition } : {})
+                  }}
                   assetName={selectedProduct?.name || selectedProduct?.id}
                   assetId={selectedProduct?.id}
                 />
@@ -1318,6 +1339,7 @@ export default function Shop() {
                           className="w-full h-full"
                           aspectRatio="aspect-[4/3]"
                           badge="3D MODEL"
+                          lightingConfig={product.ar_config || product.config || product.lightingConfig || product}
                         />
 
                         {/* Hover Overlay Hint */}
