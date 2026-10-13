@@ -737,6 +737,26 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         }
       });
 
+      // Ensure all additional 3D geometries refresh matrix & visibility on marker lock
+      document.querySelectorAll('[ar-additional-geometries]').forEach((el) => {
+        if (el && el.object3D) {
+          el.object3D.visible = true;
+        }
+        if (el && el.components && el.components['ar-additional-geometries']) {
+          const comp = el.components['ar-additional-geometries'];
+          if (comp.rootGroup) {
+            comp.rootGroup.visible = true;
+            comp.rootGroup.children.forEach((c) => {
+              c.visible = c.userData?.visible !== false;
+            });
+            comp.rootGroup.updateMatrixWorld(true);
+          }
+          if (typeof comp.onTargetFound === 'function') {
+            comp.onTargetFound();
+          }
+        }
+      });
+
       // Ensure all portal systems refresh matrix & visibility on marker lock
       document.querySelectorAll('[ar-portal]').forEach((el) => {
         if (el && el.object3D) {
@@ -1250,6 +1270,11 @@ useEffect(() => {
     ? `enabled: true; preset: ${particleCfg?.preset || 'cosmic-stardust'}; count: ${particleCfg?.count ?? 300}; size: ${particleCfg?.size ?? 0.04}; color: ${particleCfg?.color || particleCfg?.colorA || '#38bdf8'}; colorSecondary: ${particleCfg?.colorSecondary || particleCfg?.colorB || '#c084fc'}; opacity: ${particleCfg?.opacity ?? 0.85}; shape: ${particleCfg?.shape || 'sparkle'}; blending: ${particleCfg?.blending || 'additive'}; direction: ${particleCfg?.direction || particleCfg?.motionType || 'float'}; speed: ${particleCfg?.speed ?? 1.0}; rotationSpeed: ${particleCfg?.rotationSpeed ?? 0.2}; spreadX: ${particleCfg?.spreadX ?? 3.0}; spreadY: ${particleCfg?.spreadY ?? 3.0}; spreadZ: ${particleCfg?.spreadZ ?? 3.0}; posX: ${particleCfg?.posX ?? 0}; posY: ${particleCfg?.posY ?? 0}; posZ: ${particleCfg?.posZ ?? 0}; rotX: ${particleRotX}; rotY: ${particleRotY}; rotZ: ${particleRotZ}; twinkle: ${particleCfg?.twinkle ?? true};`
     : '';
 
+  const additionalGeometries = mergedConfig?.additionalGeometries || batchData?.additionalGeometries || [];
+  const additionalGeometriesAttr = additionalGeometries && additionalGeometries.length > 0
+    ? `geometries: ${encodeURIComponent(JSON.stringify(additionalGeometries))};`
+    : '';
+
   return (
     <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden select-none bg-transparent">
       {/* Top Floating Control Bar */}
@@ -1453,6 +1478,13 @@ useEffect(() => {
               ar-particle-system={particleAttr}
             ></a-entity>
           )}
+
+          {cameraEnabled && additionalGeometries && additionalGeometries.length > 0 && (
+            <a-entity
+              id="ar-additional-geometries-anchor"
+              ar-additional-geometries={additionalGeometriesAttr}
+            ></a-entity>
+          )}
         </a-entity>
 
         {/* Center 3D Model Anchor: Active in 3D Preview Mode (Studio4D4 OrbitControls) */}
@@ -1511,6 +1543,13 @@ useEffect(() => {
                 ar-particle-system={particleAttr}
               ></a-entity>
             )}
+
+            {additionalGeometries && additionalGeometries.length > 0 && (
+              <a-entity
+                id="ar-additional-geometries-anchor-preview"
+                ar-additional-geometries={additionalGeometriesAttr}
+              ></a-entity>
+            )}
           </a-entity>
         )}
 
@@ -1566,6 +1605,13 @@ useEffect(() => {
               <a-entity
                 id="ar-particle-system-anchor-forced"
                 ar-particle-system={particleAttr}
+              ></a-entity>
+            )}
+
+            {additionalGeometries && additionalGeometries.length > 0 && (
+              <a-entity
+                id="ar-additional-geometries-anchor-forced"
+                ar-additional-geometries={additionalGeometriesAttr}
               ></a-entity>
             )}
           </a-entity>

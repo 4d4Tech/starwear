@@ -14,6 +14,8 @@ if (typeof THREE !== 'undefined' && THREE.Cache) {
 import { httpsCallable } from 'firebase/functions';
 import { logEvent } from 'firebase/analytics';
 import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfaceFrame, purgeAllSceneVideoLayers, PORTAL_PRESETS, PARTICLE_PRESETS } from '../utils/aframe-components';
+import AddGeometryModal from '../components/AddGeometryModal';
+import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES } from '../utils/geometryHelper';
 
 // =========================================================================
 // 1. REUSABLE TYPED SLIDER CONTROL WITH DUAL-WAY DATA BINDING
@@ -946,6 +948,115 @@ const ARTest = () => {
     if (p.twinkle !== undefined) setParticleTwinkle(p.twinkle);
   };
 
+  // =========================================================================
+  // ADDITIONAL 3D PRIMITIVE GEOMETRIES STATES & HANDLERS (Studio4D4 parity)
+  // =========================================================================
+  const [additionalGeometries, setAdditionalGeometries] = useState([]);
+  const [selectedGeometryId, setSelectedGeometryId] = useState(null);
+  const [geometryModalOpen, setGeometryModalOpen] = useState(false);
+
+  const handleAddGeometry = (payload) => {
+    const count = additionalGeometries.length;
+    const newId = `geom_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    const type = payload.type || 'box';
+    const cleanTypeName = type.charAt(0).toUpperCase() + type.slice(1);
+    const geomName = payload.name || `${cleanTypeName} ${count + 1}`;
+    const newGeom = {
+      id: newId,
+      name: geomName,
+      type,
+      params: { ...(payload.params || {}) },
+      color: payload.color || '#38bdf8',
+      preset: payload.preset || 'default',
+      roughness: payload.roughness !== undefined ? Number(payload.roughness) : 0.35,
+      metalness: payload.metalness !== undefined ? Number(payload.metalness) : 0.15,
+      wireframe: Boolean(payload.wireframe),
+      flatShading: Boolean(payload.flatShading),
+      posX: Number(((count % 4 - 1.5) * 0.45).toFixed(2)),
+      posY: 0.35,
+      posZ: Number(((Math.floor(count / 4) - 0.5) * 0.45).toFixed(2)),
+      rotX: 0,
+      rotY: 0,
+      rotZ: 0,
+      scale: 1,
+      scaleX: 1,
+      scaleY: 1,
+      scaleZ: 1,
+      rotationSpeed: 0,
+      visible: true
+    };
+    setAdditionalGeometries((prev) => [...prev, newGeom]);
+    setSelectedGeometryId(newId);
+    setActiveTab('shapes');
+    setGeometryModalOpen(false);
+    setSaveSuccessMsg(`Added 3D ${cleanTypeName} to scene.`);
+    setTimeout(() => setSaveSuccessMsg(''), 4000);
+  };
+
+  const handleUpdateGeometry = (id, updates) => {
+    setAdditionalGeometries((prev) =>
+      prev.map((g) => (g.id === id ? { ...g, ...updates } : g))
+    );
+  };
+
+  const handleUpdateGeometryParam = (id, paramKey, val) => {
+    setAdditionalGeometries((prev) =>
+      prev.map((g) => {
+        if (g.id !== id) return g;
+        return {
+          ...g,
+          params: {
+            ...(g.params || {}),
+            [paramKey]: val
+          }
+        };
+      })
+    );
+  };
+
+  const handleDeleteGeometry = (id) => {
+    setAdditionalGeometries((prev) => prev.filter((g) => g.id !== id));
+    if (selectedGeometryId === id) {
+      setSelectedGeometryId(null);
+    }
+  };
+
+  const handleDuplicateGeometry = (id) => {
+    const target = additionalGeometries.find((g) => g.id === id);
+    if (!target) return;
+    const newId = `geom_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    const dup = {
+      ...target,
+      id: newId,
+      name: `${target.name} (Copy)`,
+      posX: Number((target.posX + 0.3).toFixed(2)),
+      posZ: Number((target.posZ + 0.3).toFixed(2))
+    };
+    setAdditionalGeometries((prev) => [...prev, dup]);
+    setSelectedGeometryId(newId);
+  };
+
+  const handleToggleGeometryVisibility = (id) => {
+    setAdditionalGeometries((prev) =>
+      prev.map((g) => (g.id === id ? { ...g, visible: g.visible === false ? true : false } : g))
+    );
+  };
+
+  const handleApplyGeometryPreset = (id, presetId) => {
+    const preset = Array.isArray(MATERIAL_PRESETS)
+      ? MATERIAL_PRESETS.find((m) => m.id === presetId) || MATERIAL_PRESETS[presetId]
+      : MATERIAL_PRESETS[presetId];
+    if (!preset) return;
+    handleUpdateGeometry(id, {
+      preset: preset.id || presetId,
+      roughness: preset.roughness !== undefined ? preset.roughness : 0.35,
+      metalness: preset.metalness !== undefined ? preset.metalness : 0.15,
+      clearcoat: preset.clearcoat !== undefined ? preset.clearcoat : 0.0,
+      wireframe: !!preset.wireframe,
+      flatShading: !!preset.flatShading
+    });
+  };
+
   // Staged Local Files for Portal
   const [selectedPortalSkyboxFile, setSelectedPortalSkyboxFile] = useState(null);
   const [selectedPortalGlbFile, setSelectedPortalGlbFile] = useState(null);
@@ -1400,6 +1511,23 @@ const ARTest = () => {
       const raycaster = new THREE.Raycaster();
       raycaster.setFromCamera(mouse, sceneEl.camera);
 
+      // Check additional geometries first
+      const geomEl = document.getElementById('ar-additional-geometries-anchor');
+      const geomGroup = geomEl?.getObject3D('additionalGeometriesRoot') || geomEl?.object3D;
+      if (geomGroup) {
+        const geomIntersects = raycaster.intersectObject(geomGroup, true);
+        if (geomIntersects.length > 0) {
+          const hitGeom = geomIntersects[0].object;
+          const geomId = hitGeom?.userData?.geometryId || hitGeom?.userData?.id;
+          if (geomId) {
+            setSelectedGeometryId(geomId);
+            setSelectedMeshUuid(null);
+            setActiveTab('shapes');
+            return;
+          }
+        }
+      }
+
       const modelEl = document.getElementById('ar-model');
       if (!modelEl) return;
       const model3D = modelEl.getObject3D('mesh');
@@ -1410,6 +1538,7 @@ const ARTest = () => {
         const hit = intersects[0].object;
         if (hit && hit.isMesh) {
           setSelectedMeshUuid(hit.uuid);
+          setSelectedGeometryId(null);
         }
       } else {
         setSelectedMeshUuid(null);
@@ -3007,6 +3136,14 @@ const ARTest = () => {
         setParticleSystemEnabled(false);
       }
 
+      // Populate Additional 3D Primitive Geometries if configured on batch
+      const loadedGeoms = cfg.additionalGeometries || data.additionalGeometries || data.arExperience?.additionalGeometries || null;
+      if (Array.isArray(loadedGeoms)) {
+        setAdditionalGeometries(loadedGeoms);
+      } else {
+        setAdditionalGeometries([]);
+      }
+
       if (cfg && cfg.meshOverrides) {
         const loadedDeleted = Object.entries(cfg.meshOverrides)
           .filter(([_, ovr]) => ovr && ovr.deleted)
@@ -3203,6 +3340,7 @@ const ARTest = () => {
         rotationSpeed: Number(particleRotationSpeed),
         twinkle: Boolean(particleTwinkle)
       },
+      additionalGeometries: additionalGeometries || [],
       updatedAt: new Date().toISOString()
     };
   };
@@ -3522,6 +3660,7 @@ const ARTest = () => {
           rotationSpeed: Number(particleRotationSpeed),
           twinkle: Boolean(particleTwinkle)
         },
+        additionalGeometries: additionalGeometries || [],
         updatedAt: new Date().toISOString()
       };
 
@@ -3532,7 +3671,8 @@ const ARTest = () => {
         ...(gltfFilePath ? { gltf_file_path: gltfFilePath } : {}),
         ar_config: arConfigPayload,
         portalConfig: arConfigPayload.portalConfig,
-        particleConfig: arConfigPayload.particleConfig
+        particleConfig: arConfigPayload.particleConfig,
+        additionalGeometries: additionalGeometries || []
       };
 
       // Save to both batches and assets collections with merge: true to guarantee persistence
@@ -3917,6 +4057,22 @@ const ARTest = () => {
           </button>
           <button
             type="button"
+            onClick={() => setActiveTab('shapes')}
+            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'shapes'
+              ? 'bg-neutral-800 text-teal-300 font-bold shadow border border-teal-500/50'
+              : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
+              }`}
+          >
+            <span className="material-symbols-outlined text-sm text-teal-400">deployed_code</span>
+            <span>Shapes</span>
+            {additionalGeometries.length > 0 && (
+              <span className="text-[10px] bg-teal-500/20 text-teal-300 px-1 py-0.2 rounded-full font-mono ml-0.5">
+                {additionalGeometries.length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('lighting')}
             className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'lighting'
               ? 'bg-neutral-800 text-white font-bold shadow border border-neutral-700'
@@ -4186,6 +4342,15 @@ const ARTest = () => {
                       <span className="material-symbols-outlined text-xs">undo</span> Restore ({deletedMeshNames.length})
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => setGeometryModalOpen(true)}
+                    className="px-2 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shadow-xs border border-sky-500 transition-colors"
+                    title="Add 3D Primitives (Cube, Sphere, Cylinder, Torus, etc.)"
+                  >
+                    <span className="material-symbols-outlined text-xs">deployed_code</span>
+                    <span>+ Shape</span>
+                  </button>
                   <button
                     type="button"
                     onClick={scanMeshes}
@@ -4533,6 +4698,492 @@ const ARTest = () => {
                     ))}
                   </div>
                 </div>
+              )}
+
+              {/* Additional 3D Primitive Geometries Section */}
+              <div className="pt-2 border-t border-neutral-800">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-teal-400">deployed_code</span>
+                    Additional Shapes ({additionalGeometries.length})
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setGeometryModalOpen(true)}
+                    className="text-[10px] bg-teal-600/30 hover:bg-teal-600/50 text-teal-300 border border-teal-500/40 rounded px-2 py-0.5 font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-xs">add</span>
+                    Add Shape
+                  </button>
+                </div>
+                {additionalGeometries.length === 0 ? (
+                  <p className="text-[11px] text-neutral-500 italic p-2 bg-neutral-900/40 rounded border border-neutral-800">
+                    No additional geometries added yet. Click "+ Shape" to add primitive 3D geometries.
+                  </p>
+                ) : (
+                  <div className="space-y-1">
+                    {additionalGeometries.map((geom) => {
+                      const isSelected = selectedGeometryId === geom.id;
+                      return (
+                        <div
+                          key={geom.id}
+                          onClick={() => {
+                            setSelectedGeometryId(geom.id);
+                            setSelectedMeshUuid(null);
+                            setActiveTab('shapes');
+                          }}
+                          className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${isSelected
+                            ? 'bg-teal-950/50 border-teal-500 shadow-md ring-1 ring-teal-500/50'
+                            : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700'
+                            }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div
+                              className="w-3.5 h-3.5 rounded-full border border-white/20 shrink-0"
+                              style={{ backgroundColor: geom.color || '#38bdf8' }}
+                            />
+                            <div className="min-w-0">
+                              <span className="text-xs font-bold text-neutral-200 truncate block">
+                                {geom.name}
+                              </span>
+                              <span className="text-[9px] text-teal-400 font-mono capitalize">
+                                {geom.type}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleGeometryVisibility(geom.id)}
+                              className={`w-6 h-6 rounded flex items-center justify-center transition-colors cursor-pointer ${geom.visible !== false
+                                ? 'text-neutral-400 hover:text-white'
+                                : 'text-neutral-600 hover:text-neutral-400'
+                                }`}
+                              title={geom.visible !== false ? 'Hide shape' : 'Show shape'}
+                            >
+                              <span className="material-symbols-outlined text-xs">
+                                {geom.visible !== false ? 'visibility' : 'visibility_off'}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteGeometry(geom.id)}
+                              className="w-6 h-6 rounded flex items-center justify-center text-red-400 hover:text-red-300 hover:bg-red-950/40 transition-colors cursor-pointer"
+                              title="Delete shape"
+                            >
+                              <span className="material-symbols-outlined text-xs">delete</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* TAB: ADDITIONAL 3D GEOMETRIES (Studio4D4 primitives parity)               */}
+          {/* ========================================================================= */}
+          {activeTab === 'shapes' && (
+            <div className="space-y-5">
+              {/* Header with Quick Add Action */}
+              <div className="flex items-center justify-between border-b border-neutral-800 pb-2">
+                <div>
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-teal-400">deployed_code</span>
+                    3D Shapes & Geometries ({additionalGeometries.length})
+                  </h2>
+                  <p className="text-[10px] text-neutral-500">
+                    Add primitive 3D geometries (Cube, Sphere, Cylinder, Torus, etc.) locked to your scene
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setGeometryModalOpen(true)}
+                  className="px-3 py-1.5 bg-gradient-to-r from-teal-600 to-sky-600 hover:from-teal-500 hover:to-sky-500 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-teal-950/40 transition-all cursor-pointer"
+                  title="Add new 3D primitive geometry"
+                >
+                  <span className="material-symbols-outlined text-sm">add_box</span>
+                  <span>+ Add Shape</span>
+                </button>
+              </div>
+
+              {/* Zero Geometries Empty State */}
+              {additionalGeometries.length === 0 ? (
+                <div className="p-6 bg-gradient-to-b from-neutral-900/80 to-neutral-950 border border-neutral-800 rounded-xl text-center space-y-3">
+                  <div className="w-12 h-12 mx-auto rounded-xl bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400">
+                    <span className="material-symbols-outlined text-2xl">deployed_code</span>
+                  </div>
+                  <div className="space-y-1">
+                    <h3 className="text-xs font-bold text-neutral-200">No Custom Geometries in Scene</h3>
+                    <p className="text-[11px] text-neutral-400 max-w-sm mx-auto">
+                      Add 3D primitives like cubes, spheres, cylinders, cones, torus rings, capsules, or polyhedra to compose your AR experience alongside your base 3D model.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setGeometryModalOpen(true)}
+                    className="px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer shadow-md"
+                  >
+                    <span className="material-symbols-outlined text-sm">add</span>
+                    <span>Add First 3D Geometry</span>
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* Horizontal Shape Selector Chips */}
+                  <div className="space-y-1.5">
+                    <span className="text-[10px] uppercase font-bold text-neutral-400 tracking-wider">
+                      Active Shapes in Scene ({additionalGeometries.length})
+                    </span>
+                    <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto pr-1">
+                      {additionalGeometries.map((g) => {
+                        const isSelected = selectedGeometryId === g.id;
+                        return (
+                          <div
+                            key={g.id}
+                            onClick={() => setSelectedGeometryId(g.id)}
+                            className={`p-2 rounded-lg border text-left cursor-pointer transition-all flex items-center justify-between group ${isSelected
+                              ? 'bg-teal-950/60 border-teal-400 ring-1 ring-teal-500/50 shadow'
+                              : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700'
+                              }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span
+                                className="w-3 h-3 rounded-full shrink-0 border border-white/20"
+                                style={{ backgroundColor: g.color || '#38bdf8' }}
+                              />
+                              <div className="min-w-0">
+                                <span className="text-xs font-bold text-neutral-200 truncate block">
+                                  {g.name}
+                                </span>
+                                <span className="text-[9px] text-teal-400 font-mono capitalize">
+                                  {g.type}
+                                </span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleGeometryVisibility(g.id);
+                              }}
+                              className={`p-1 rounded transition-colors ${g.visible !== false ? 'text-neutral-400 hover:text-white' : 'text-neutral-600 hover:text-neutral-300'}`}
+                              title={g.visible !== false ? 'Hide' : 'Show'}
+                            >
+                              <span className="material-symbols-outlined text-xs">
+                                {g.visible !== false ? 'visibility' : 'visibility_off'}
+                              </span>
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Selected Geometry Inspector */}
+                  {(() => {
+                    const currentGeom = additionalGeometries.find((g) => g.id === selectedGeometryId) || additionalGeometries[0];
+                    if (!currentGeom) return null;
+                    const def = GEOMETRY_DEFINITIONS.find((d) => d.id === currentGeom.type);
+
+                    return (
+                      <div className="p-3.5 bg-neutral-900/80 rounded-xl border border-teal-500/30 space-y-4 shadow-sm">
+                        {/* Selected Shape Title & Actions */}
+                        <div className="flex items-center justify-between pb-2 border-b border-neutral-800 gap-2">
+                          <div className="flex items-center gap-2 flex-1 min-w-0">
+                            <span className="material-symbols-outlined text-lg text-teal-400 shrink-0">
+                              {def?.icon || 'deployed_code'}
+                            </span>
+                            <input
+                              type="text"
+                              value={currentGeom.name}
+                              onChange={(e) => handleUpdateGeometry(currentGeom.id, { name: e.target.value })}
+                              className="text-xs font-bold text-white bg-neutral-800 border border-neutral-700 rounded px-2 py-1 w-full focus:outline-none focus:border-teal-400"
+                              placeholder="Shape Name"
+                            />
+                            <span className="text-[10px] font-mono uppercase bg-teal-500/20 text-teal-300 px-1.5 py-0.5 rounded shrink-0">
+                              {currentGeom.type}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleDuplicateGeometry(currentGeom.id)}
+                              className="w-7 h-7 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 flex items-center justify-center transition-colors cursor-pointer"
+                              title="Duplicate Shape"
+                            >
+                              <span className="material-symbols-outlined text-xs">content_copy</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteGeometry(currentGeom.id)}
+                              className="w-7 h-7 rounded bg-red-950/40 hover:bg-red-900/60 border border-red-500/30 text-red-300 flex items-center justify-center transition-colors cursor-pointer"
+                              title="Delete Shape"
+                            >
+                              <span className="material-symbols-outlined text-xs">delete</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Material Presets Quick Select */}
+                        <div className="space-y-1.5">
+                          <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
+                            Material Presets
+                          </span>
+                          <div className="grid grid-cols-5 gap-1">
+                            {MATERIAL_PRESETS.map((p) => (
+                              <button
+                                key={p.id}
+                                type="button"
+                                onClick={() => handleApplyGeometryPreset(currentGeom.id, p.id)}
+                                className={`px-1.5 py-1 rounded text-[10px] font-medium border text-center transition-all cursor-pointer ${currentGeom.preset === p.id
+                                  ? 'bg-teal-500/20 border-teal-400 text-teal-300 font-bold'
+                                  : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200'
+                                  }`}
+                              >
+                                {p.name}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Color Picker & Swatches */}
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold text-neutral-300">Surface Color</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-mono text-neutral-400">{currentGeom.color}</span>
+                              <input
+                                type="color"
+                                value={currentGeom.color || '#38bdf8'}
+                                onChange={(e) => handleUpdateGeometry(currentGeom.id, { color: e.target.value })}
+                                className="w-8 h-6 bg-transparent cursor-pointer rounded border border-neutral-700"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {COLOR_SWATCHES.map((swatch) => {
+                              const hexVal = typeof swatch === 'string' ? swatch : swatch.hex;
+                              const nameVal = typeof swatch === 'string' ? swatch : swatch.name;
+                              const isSelected = String(currentGeom.color || '').toLowerCase() === String(hexVal || '').toLowerCase();
+                              return (
+                                <button
+                                  key={hexVal}
+                                  type="button"
+                                  onClick={() => handleUpdateGeometry(currentGeom.id, { color: hexVal })}
+                                  style={{ backgroundColor: hexVal }}
+                                  className={`w-5 h-5 rounded-full border transition-transform cursor-pointer ${isSelected
+                                    ? 'scale-125 border-white ring-2 ring-teal-400 shadow-md'
+                                    : 'border-white/20 hover:scale-110'
+                                    }`}
+                                  title={nameVal}
+                                />
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* PBR Surface Properties */}
+                        <div className="space-y-2.5 pt-1">
+                          <NumberSliderInput
+                            label="Roughness"
+                            value={currentGeom.roughness ?? 0.35}
+                            onChange={(val) => handleUpdateGeometry(currentGeom.id, { roughness: val })}
+                            min={0.0}
+                            max={1.0}
+                            step={0.05}
+                            color="teal"
+                            description="0 = Mirror Gloss, 1 = Matte Chalk"
+                          />
+                          <NumberSliderInput
+                            label="Metalness"
+                            value={currentGeom.metalness ?? 0.15}
+                            onChange={(val) => handleUpdateGeometry(currentGeom.id, { metalness: val })}
+                            min={0.0}
+                            max={1.0}
+                            step={0.05}
+                            color="indigo"
+                            description="0 = Dielectric plastic/wood, 1 = Metallic chrome"
+                          />
+                          <div className="grid grid-cols-2 gap-2 pt-1">
+                            <label className="flex items-center gap-2 p-2 rounded bg-neutral-900 border border-neutral-800 text-xs text-neutral-300 cursor-pointer hover:bg-neutral-800/80">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(currentGeom.wireframe)}
+                                onChange={(e) => handleUpdateGeometry(currentGeom.id, { wireframe: e.target.checked })}
+                                className="rounded text-teal-500 focus:ring-teal-400"
+                              />
+                              <span>Wireframe Mode</span>
+                            </label>
+                            <label className="flex items-center gap-2 p-2 rounded bg-neutral-900 border border-neutral-800 text-xs text-neutral-300 cursor-pointer hover:bg-neutral-800/80">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(currentGeom.flatShading)}
+                                onChange={(e) => handleUpdateGeometry(currentGeom.id, { flatShading: e.target.checked })}
+                                className="rounded text-teal-500 focus:ring-teal-400"
+                              />
+                              <span>Flat Shading (Faceted)</span>
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Continuous Spin Animation */}
+                        <div className="space-y-2 pt-2 border-t border-neutral-800">
+                          <NumberSliderInput
+                            label="Auto-Rotation Speed (Spin)"
+                            value={currentGeom.rotationSpeed ?? 0}
+                            onChange={(val) => handleUpdateGeometry(currentGeom.id, { rotationSpeed: val })}
+                            min={-4.0}
+                            max={4.0}
+                            step={0.1}
+                            unit="rad/s"
+                            color="sky"
+                            description="Continuous Y-axis turntable spin in AR (0 = static)"
+                          />
+                        </div>
+
+                        {/* Transform: Position, Rotation, Scale */}
+                        <div className="space-y-3 pt-2 border-t border-neutral-800">
+                          <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block">
+                            World Transform & Placement
+                          </span>
+                          <div className="space-y-2">
+                            <NumberSliderInput
+                              label="Position X (Lateral)"
+                              value={currentGeom.posX ?? 0}
+                              onChange={(val) => handleUpdateGeometry(currentGeom.id, { posX: val })}
+                              min={-5.0}
+                              max={5.0}
+                              step={0.05}
+                              unit="m"
+                              color="indigo"
+                            />
+                            <NumberSliderInput
+                              label="Position Y (Elevation)"
+                              value={currentGeom.posY ?? 0}
+                              onChange={(val) => handleUpdateGeometry(currentGeom.id, { posY: val })}
+                              min={-5.0}
+                              max={5.0}
+                              step={0.05}
+                              unit="m"
+                              color="indigo"
+                            />
+                            <NumberSliderInput
+                              label="Position Z (Depth)"
+                              value={currentGeom.posZ ?? 0}
+                              onChange={(val) => handleUpdateGeometry(currentGeom.id, { posZ: val })}
+                              min={-5.0}
+                              max={5.0}
+                              step={0.05}
+                              unit="m"
+                              color="indigo"
+                            />
+                          </div>
+
+                          <div className="space-y-2 pt-1">
+                            <NumberSliderInput
+                              label="Rotation X (Pitch)"
+                              value={currentGeom.rotX ?? 0}
+                              onChange={(val) => handleUpdateGeometry(currentGeom.id, { rotX: val })}
+                              min={-180}
+                              max={180}
+                              step={1}
+                              unit="°"
+                              color="purple"
+                            />
+                            <NumberSliderInput
+                              label="Rotation Y (Yaw)"
+                              value={currentGeom.rotY ?? 0}
+                              onChange={(val) => handleUpdateGeometry(currentGeom.id, { rotY: val })}
+                              min={-180}
+                              max={180}
+                              step={1}
+                              unit="°"
+                              color="purple"
+                            />
+                            <NumberSliderInput
+                              label="Rotation Z (Roll)"
+                              value={currentGeom.rotZ ?? 0}
+                              onChange={(val) => handleUpdateGeometry(currentGeom.id, { rotZ: val })}
+                              min={-180}
+                              max={180}
+                              step={1}
+                              unit="°"
+                              color="purple"
+                            />
+                          </div>
+
+                          <div className="space-y-2 pt-1">
+                            <NumberSliderInput
+                              label="Uniform Scale"
+                              value={currentGeom.scale ?? 1}
+                              onChange={(val) =>
+                                handleUpdateGeometry(currentGeom.id, {
+                                  scale: val,
+                                  scaleX: val,
+                                  scaleY: val,
+                                  scaleZ: val
+                                })
+                              }
+                              min={0.05}
+                              max={5.0}
+                              step={0.05}
+                              color="emerald"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Primitive-Specific Shape Dimensions */}
+                        {def && def.paramConfigs && (
+                          <div className="space-y-2.5 pt-2 border-t border-neutral-800">
+                            <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block">
+                              {def.name} Geometry Dimensions
+                            </span>
+                            {def.paramConfigs.map((cfg) => {
+                              const currentVal =
+                                currentGeom.params && currentGeom.params[cfg.key] !== undefined
+                                  ? currentGeom.params[cfg.key]
+                                  : def.defaultParams[cfg.key];
+                              return (
+                                <NumberSliderInput
+                                  key={cfg.key}
+                                  label={cfg.label}
+                                  value={currentVal}
+                                  onChange={(val) => handleUpdateGeometryParam(currentGeom.id, cfg.key, val)}
+                                  min={cfg.min}
+                                  max={cfg.max}
+                                  step={cfg.step}
+                                  unit={cfg.unit || ''}
+                                  color="amber"
+                                />
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Dedicated Save Geometries Button */}
+                  <div className="pt-2 border-t border-neutral-800/80 space-y-2">
+                    <button
+                      type="button"
+                      disabled={savingConfig}
+                      onClick={handleSaveConfig}
+                      className="w-full py-2.5 px-4 bg-gradient-to-r from-teal-600 via-sky-600 to-indigo-600 hover:from-teal-500 hover:to-indigo-500 text-white font-bold rounded-lg shadow-lg shadow-teal-500/20 text-xs flex items-center justify-center gap-2 transition-all disabled:opacity-50 active:scale-[0.99] cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-sm">save</span>
+                      <span>
+                        {savingConfig
+                          ? 'Saving Geometries Configuration...'
+                          : `Save Shapes to Batch (${batchId || 'Active'})`}
+                      </span>
+                    </button>
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -7820,9 +8471,9 @@ const ARTest = () => {
         style={{ touchAction: 'none' }}
         onContextMenu={(e) => e.preventDefault()}
       >
-        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled) ? (
+        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0) ? (
           <a-scene
-            key={batchId || localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || (portalEnabled ? 'portal-active' : '') || (particleSystemEnabled ? 'particles-active' : '') || 'ar-portal-scene'}
+            key={batchId || localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || (portalEnabled ? 'portal-active' : '') || (particleSystemEnabled ? 'particles-active' : '') || (additionalGeometries.length > 0 ? 'geoms-active' : '') || 'ar-portal-scene'}
             embedded
             color-space="sRGB"
             renderer="colorManagement: true; antialias: true; stencil: true;"
@@ -7904,6 +8555,14 @@ const ARTest = () => {
               <a-entity
                 id="ar-particle-system-anchor"
                 ar-particle-system={`enabled: ${particleSystemEnabled}; preset: ${particlePreset}; count: ${particleCount}; size: ${particleSize}; color: ${particleColor}; colorSecondary: ${particleColorSecondary}; opacity: ${particleOpacity}; shape: ${particleShape}; blending: ${particleBlending}; direction: ${particleDirection}; speed: ${particleSpeed}; rotationSpeed: ${particleRotationSpeed}; spreadX: ${particleSpreadX}; spreadY: ${particleSpreadY}; spreadZ: ${particleSpreadZ}; posX: ${particlePosX}; posY: ${particlePosY}; posZ: ${particlePosZ}; rotX: 0; rotY: 0; rotZ: 0; twinkle: ${particleTwinkle};`}
+              ></a-entity>
+            )}
+
+            {/* Additional 3D Primitive Geometries Anchor */}
+            {additionalGeometries.length > 0 && (
+              <a-entity
+                id="ar-additional-geometries-anchor"
+                ar-additional-geometries={`geometries: ${encodeURIComponent(JSON.stringify(additionalGeometries))};`}
               ></a-entity>
             )}
           </a-scene>
@@ -8176,6 +8835,15 @@ const ARTest = () => {
           />
         )}
       </div>
+
+      {/* 3D Primitive Geometries Modal */}
+      {geometryModalOpen && (
+        <AddGeometryModal
+          isOpen={geometryModalOpen}
+          onClose={() => setGeometryModalOpen(false)}
+          onAddGeometry={handleAddGeometry}
+        />
+      )}
     </div>
   );
 };

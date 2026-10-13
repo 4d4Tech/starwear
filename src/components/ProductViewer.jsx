@@ -7,6 +7,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { computeGeometrySurfaceFrame } from '../utils/aframe-components';
 import { createPortalObject3D, createParticleSystemObject3D } from '../utils/portalThreeHelper';
+import { createGeometriesGroup } from '../utils/geometryHelper';
 
 // YouTube URL parser & ID extractor
 export function isYouTubeUrl(url) {
@@ -484,12 +485,40 @@ function SceneContent({
     };
   }, [particleInstance]);
 
+  const additionalGeometries = config?.additionalGeometries || [];
+  const geometriesGroup = useMemo(() => {
+    if (!Array.isArray(additionalGeometries) || additionalGeometries.length === 0) return null;
+    return createGeometriesGroup(additionalGeometries, THREE);
+  }, [JSON.stringify(additionalGeometries)]);
+
+  useEffect(() => {
+    return () => {
+      if (geometriesGroup) {
+        geometriesGroup.traverse((child) => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+        });
+      }
+    };
+  }, [geometriesGroup]);
+
   useFrame((state, delta) => {
     if (portalInstance) {
       portalInstance.update(state.clock.elapsedTime * 1000, delta * 1000, state.camera);
     }
     if (particleInstance) {
       particleInstance.update(state.clock.elapsedTime * 1000, delta * 1000, state.camera);
+    }
+    if (geometriesGroup) {
+      for (let i = 0; i < geometriesGroup.children.length; i++) {
+        const mesh = geometriesGroup.children[i];
+        if (mesh && mesh.userData && Number(mesh.userData.rotationSpeed)) {
+          mesh.rotation.y += Number(mesh.userData.rotationSpeed) * delta;
+        }
+      }
     }
   });
 
@@ -541,6 +570,11 @@ function SceneContent({
       {/* Standalone Particle System */}
       {particleInstance && (
         <primitive object={particleInstance.group} />
+      )}
+
+      {/* Additional 3D Primitive Geometries */}
+      {geometriesGroup && (
+        <primitive object={geometriesGroup} />
       )}
 
       {/* 3D Asset or Stylized Placeholder */}

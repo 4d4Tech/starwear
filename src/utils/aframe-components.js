@@ -4,6 +4,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { createPrimitiveMesh } from './geometryHelper.js';
 
 
 // =========================================================================
@@ -4284,6 +4285,151 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
       if (this.el && this.el.sceneEl && this.removeDefaultLights) {
         this.el.sceneEl.removeEventListener('loaded', this.removeDefaultLights);
         this.el.sceneEl.removeEventListener('render-target-loaded', this.removeDefaultLights);
+      }
+    }
+  });
+}
+
+// =========================================================================
+// AR ADDITIONAL 3D GEOMETRIES RIG
+// Renders user-defined primitive 3D geometries (Cube, Sphere, Cylinder, Cone,
+// Torus, Torus Knot, Capsule, Plane, Ring, Polyhedra) locked into the AR/3D scene.
+// Works seamlessly in ARTest, marker-scanned WebAR, and 3D preview.
+// =========================================================================
+if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometries']) {
+  AFRAME.registerComponent('ar-additional-geometries', {
+    schema: {
+      geometries: { type: 'string', default: '[]' }
+    },
+
+    init: function () {
+      const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE)
+        ? window.AFRAME.THREE
+        : THREE;
+
+      this.rootGroup = new THREE_LIB.Group();
+      this.rootGroup.name = 'ar_additional_geometries_group';
+      this.el.setObject3D('additionalGeometriesRoot', this.rootGroup);
+
+      this.onTargetFound = () => {
+        if (this.rootGroup && this.el && this.el.object3D) {
+          this.el.object3D.visible = true;
+          this.rootGroup.visible = true;
+          this.rootGroup.children.forEach((mesh) => {
+            mesh.visible = mesh.userData?.visible !== false;
+          });
+          this.rootGroup.updateMatrixWorld(true);
+        }
+      };
+
+      const sceneEl = this.el.sceneEl;
+      if (sceneEl) {
+        sceneEl.addEventListener('targetFound', this.onTargetFound);
+      }
+      if (this.el.parentEl) {
+        this.el.parentEl.addEventListener('targetFound', this.onTargetFound);
+      }
+      const targetEl = document.getElementById('target-entity');
+      if (targetEl && targetEl !== this.el.parentEl) {
+        targetEl.addEventListener('targetFound', this.onTargetFound);
+      }
+
+      this.rebuildGeometries();
+    },
+
+    rebuildGeometries: function () {
+      const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE)
+        ? window.AFRAME.THREE
+        : THREE;
+
+      if (!this.rootGroup) return;
+
+      // Clean up previous meshes
+      while (this.rootGroup.children.length > 0) {
+        const child = this.rootGroup.children[0];
+        this.rootGroup.remove(child);
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) {
+          if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+          else child.material.dispose();
+        }
+      }
+
+      let items = [];
+      try {
+        let raw = this.data.geometries;
+        if (typeof raw === 'string') {
+          if (raw.startsWith('%5B') || raw.startsWith('%7B') || raw.includes('%22')) {
+            raw = decodeURIComponent(raw);
+          }
+          items = JSON.parse(raw);
+        } else if (Array.isArray(raw)) {
+          items = raw;
+        }
+      } catch (err) {
+        console.warn('[ar-additional-geometries] Failed to parse geometries JSON:', err);
+        items = [];
+      }
+
+      if (!Array.isArray(items)) items = [];
+
+      items.forEach((item) => {
+        if (!item) return;
+        const mesh = createPrimitiveMesh(item, THREE_LIB);
+        if (mesh) {
+          mesh.visible = item.visible !== false;
+          mesh.userData = {
+            ...(item || {}),
+            isAdditionalGeometry: true,
+            geometryId: item.id
+          };
+          this.rootGroup.add(mesh);
+        }
+      });
+
+      this.rootGroup.updateMatrixWorld(true);
+    },
+
+    update: function (oldData) {
+      if (oldData && oldData.geometries !== this.data.geometries) {
+        this.rebuildGeometries();
+      }
+    },
+
+    tick: function (time, timeDelta) {
+      if (!this.rootGroup || !this.rootGroup.visible) return;
+      const deltaSec = (timeDelta || 16) / 1000;
+
+      for (let i = 0; i < this.rootGroup.children.length; i++) {
+        const mesh = this.rootGroup.children[i];
+        if (mesh && mesh.userData && Number(mesh.userData.rotationSpeed)) {
+          mesh.rotation.y += Number(mesh.userData.rotationSpeed) * deltaSec;
+        }
+      }
+    },
+
+    remove: function () {
+      if (this.rootGroup) {
+        while (this.rootGroup.children.length > 0) {
+          const child = this.rootGroup.children[0];
+          this.rootGroup.remove(child);
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+        }
+        if (this.el) {
+          if (typeof this.el.removeObject3D === 'function') {
+            this.el.removeObject3D('additionalGeometriesRoot');
+          } else if (this.el.object3D) {
+            this.el.object3D.remove(this.rootGroup);
+          }
+        }
+      }
+      const sceneEl = this.el && this.el.sceneEl;
+      if (sceneEl && this.onTargetFound) {
+        sceneEl.removeEventListener('targetFound', this.onTargetFound);
       }
     }
   });
