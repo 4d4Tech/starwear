@@ -2099,6 +2099,13 @@ if (typeof AFRAME !== 'undefined') {
         glassOpacity: { type: 'number', default: 0.05 },
         interiorType: { type: 'string', default: 'nebula' }, // 'nebula' | 'starfield' | 'grid-room' | 'matrix' | 'skybox' | 'void'
         skyboxUrl: { type: 'string', default: '' },
+        skyboxScale: { type: 'number', default: 1.0 },
+        skyboxPosX: { type: 'number', default: 0.0 },
+        skyboxPosY: { type: 'number', default: 0.0 },
+        skyboxPosZ: { type: 'number', default: 0.0 },
+        skyboxRotX: { type: 'number', default: 0 },
+        skyboxRotY: { type: 'number', default: 0 },
+        skyboxRotZ: { type: 'number', default: 0 },
         interiorColor: { type: 'color', default: '#050714' },
         wallColor: { type: 'color', default: '#0f172a' },
         floorColor: { type: 'color', default: '#020617' },
@@ -2156,6 +2163,7 @@ if (typeof AFRAME !== 'undefined') {
         this.particlesObj = null;
         this.particleVelocities = [];
         this.loadedCustomModel = null;
+        this.skyboxMesh = null;
 
         // Video Screen properties & CSS3D state
         this.portalVideo = null;
@@ -2417,6 +2425,21 @@ if (typeof AFRAME !== 'undefined') {
             this.loadedCustomModel.scale.setScalar(this.data.modelScale);
             this.loadedCustomModel.position.set(this.data.modelPosX, this.data.modelPosY, this.data.modelPosZ);
           }
+          if (this.skyboxMesh) {
+            const s = Math.max(0.05, this.data.skyboxScale || 1.0);
+            this.skyboxMesh.scale.set(s, s, s);
+            const depth = Math.max(1.0, this.data.depth);
+            this.skyboxMesh.position.set(
+              this.data.skyboxPosX || 0,
+              this.data.skyboxPosY || 0,
+              (-depth / 2) + (this.data.skyboxPosZ || 0)
+            );
+            this.skyboxMesh.rotation.set(
+              (this.data.skyboxRotX * Math.PI) / 180,
+              (this.data.skyboxRotY * Math.PI) / 180,
+              (this.data.skyboxRotZ * Math.PI) / 180
+            );
+          }
         }
       },
 
@@ -2476,6 +2499,7 @@ if (typeof AFRAME !== 'undefined') {
         this.cyberCoreRings = [];
         this.activeArtifact = null;
         this.loadedCustomModel = null;
+        this.skyboxMesh = null;
 
         const data = this.data;
         const width = Math.max(0.2, data.width);
@@ -2760,9 +2784,21 @@ if (typeof AFRAME !== 'undefined') {
             side: THREE_LIB.DoubleSide
           });
           const skyMesh = new THREE_LIB.Mesh(sphereGeom, sphereMat);
-          skyMesh.position.set(0, 0, -depth / 2);
+          const s = Math.max(0.05, data.skyboxScale || 1.0);
+          skyMesh.scale.set(s, s, s);
+          skyMesh.position.set(
+            data.skyboxPosX || 0,
+            data.skyboxPosY || 0,
+            (-depth / 2) + (data.skyboxPosZ || 0)
+          );
+          skyMesh.rotation.set(
+            (data.skyboxRotX * Math.PI) / 180,
+            (data.skyboxRotY * Math.PI) / 180,
+            (data.skyboxRotZ * Math.PI) / 180
+          );
           this.applyStencilToMesh(skyMesh);
           this.interiorGroup.add(skyMesh);
+          this.skyboxMesh = skyMesh;
 
         } else {
           // Minimalist Smooth Void
@@ -3236,6 +3272,380 @@ if (typeof AFRAME !== 'undefined') {
       }
     });
   }
+
+  // =========================================================================
+  // 8. AR-PARTICLE-SYSTEM COMPONENT (STANDALONE SCENE PARTICLE FX)
+  // Renders rich procedural particle FX (stardust, embers, snow, rain,
+  // fireflies, vortex, hearts) in 3D AR space with dual-color gradients,
+  // procedural sprite texturing, physics velocities, and boundary wrapping.
+  // =========================================================================
+  function generateParticleSprite(shape = 'sparkle') {
+    if (typeof document === 'undefined') return null;
+    const THREE_LIB = getPortalThree();
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.clearRect(0, 0, 64, 64);
+
+    if (shape === 'circle') {
+      const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 30);
+      grad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+      grad.addColorStop(0.3, 'rgba(255, 255, 255, 0.85)');
+      grad.addColorStop(0.7, 'rgba(255, 255, 255, 0.25)');
+      grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(32, 32, 30, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (shape === 'diamond') {
+      ctx.save();
+      ctx.translate(32, 32);
+      ctx.rotate(Math.PI / 4);
+      const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, 26);
+      grad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+      grad.addColorStop(0.4, 'rgba(255, 255, 255, 0.8)');
+      grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(-18, -18, 36, 36);
+      ctx.restore();
+    } else if (shape === 'heart') {
+      ctx.save();
+      ctx.translate(32, 34);
+      ctx.beginPath();
+      const d = 1.3;
+      ctx.moveTo(0, 5 * d);
+      ctx.bezierCurveTo(0, 0, -16 * d, -8 * d, -16 * d, -18 * d);
+      ctx.bezierCurveTo(-16 * d, -26 * d, -6 * d, -28 * d, 0, -20 * d);
+      ctx.bezierCurveTo(6 * d, -28 * d, 16 * d, -26 * d, 16 * d, -18 * d);
+      ctx.bezierCurveTo(16 * d, -8 * d, 0, 0, 0, 5 * d);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+      ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
+      ctx.shadowBlur = 8;
+      ctx.fill();
+      ctx.restore();
+    } else {
+      // 'sparkle' | 'star' (4-point flare + core)
+      const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+      grad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+      grad.addColorStop(0.25, 'rgba(255, 255, 255, 0.6)');
+      grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(32, 2);
+      ctx.quadraticCurveTo(32, 32, 62, 32);
+      ctx.quadraticCurveTo(32, 32, 32, 62);
+      ctx.quadraticCurveTo(32, 32, 2, 32);
+      ctx.quadraticCurveTo(32, 32, 32, 2);
+      ctx.closePath();
+      ctx.fill();
+
+      // Central core
+      ctx.beginPath();
+      ctx.arc(32, 32, 8, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+      ctx.fill();
+    }
+
+    const texture = new THREE_LIB.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  if (!AFRAME.components['ar-particle-system']) {
+    AFRAME.registerComponent('ar-particle-system', {
+      schema: {
+        enabled: { type: 'boolean', default: false },
+        preset: { type: 'string', default: 'cosmic-stardust' },
+        count: { type: 'number', default: 300 },
+        size: { type: 'number', default: 0.04 },
+        color: { type: 'color', default: '#38bdf8' },
+        colorSecondary: { type: 'color', default: '#c084fc' },
+        opacity: { type: 'number', default: 0.85 },
+        blending: { type: 'string', default: 'additive' },
+        speed: { type: 'number', default: 1.0 },
+        spreadX: { type: 'number', default: 3.0 },
+        spreadY: { type: 'number', default: 3.0 },
+        spreadZ: { type: 'number', default: 3.0 },
+        direction: { type: 'string', default: 'float' },
+        shape: { type: 'string', default: 'sparkle' },
+        posX: { type: 'number', default: 0.0 },
+        posY: { type: 'number', default: 0.0 },
+        posZ: { type: 'number', default: 0.0 },
+        rotX: { type: 'number', default: 0.0 },
+        rotY: { type: 'number', default: 0.0 },
+        rotZ: { type: 'number', default: 0.0 },
+        rotationSpeed: { type: 'number', default: 0.2 },
+        twinkle: { type: 'boolean', default: true }
+      },
+
+      init: function () {
+        const THREE_LIB = getPortalThree();
+        this.particleGroup = new THREE_LIB.Group();
+        this.el.setObject3D('particleSystemRoot', this.particleGroup);
+        this.particlesObj = null;
+        this.velocities = [];
+        this.buildParticles();
+
+        this.onTargetFound = () => {
+          if (this.particleGroup && this.data.enabled) {
+            this.particleGroup.visible = true;
+            this.particleGroup.updateMatrixWorld(true);
+          }
+        };
+
+        const sceneEl = this.el.sceneEl;
+        if (sceneEl) {
+          sceneEl.addEventListener('targetFound', this.onTargetFound);
+        }
+        if (this.el.parentEl) {
+          this.el.parentEl.addEventListener('targetFound', this.onTargetFound);
+        }
+        const targetEl = document.getElementById('target-entity');
+        if (targetEl && targetEl !== this.el.parentEl) {
+          targetEl.addEventListener('targetFound', this.onTargetFound);
+        }
+      },
+
+      update: function (oldData) {
+        if (!this.data.enabled) {
+          this.particleGroup.visible = false;
+          return;
+        }
+        this.particleGroup.visible = true;
+        this.particleGroup.position.set(this.data.posX, this.data.posY, this.data.posZ);
+        this.particleGroup.rotation.set(
+          (this.data.rotX * Math.PI) / 180,
+          (this.data.rotY * Math.PI) / 180,
+          (this.data.rotZ * Math.PI) / 180
+        );
+
+        const needRebuild = !oldData ||
+          oldData.count !== this.data.count ||
+          oldData.shape !== this.data.shape ||
+          oldData.color !== this.data.color ||
+          oldData.colorSecondary !== this.data.colorSecondary ||
+          oldData.blending !== this.data.blending ||
+          oldData.spreadX !== this.data.spreadX ||
+          oldData.spreadY !== this.data.spreadY ||
+          oldData.spreadZ !== this.data.spreadZ ||
+          oldData.direction !== this.data.direction;
+
+        if (needRebuild) {
+          this.buildParticles();
+        } else if (this.particlesObj && this.particlesObj.material) {
+          this.particlesObj.material.size = Math.max(0.005, this.data.size);
+          this.particlesObj.material.opacity = Math.max(0.05, this.data.opacity);
+        }
+      },
+
+      buildParticles: function () {
+        const THREE_LIB = getPortalThree();
+        while (this.particleGroup.children.length > 0) {
+          const child = this.particleGroup.children[0];
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (child.material.map) child.material.map.dispose();
+            child.material.dispose();
+          }
+          this.particleGroup.remove(child);
+        }
+        this.particlesObj = null;
+        this.velocities = [];
+
+        if (!this.data.enabled) return;
+
+        const count = Math.max(10, Math.min(2500, this.data.count));
+        const pGeom = new THREE_LIB.BufferGeometry();
+        const positions = new Float32Array(count * 3);
+        const colors = new Float32Array(count * 3);
+
+        const colA = new THREE_LIB.Color(this.data.color);
+        const colB = new THREE_LIB.Color(this.data.colorSecondary || this.data.color);
+        const tempCol = new THREE_LIB.Color();
+
+        const spreadX = Math.max(0.5, this.data.spreadX);
+        const spreadY = Math.max(0.5, this.data.spreadY);
+        const spreadZ = Math.max(0.5, this.data.spreadZ);
+
+        for (let i = 0; i < count; i++) {
+          const t = Math.random();
+          tempCol.copy(colA).lerp(colB, t);
+          colors[i * 3 + 0] = tempCol.r;
+          colors[i * 3 + 1] = tempCol.g;
+          colors[i * 3 + 2] = tempCol.b;
+
+          const px = (Math.random() - 0.5) * spreadX;
+          const py = (Math.random() - 0.5) * spreadY;
+          const pz = (Math.random() - 0.5) * spreadZ;
+
+          positions[i * 3 + 0] = px;
+          positions[i * 3 + 1] = py;
+          positions[i * 3 + 2] = pz;
+
+          const orbitRadius = Math.sqrt(px * px + pz * pz);
+          const orbitAngle = Math.atan2(pz, px);
+
+          this.velocities.push({
+            vx: (Math.random() - 0.5) * 0.25,
+            vy: Math.random() * 0.8 + 0.2,
+            vz: (Math.random() - 0.5) * 0.25,
+            baseX: px,
+            baseY: py,
+            baseZ: pz,
+            phase: Math.random() * Math.PI * 2,
+            orbitRadius: Math.max(0.2, orbitRadius),
+            orbitAngle: orbitAngle,
+            orbitSpeed: (Math.random() * 0.6 + 0.4) * (Math.random() > 0.5 ? 1 : -1)
+          });
+        }
+
+        pGeom.setAttribute('position', new THREE_LIB.BufferAttribute(positions, 3));
+        pGeom.setAttribute('color', new THREE_LIB.BufferAttribute(colors, 3));
+        try {
+          pGeom.computeBoundingSphere();
+          pGeom.computeBoundingBox();
+        } catch {}
+
+        const spriteTex = generateParticleSprite(this.data.shape);
+        const blendMode = this.data.blending === 'normal' ? THREE_LIB.NormalBlending : THREE_LIB.AdditiveBlending;
+
+        const pMat = new THREE_LIB.PointsMaterial({
+          size: Math.max(0.005, this.data.size),
+          map: spriteTex,
+          transparent: true,
+          opacity: Math.max(0.05, this.data.opacity),
+          vertexColors: true,
+          blending: blendMode,
+          depthWrite: false,
+          depthTest: true
+        });
+
+        // In WebAR with transparent canvas composited over <video>, additive blending must set destination alpha
+        // so browser compositor does not treat the particle pixels as 100% transparent.
+        if (blendMode === THREE_LIB.AdditiveBlending) {
+          pMat.blendEquation = THREE_LIB.AddEquation;
+          pMat.blendSrc = THREE_LIB.SrcAlphaFactor;
+          pMat.blendDst = THREE_LIB.OneFactor;
+          pMat.blendSrcAlpha = THREE_LIB.OneFactor;
+          pMat.blendDstAlpha = THREE_LIB.OneMinusSrcAlphaFactor;
+        }
+
+        this.particlesObj = new THREE_LIB.Points(pGeom, pMat);
+        this.particlesObj.frustumCulled = false;
+        this.particlesObj.renderOrder = 999;
+        this.particleGroup.add(this.particlesObj);
+      },
+
+      tick: function (time, timeDelta) {
+        if (!this.data.enabled || !this.particlesObj || !this.particlesObj.geometry) return;
+        if (!this.particleGroup.visible) {
+          this.particleGroup.visible = true;
+        }
+        const dt = (timeDelta || 16) / 1000;
+        const speed = Math.max(0.05, this.data.speed);
+        const posAttr = this.particlesObj.geometry.attributes.position;
+        const posArr = posAttr.array;
+        const dir = this.data.direction;
+        const spreadX = this.data.spreadX;
+        const spreadY = this.data.spreadY;
+        const spreadZ = this.data.spreadZ;
+        const halfY = spreadY / 2;
+        const count = this.velocities.length;
+
+        // Subtle rotation of entire particle cloud
+        if (this.data.rotationSpeed !== 0) {
+          this.particleGroup.rotation.y += this.data.rotationSpeed * dt;
+        }
+
+        for (let i = 0; i < count; i++) {
+          const v = this.velocities[i];
+          const idx = i * 3;
+
+          if (dir === 'up') {
+            posArr[idx + 1] += v.vy * speed * dt;
+            posArr[idx + 0] += Math.sin(time * 0.002 + v.phase) * 0.08 * dt * speed;
+            posArr[idx + 2] += Math.cos(time * 0.002 + v.phase) * 0.08 * dt * speed;
+
+            if (posArr[idx + 1] > halfY) {
+              posArr[idx + 1] = -halfY;
+              posArr[idx + 0] = (Math.random() - 0.5) * spreadX;
+              posArr[idx + 2] = (Math.random() - 0.5) * spreadZ;
+            }
+          } else if (dir === 'down') {
+            posArr[idx + 1] -= v.vy * speed * dt;
+            posArr[idx + 0] += Math.sin(time * 0.0015 + v.phase) * 0.06 * dt * speed;
+            posArr[idx + 2] += Math.cos(time * 0.0015 + v.phase) * 0.06 * dt * speed;
+
+            if (posArr[idx + 1] < -halfY) {
+              posArr[idx + 1] = halfY;
+              posArr[idx + 0] = (Math.random() - 0.5) * spreadX;
+              posArr[idx + 2] = (Math.random() - 0.5) * spreadZ;
+            }
+          } else if (dir === 'vortex') {
+            v.orbitAngle += v.orbitSpeed * speed * dt;
+            posArr[idx + 0] = Math.cos(v.orbitAngle) * v.orbitRadius;
+            posArr[idx + 2] = Math.sin(v.orbitAngle) * v.orbitRadius;
+            posArr[idx + 1] += Math.sin(time * 0.001 + v.phase) * 0.05 * dt * speed;
+            if (posArr[idx + 1] > halfY) posArr[idx + 1] = -halfY;
+            if (posArr[idx + 1] < -halfY) posArr[idx + 1] = halfY;
+          } else if (dir === 'explode') {
+            posArr[idx + 0] += v.vx * speed * dt * 2;
+            posArr[idx + 1] += v.vy * speed * dt * 2;
+            posArr[idx + 2] += v.vz * speed * dt * 2;
+            const distSq = posArr[idx + 0] * posArr[idx + 0] + posArr[idx + 1] * posArr[idx + 1] + posArr[idx + 2] * posArr[idx + 2];
+            if (distSq > (spreadX * spreadX)) {
+              posArr[idx + 0] = (Math.random() - 0.5) * 0.2;
+              posArr[idx + 1] = (Math.random() - 0.5) * 0.2;
+              posArr[idx + 2] = (Math.random() - 0.5) * 0.2;
+            }
+          } else {
+            // 'float' - organic floating harmonic bobbing
+            posArr[idx + 0] += Math.sin(time * 0.001 + v.phase) * 0.06 * dt * speed;
+            posArr[idx + 1] += Math.cos(time * 0.0012 + v.phase) * 0.08 * dt * speed;
+            posArr[idx + 2] += Math.sin(time * 0.0009 + v.phase) * 0.06 * dt * speed;
+          }
+        }
+        posAttr.needsUpdate = true;
+
+        // Subtle shimmering twinkle
+        if (this.data.twinkle && this.particlesObj.material) {
+          const shimmer = 0.85 + Math.sin(time * 0.005) * 0.15;
+          this.particlesObj.material.opacity = this.data.opacity * shimmer;
+        }
+      },
+
+      remove: function () {
+        if (this.onTargetFound) {
+          const sceneEl = this.el.sceneEl;
+          if (sceneEl) {
+            sceneEl.removeEventListener('targetFound', this.onTargetFound);
+            sceneEl.removeEventListener('targetLost', this.onTargetLost);
+          }
+          if (this.el.parentEl) {
+            this.el.parentEl.removeEventListener('targetFound', this.onTargetFound);
+            this.el.parentEl.removeEventListener('targetLost', this.onTargetLost);
+          }
+        }
+        if (this.particleGroup) {
+          while (this.particleGroup.children.length > 0) {
+            const child = this.particleGroup.children[0];
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+              if (child.material.map) child.material.map.dispose();
+              child.material.dispose();
+            }
+            this.particleGroup.remove(child);
+          }
+          this.el.removeObject3D('particleSystemRoot');
+        }
+      }
+    });
+  }
 }
 
 // =========================================================================
@@ -3416,5 +3826,144 @@ export const PORTAL_PRESETS = {
     particleSpeed: 1.4,
     floatingText: 'STARGATE DIMENSION',
     textColor: '#c084fc'
+  }
+};
+
+// =========================================================================
+// 9. EXPORTED AR SCENE PARTICLE CONFIGURATION PRESETS
+// =========================================================================
+export const PARTICLE_PRESETS = {
+  'cosmic-stardust': {
+    name: 'Cosmic Stardust',
+    icon: 'auto_awesome',
+    preset: 'cosmic-stardust',
+    count: 320,
+    size: 0.045,
+    color: '#38bdf8',
+    colorSecondary: '#c084fc',
+    opacity: 0.85,
+    blending: 'additive',
+    speed: 1.0,
+    spreadX: 3.2,
+    spreadY: 2.8,
+    spreadZ: 3.2,
+    direction: 'float',
+    shape: 'sparkle',
+    rotationSpeed: 0.25,
+    twinkle: true
+  },
+  'golden-embers': {
+    name: 'Golden Embers',
+    icon: 'local_fire_department',
+    preset: 'golden-embers',
+    count: 240,
+    size: 0.04,
+    color: '#f59e0b',
+    colorSecondary: '#ef4444',
+    opacity: 0.9,
+    blending: 'additive',
+    speed: 1.4,
+    spreadX: 2.2,
+    spreadY: 3.5,
+    spreadZ: 2.2,
+    direction: 'up',
+    shape: 'circle',
+    rotationSpeed: 0.1,
+    twinkle: true
+  },
+  'winter-snow': {
+    name: 'Winter Snow',
+    icon: 'ac_unit',
+    preset: 'winter-snow',
+    count: 380,
+    size: 0.035,
+    color: '#ffffff',
+    colorSecondary: '#e0f2fe',
+    opacity: 0.8,
+    blending: 'normal',
+    speed: 0.7,
+    spreadX: 3.5,
+    spreadY: 3.5,
+    spreadZ: 3.5,
+    direction: 'down',
+    shape: 'circle',
+    rotationSpeed: 0.05,
+    twinkle: false
+  },
+  'cyber-rain': {
+    name: 'Cyber Rain',
+    icon: 'terminal',
+    preset: 'cyber-rain',
+    count: 300,
+    size: 0.05,
+    color: '#10b981',
+    colorSecondary: '#06b6d4',
+    opacity: 0.9,
+    blending: 'additive',
+    speed: 2.2,
+    spreadX: 2.8,
+    spreadY: 4.0,
+    spreadZ: 2.8,
+    direction: 'down',
+    shape: 'diamond',
+    rotationSpeed: 0.0,
+    twinkle: true
+  },
+  'magic-fireflies': {
+    name: 'Magic Fireflies',
+    icon: 'brightness_5',
+    preset: 'magic-fireflies',
+    count: 160,
+    size: 0.065,
+    color: '#a3e635',
+    colorSecondary: '#fbbf24',
+    opacity: 0.95,
+    blending: 'additive',
+    speed: 0.5,
+    spreadX: 3.0,
+    spreadY: 2.5,
+    spreadZ: 3.0,
+    direction: 'float',
+    shape: 'sparkle',
+    rotationSpeed: 0.15,
+    twinkle: true
+  },
+  'galaxy-vortex': {
+    name: 'Galaxy Vortex',
+    icon: 'cyclone',
+    preset: 'galaxy-vortex',
+    count: 420,
+    size: 0.04,
+    color: '#ec4899',
+    colorSecondary: '#8b5cf6',
+    opacity: 0.9,
+    blending: 'additive',
+    speed: 1.5,
+    spreadX: 3.6,
+    spreadY: 2.0,
+    spreadZ: 3.6,
+    direction: 'vortex',
+    shape: 'star',
+    rotationSpeed: 0.8,
+    twinkle: true
+  },
+  'romantic-hearts': {
+    name: 'Romantic Hearts',
+    icon: 'favorite',
+    preset: 'romantic-hearts',
+    count: 140,
+    size: 0.07,
+    color: '#f43f5e',
+    colorSecondary: '#fda4af',
+    opacity: 0.9,
+    blending: 'normal',
+    speed: 0.8,
+    spreadX: 2.5,
+    spreadY: 3.2,
+    spreadZ: 2.5,
+    direction: 'up',
+    shape: 'heart',
+    rotationSpeed: 0.2,
+    twinkle: true
   }
 };

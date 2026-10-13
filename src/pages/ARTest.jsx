@@ -13,7 +13,7 @@ if (typeof THREE !== 'undefined' && THREE.Cache) {
 }
 import { httpsCallable } from 'firebase/functions';
 import { logEvent } from 'firebase/analytics';
-import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfaceFrame, purgeAllSceneVideoLayers, PORTAL_PRESETS } from '../utils/aframe-components';
+import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfaceFrame, purgeAllSceneVideoLayers, PORTAL_PRESETS, PARTICLE_PRESETS } from '../utils/aframe-components';
 
 // =========================================================================
 // 1. REUSABLE TYPED SLIDER CONTROL WITH DUAL-WAY DATA BINDING
@@ -850,6 +850,13 @@ const ARTest = () => {
   // Portal Interior Environment (What goes inside the virtual window)
   const [portalInteriorType, setPortalInteriorType] = useState('nebula'); // 'nebula' | 'starfield' | 'grid-room' | 'matrix' | 'skybox' | 'void'
   const [portalSkyboxUrl, setPortalSkyboxUrl] = useState('');
+  const [portalSkyboxScale, setPortalSkyboxScale] = useState(1.0);
+  const [portalSkyboxPosX, setPortalSkyboxPosX] = useState(0.0);
+  const [portalSkyboxPosY, setPortalSkyboxPosY] = useState(0.0);
+  const [portalSkyboxPosZ, setPortalSkyboxPosZ] = useState(0.0);
+  const [portalSkyboxRotX, setPortalSkyboxRotX] = useState(0);
+  const [portalSkyboxRotY, setPortalSkyboxRotY] = useState(0);
+  const [portalSkyboxRotZ, setPortalSkyboxRotZ] = useState(0);
   const [portalInteriorColor, setPortalInteriorColor] = useState('#050714');
   const [portalWallColor, setPortalWallColor] = useState('#0f172a');
   const [portalFloorColor, setPortalFloorColor] = useState('#020617');
@@ -893,6 +900,47 @@ const ARTest = () => {
   // Base Outside Model Visibility
   const [portalHideOutsideModel, setPortalHideOutsideModel] = useState(false);
 
+  // Standalone AR Scene Particle System
+  const [particleSystemEnabled, setParticleSystemEnabled] = useState(false);
+  const [particlePreset, setParticlePreset] = useState('cosmic-stardust');
+  const [particleCount, setParticleCount] = useState(300);
+  const [particleSize, setParticleSize] = useState(0.04);
+  const [particleColor, setParticleColor] = useState('#38bdf8');
+  const [particleColorSecondary, setParticleColorSecondary] = useState('#c084fc');
+  const [particleOpacity, setParticleOpacity] = useState(0.85);
+  const [particleBlending, setParticleBlending] = useState('additive');
+  const [particleSpeed, setParticleSpeed] = useState(1.0);
+  const [particleSpreadX, setParticleSpreadX] = useState(3.0);
+  const [particleSpreadY, setParticleSpreadY] = useState(3.0);
+  const [particleSpreadZ, setParticleSpreadZ] = useState(3.0);
+  const [particleDirection, setParticleDirection] = useState('float');
+  const [particleShape, setParticleShape] = useState('sparkle');
+  const [particlePosX, setParticlePosX] = useState(0.0);
+  const [particlePosY, setParticlePosY] = useState(0.0);
+  const [particlePosZ, setParticlePosZ] = useState(0.0);
+  const [particleRotationSpeed, setParticleRotationSpeed] = useState(0.2);
+  const [particleTwinkle, setParticleTwinkle] = useState(true);
+
+  const applyParticlePreset = (presetKey) => {
+    const p = PARTICLE_PRESETS[presetKey];
+    if (!p) return;
+    setParticlePreset(presetKey);
+    if (p.count !== undefined) setParticleCount(p.count);
+    if (p.size !== undefined) setParticleSize(p.size);
+    if (p.color !== undefined) setParticleColor(p.color);
+    if (p.colorSecondary !== undefined) setParticleColorSecondary(p.colorSecondary);
+    if (p.opacity !== undefined) setParticleOpacity(p.opacity);
+    if (p.blending !== undefined) setParticleBlending(p.blending);
+    if (p.speed !== undefined) setParticleSpeed(p.speed);
+    if (p.spreadX !== undefined) setParticleSpreadX(p.spreadX);
+    if (p.spreadY !== undefined) setParticleSpreadY(p.spreadY);
+    if (p.spreadZ !== undefined) setParticleSpreadZ(p.spreadZ);
+    if (p.direction !== undefined) setParticleDirection(p.direction);
+    if (p.shape !== undefined) setParticleShape(p.shape);
+    if (p.rotationSpeed !== undefined) setParticleRotationSpeed(p.rotationSpeed);
+    if (p.twinkle !== undefined) setParticleTwinkle(p.twinkle);
+  };
+
   // Staged Local Files for Portal
   const [selectedPortalSkyboxFile, setSelectedPortalSkyboxFile] = useState(null);
   const [selectedPortalGlbFile, setSelectedPortalGlbFile] = useState(null);
@@ -913,6 +961,13 @@ const ARTest = () => {
     if (p.frameGlow !== undefined) setPortalFrameGlow(p.frameGlow);
     if (p.interiorType !== undefined) setPortalInteriorType(p.interiorType);
     if (p.skyboxUrl !== undefined) setPortalSkyboxUrl(p.skyboxUrl);
+    if (p.skyboxScale !== undefined) setPortalSkyboxScale(p.skyboxScale);
+    if (p.skyboxPosX !== undefined) setPortalSkyboxPosX(p.skyboxPosX);
+    if (p.skyboxPosY !== undefined) setPortalSkyboxPosY(p.skyboxPosY);
+    if (p.skyboxPosZ !== undefined) setPortalSkyboxPosZ(p.skyboxPosZ);
+    if (p.skyboxRotX !== undefined) setPortalSkyboxRotX(p.skyboxRotX);
+    if (p.skyboxRotY !== undefined) setPortalSkyboxRotY(p.skyboxRotY);
+    if (p.skyboxRotZ !== undefined) setPortalSkyboxRotZ(p.skyboxRotZ);
     if (p.interiorColor !== undefined) setPortalInteriorColor(p.interiorColor);
     if (p.wallColor !== undefined) setPortalWallColor(p.wallColor);
     if (p.floorColor !== undefined) setPortalFloorColor(p.floorColor);
@@ -2873,6 +2928,13 @@ const ARTest = () => {
         if (pCfg.rotZ !== undefined) setPortalRotZ(Number(pCfg.rotZ));
         if (pCfg.interiorType) setPortalInteriorType(pCfg.interiorType);
         if (pCfg.skyboxUrl !== undefined) setPortalSkyboxUrl(pCfg.skyboxUrl);
+        if (pCfg.skyboxScale !== undefined) setPortalSkyboxScale(Number(pCfg.skyboxScale));
+        if (pCfg.skyboxPosX !== undefined) setPortalSkyboxPosX(Number(pCfg.skyboxPosX));
+        if (pCfg.skyboxPosY !== undefined) setPortalSkyboxPosY(Number(pCfg.skyboxPosY));
+        if (pCfg.skyboxPosZ !== undefined) setPortalSkyboxPosZ(Number(pCfg.skyboxPosZ));
+        if (pCfg.skyboxRotX !== undefined) setPortalSkyboxRotX(Number(pCfg.skyboxRotX));
+        if (pCfg.skyboxRotY !== undefined) setPortalSkyboxRotY(Number(pCfg.skyboxRotY));
+        if (pCfg.skyboxRotZ !== undefined) setPortalSkyboxRotZ(Number(pCfg.skyboxRotZ));
         if (pCfg.interiorColor) setPortalInteriorColor(pCfg.interiorColor);
         if (pCfg.wallColor) setPortalWallColor(pCfg.wallColor);
         if (pCfg.floorColor) setPortalFloorColor(pCfg.floorColor);
@@ -2907,6 +2969,32 @@ const ARTest = () => {
         if (pCfg.hideOutsideModel !== undefined) setPortalHideOutsideModel(Boolean(pCfg.hideOutsideModel));
       } else {
         setPortalEnabled(false);
+      }
+
+      // Populate AR Particle System Settings if configured on batch
+      const partCfg = cfg.particleConfig || cfg.particleSystem || cfg.particlesConfig || null;
+      if (partCfg) {
+        if (partCfg.enabled !== undefined) setParticleSystemEnabled(Boolean(partCfg.enabled));
+        if (partCfg.preset) setParticlePreset(partCfg.preset);
+        if (partCfg.count !== undefined) setParticleCount(Number(partCfg.count));
+        if (partCfg.size !== undefined) setParticleSize(Number(partCfg.size));
+        if (partCfg.color) setParticleColor(partCfg.color);
+        if (partCfg.colorSecondary) setParticleColorSecondary(partCfg.colorSecondary);
+        if (partCfg.opacity !== undefined) setParticleOpacity(Number(partCfg.opacity));
+        if (partCfg.blending) setParticleBlending(partCfg.blending);
+        if (partCfg.speed !== undefined) setParticleSpeed(Number(partCfg.speed));
+        if (partCfg.spreadX !== undefined) setParticleSpreadX(Number(partCfg.spreadX));
+        if (partCfg.spreadY !== undefined) setParticleSpreadY(Number(partCfg.spreadY));
+        if (partCfg.spreadZ !== undefined) setParticleSpreadZ(Number(partCfg.spreadZ));
+        if (partCfg.direction) setParticleDirection(partCfg.direction);
+        if (partCfg.shape) setParticleShape(partCfg.shape);
+        if (partCfg.posX !== undefined) setParticlePosX(Number(partCfg.posX));
+        if (partCfg.posY !== undefined) setParticlePosY(Number(partCfg.posY));
+        if (partCfg.posZ !== undefined) setParticlePosZ(Number(partCfg.posZ));
+        if (partCfg.rotationSpeed !== undefined) setParticleRotationSpeed(Number(partCfg.rotationSpeed));
+        if (partCfg.twinkle !== undefined) setParticleTwinkle(Boolean(partCfg.twinkle));
+      } else {
+        setParticleSystemEnabled(false);
       }
 
       if (cfg && cfg.meshOverrides) {
@@ -3040,6 +3128,13 @@ const ARTest = () => {
         rotZ: Number(portalRotZ),
         interiorType: portalInteriorType,
         skyboxUrl: portalSkyboxUrl,
+        skyboxScale: Number(portalSkyboxScale),
+        skyboxPosX: Number(portalSkyboxPosX),
+        skyboxPosY: Number(portalSkyboxPosY),
+        skyboxPosZ: Number(portalSkyboxPosZ),
+        skyboxRotX: Number(portalSkyboxRotX),
+        skyboxRotY: Number(portalSkyboxRotY),
+        skyboxRotZ: Number(portalSkyboxRotZ),
         interiorColor: portalInteriorColor,
         wallColor: portalWallColor,
         floorColor: portalFloorColor,
@@ -3073,6 +3168,27 @@ const ARTest = () => {
         textPosZ: Number(portalTextPosZ),
         hideOutsideModel: Boolean(portalHideOutsideModel)
       },
+      particleConfig: {
+        enabled: Boolean(particleSystemEnabled),
+        preset: particlePreset,
+        count: Number(particleCount),
+        size: Number(particleSize),
+        color: particleColor,
+        colorSecondary: particleColorSecondary,
+        opacity: Number(particleOpacity),
+        blending: particleBlending,
+        speed: Number(particleSpeed),
+        spreadX: Number(particleSpreadX),
+        spreadY: Number(particleSpreadY),
+        spreadZ: Number(particleSpreadZ),
+        direction: particleDirection,
+        shape: particleShape,
+        posX: Number(particlePosX),
+        posY: Number(particlePosY),
+        posZ: Number(particlePosZ),
+        rotationSpeed: Number(particleRotationSpeed),
+        twinkle: Boolean(particleTwinkle)
+      },
       updatedAt: new Date().toISOString()
     };
   };
@@ -3091,13 +3207,14 @@ const ARTest = () => {
         console.warn('[ARTest] localStorage sync failed:', storageErr);
       }
 
-      // 2. Synchronize to Firestore so physical markers / mobile devices get the live portal
+      // 2. Synchronize to Firestore so physical markers / mobile devices get the live portal & particles
       try {
         const batchRef = doc(db, 'batches', targetBatch);
         const assetRef = doc(db, 'assets', targetBatch);
         const syncPayload = {
           ar_config: currentConfig,
-          portalConfig: currentConfig.portalConfig
+          portalConfig: currentConfig.portalConfig,
+          particleConfig: currentConfig.particleConfig
         };
         await Promise.allSettled([
           setDoc(batchRef, syncPayload, { merge: true }),
@@ -3107,12 +3224,12 @@ const ARTest = () => {
         console.warn('[ARTest] Background Firestore sync failed:', fsErr);
       }
 
-      // 3. Open WebAR experience in new tab with cache-buster and portal flag
-      const targetUrl = `/ar/${targetBatch}?t=${Date.now()}&portal=${portalEnabled ? '1' : '0'}`;
+      // 3. Open WebAR experience in new tab with cache-buster, portal flag, and particles flag
+      const targetUrl = `/ar/${targetBatch}?t=${Date.now()}&portal=${portalEnabled ? '1' : '0'}&particles=${particleSystemEnabled ? '1' : '0'}`;
       window.open(targetUrl, '_blank', 'noopener,noreferrer');
     } catch (err) {
       console.error('[ARTest] Error launching AR experience:', err);
-      window.open(`/ar/${targetBatch}?portal=${portalEnabled ? '1' : '0'}`, '_blank', 'noopener,noreferrer');
+      window.open(`/ar/${targetBatch}?portal=${portalEnabled ? '1' : '0'}&particles=${particleSystemEnabled ? '1' : '0'}`, '_blank', 'noopener,noreferrer');
     } finally {
       setTimeout(() => setIsLaunchingAR(false), 1200);
     }
@@ -3326,6 +3443,13 @@ const ARTest = () => {
           rotZ: Number(portalRotZ),
           interiorType: portalInteriorType,
           skyboxUrl: finalPortalSkyboxUrl || portalSkyboxUrl,
+          skyboxScale: Number(portalSkyboxScale),
+          skyboxPosX: Number(portalSkyboxPosX),
+          skyboxPosY: Number(portalSkyboxPosY),
+          skyboxPosZ: Number(portalSkyboxPosZ),
+          skyboxRotX: Number(portalSkyboxRotX),
+          skyboxRotY: Number(portalSkyboxRotY),
+          skyboxRotZ: Number(portalSkyboxRotZ),
           interiorColor: portalInteriorColor,
           wallColor: portalWallColor,
           floorColor: portalFloorColor,
@@ -3359,6 +3483,27 @@ const ARTest = () => {
           textPosZ: Number(portalTextPosZ),
           hideOutsideModel: Boolean(portalHideOutsideModel)
         },
+        particleConfig: {
+          enabled: Boolean(particleSystemEnabled),
+          preset: particlePreset,
+          count: Number(particleCount),
+          size: Number(particleSize),
+          color: particleColor,
+          colorSecondary: particleColorSecondary,
+          opacity: Number(particleOpacity),
+          blending: particleBlending,
+          speed: Number(particleSpeed),
+          spreadX: Number(particleSpreadX),
+          spreadY: Number(particleSpreadY),
+          spreadZ: Number(particleSpreadZ),
+          direction: particleDirection,
+          shape: particleShape,
+          posX: Number(particlePosX),
+          posY: Number(particlePosY),
+          posZ: Number(particlePosZ),
+          rotationSpeed: Number(particleRotationSpeed),
+          twinkle: Boolean(particleTwinkle)
+        },
         updatedAt: new Date().toISOString()
       };
 
@@ -3368,7 +3513,8 @@ const ARTest = () => {
         video_file_path: videoFilePath,
         ...(gltfFilePath ? { gltf_file_path: gltfFilePath } : {}),
         ar_config: arConfigPayload,
-        portalConfig: arConfigPayload.portalConfig
+        portalConfig: arConfigPayload.portalConfig,
+        particleConfig: arConfigPayload.particleConfig
       };
 
       // Save to both batches and assets collections with merge: true to guarantee persistence
@@ -3789,6 +3935,20 @@ const ARTest = () => {
             <span>Portal</span>
             {portalEnabled && (
               <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse ml-0.5"></span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('particles')}
+            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'particles'
+              ? 'bg-neutral-800 text-amber-300 font-bold shadow border border-amber-500/50'
+              : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
+              }`}
+          >
+            <span className="material-symbols-outlined text-sm text-amber-400">flare</span>
+            <span>Particles</span>
+            {particleSystemEnabled && (
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse ml-0.5"></span>
             )}
           </button>
           <button
@@ -6514,6 +6674,131 @@ const ARTest = () => {
                         />
                       </label>
                     </div>
+
+                    {/* Panorama Size & 3D Placement Controls */}
+                    <div className="pt-2 border-t border-neutral-800/80 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-sky-300 flex items-center gap-1">
+                          <span className="material-symbols-outlined text-xs">open_with</span>
+                          Resize & Move Panorama Image
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPortalSkyboxScale(1.0);
+                            setPortalSkyboxPosX(0.0);
+                            setPortalSkyboxPosY(0.0);
+                            setPortalSkyboxPosZ(0.0);
+                            setPortalSkyboxRotX(0);
+                            setPortalSkyboxRotY(0);
+                            setPortalSkyboxRotZ(0);
+                          }}
+                          className="text-[10px] text-neutral-400 hover:text-white flex items-center gap-0.5 px-1.5 py-0.5 bg-neutral-800/80 rounded"
+                          title="Reset Panorama to default scale and center position"
+                        >
+                          <span className="material-symbols-outlined text-[11px]">restart_alt</span> Reset
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumberSliderInput
+                          label="Panorama Scale"
+                          value={portalSkyboxScale}
+                          onChange={setPortalSkyboxScale}
+                          min={0.2}
+                          max={4.0}
+                          step={0.05}
+                          color="sky"
+                          precision={2}
+                          resetValue={1.0}
+                          showRange={true}
+                        />
+                        <NumberSliderInput
+                          label="Rotate Yaw (Y)"
+                          value={portalSkyboxRotY}
+                          onChange={setPortalSkyboxRotY}
+                          min={0}
+                          max={360}
+                          step={1}
+                          unit="°"
+                          color="sky"
+                          precision={0}
+                          resetValue={0}
+                          showRange={true}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <NumberSliderInput
+                          label="Pos X (Left/Right)"
+                          value={portalSkyboxPosX}
+                          onChange={setPortalSkyboxPosX}
+                          min={-6.0}
+                          max={6.0}
+                          step={0.1}
+                          unit="m"
+                          color="sky"
+                          precision={1}
+                          resetValue={0.0}
+                          showRange={true}
+                        />
+                        <NumberSliderInput
+                          label="Pos Y (Height)"
+                          value={portalSkyboxPosY}
+                          onChange={setPortalSkyboxPosY}
+                          min={-6.0}
+                          max={6.0}
+                          step={0.1}
+                          unit="m"
+                          color="sky"
+                          precision={1}
+                          resetValue={0.0}
+                          showRange={true}
+                        />
+                        <NumberSliderInput
+                          label="Pos Z (Depth)"
+                          value={portalSkyboxPosZ}
+                          onChange={setPortalSkyboxPosZ}
+                          min={-10.0}
+                          max={10.0}
+                          step={0.1}
+                          unit="m"
+                          color="sky"
+                          precision={1}
+                          resetValue={0.0}
+                          showRange={true}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumberSliderInput
+                          label="Tilt Pitch (X)"
+                          value={portalSkyboxRotX}
+                          onChange={setPortalSkyboxRotX}
+                          min={-90}
+                          max={90}
+                          step={1}
+                          unit="°"
+                          color="sky"
+                          precision={0}
+                          resetValue={0}
+                          showRange={true}
+                        />
+                        <NumberSliderInput
+                          label="Roll (Z)"
+                          value={portalSkyboxRotZ}
+                          onChange={setPortalSkyboxRotZ}
+                          min={-180}
+                          max={180}
+                          step={1}
+                          unit="°"
+                          color="sky"
+                          precision={0}
+                          resetValue={0}
+                          showRange={true}
+                        />
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -7002,6 +7287,432 @@ const ARTest = () => {
               </div>
             </div>
           )}
+
+          {/* ========================================================================= */}
+          {/* TAB: SCENE PARTICLE SYSTEM CONTROLS                                       */}
+          {/* ========================================================================= */}
+          {activeTab === 'particles' && (
+            <div className="space-y-4">
+              {/* Header Card & Master Switch */}
+              <div className="p-3 bg-neutral-900/90 rounded-xl border border-neutral-800 space-y-3 shadow-lg">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300">
+                      <span className="material-symbols-outlined text-lg">flare</span>
+                    </div>
+                    <div>
+                      <h2 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                        Scene Particle System
+                        {particleSystemEnabled && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono font-semibold">
+                            ACTIVE
+                          </span>
+                        )}
+                      </h2>
+                      <p className="text-[10px] text-neutral-400">Atmospheric 3D particles & visual FX for the scene</p>
+                    </div>
+                  </div>
+
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={particleSystemEnabled}
+                      onChange={(e) => setParticleSystemEnabled(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500 shadow-inner"></div>
+                  </label>
+                </div>
+              </div>
+
+              {/* 1-Click Particle Style Presets */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-amber-400">auto_awesome</span>
+                    Atmospheric Presets
+                  </span>
+                  <span className="text-[10px] text-neutral-500">1-click styles</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  {Object.entries(PARTICLE_PRESETS).map(([key, p]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => {
+                        if (!particleSystemEnabled) setParticleSystemEnabled(true);
+                        applyParticlePreset(key);
+                      }}
+                      className={`p-2 rounded-lg text-left transition-all border flex items-center gap-2 ${particlePreset === key && particleSystemEnabled
+                        ? 'bg-amber-950/40 border-amber-500/60 text-white shadow-sm'
+                        : 'bg-neutral-900/60 hover:bg-neutral-800 border-neutral-800/80 text-neutral-300'
+                        }`}
+                    >
+                      <div
+                        className="w-7 h-7 rounded-md flex items-center justify-center shrink-0 border border-white/10"
+                        style={{ backgroundColor: `${p.color}25`, color: p.color }}
+                      >
+                        <span className="material-symbols-outlined text-sm">{p.icon || 'flare'}</span>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[11px] font-bold truncate leading-tight">{p.name}</div>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: p.color }}></span>
+                          <span className="w-2 h-2 rounded-full inline-block" style={{ backgroundColor: p.colorSecondary }}></span>
+                          <span className="text-[9px] text-neutral-400 capitalize truncate">{p.direction}</span>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Particle Appearance & Density */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-indigo-400">palette</span>
+                  Appearance & Colors
+                </span>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-semibold text-neutral-300">Primary Color</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={particleColor}
+                        onChange={(e) => setParticleColor(e.target.value)}
+                        className="w-7 h-7 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                      />
+                      <input
+                        type="text"
+                        value={particleColor}
+                        onChange={(e) => setParticleColor(e.target.value)}
+                        className="w-20 px-1.5 py-0.5 text-xs font-mono bg-black/60 border border-neutral-700 rounded text-neutral-300"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-semibold text-neutral-300">Secondary Color (Gradient)</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={particleColorSecondary}
+                        onChange={(e) => setParticleColorSecondary(e.target.value)}
+                        className="w-7 h-7 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                      />
+                      <input
+                        type="text"
+                        value={particleColorSecondary}
+                        onChange={(e) => setParticleColorSecondary(e.target.value)}
+                        className="w-20 px-1.5 py-0.5 text-xs font-mono bg-black/60 border border-neutral-700 rounded text-neutral-300"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <NumberSliderInput
+                    label="Particle Count"
+                    value={particleCount}
+                    onChange={setParticleCount}
+                    min={20}
+                    max={1200}
+                    step={20}
+                    color="amber"
+                    precision={0}
+                    resetValue={300}
+                    showRange={true}
+                  />
+                  <NumberSliderInput
+                    label="Particle Size"
+                    value={particleSize}
+                    onChange={setParticleSize}
+                    min={0.01}
+                    max={0.25}
+                    step={0.005}
+                    color="amber"
+                    precision={3}
+                    resetValue={0.04}
+                    showRange={true}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <NumberSliderInput
+                    label="Opacity"
+                    value={particleOpacity}
+                    onChange={setParticleOpacity}
+                    min={0.1}
+                    max={1.0}
+                    step={0.05}
+                    color="amber"
+                    precision={2}
+                    resetValue={0.85}
+                    showRange={true}
+                  />
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-semibold text-neutral-300">Blending Mode</span>
+                    <div className="grid grid-cols-2 gap-1 pt-0.5">
+                      {['additive', 'normal'].map((bMode) => (
+                        <button
+                          key={bMode}
+                          type="button"
+                          onClick={() => setParticleBlending(bMode)}
+                          className={`py-1 rounded text-[10px] font-semibold capitalize border ${particleBlending === bMode
+                            ? 'bg-amber-600/30 text-amber-200 border-amber-400'
+                            : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-400 border-neutral-800'
+                            }`}
+                        >
+                          {bMode === 'additive' ? '✨ Glowing' : 'Solid'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Particle Shape Selector */}
+                <div className="space-y-1.5 pt-1">
+                  <span className="text-[11px] font-semibold text-neutral-300">Particle Shape</span>
+                  <div className="grid grid-cols-5 gap-1">
+                    {[
+                      { id: 'sparkle', label: 'Sparkle', icon: 'auto_awesome' },
+                      { id: 'circle', label: 'Glow Dot', icon: 'lens' },
+                      { id: 'star', label: 'Star', icon: 'star' },
+                      { id: 'diamond', label: 'Diamond', icon: 'square' },
+                      { id: 'heart', label: 'Heart', icon: 'favorite' }
+                    ].map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => setParticleShape(s.id)}
+                        className={`py-1.5 px-1 rounded flex flex-col items-center justify-center gap-0.5 border text-center transition-all ${particleShape === s.id
+                          ? 'bg-amber-500/20 text-amber-200 border-amber-400 font-bold'
+                          : 'bg-neutral-900/60 hover:bg-neutral-800 text-neutral-400 border-neutral-800'
+                          }`}
+                        title={s.label}
+                      >
+                        <span className="material-symbols-outlined text-sm">{s.icon}</span>
+                        <span className="text-[9px] truncate w-full">{s.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Twinkle Toggle */}
+                <div className="flex items-center justify-between p-2 bg-neutral-900/60 rounded-lg border border-neutral-800">
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-sm text-amber-400">shutter_speed</span>
+                    <div>
+                      <span className="text-xs font-semibold text-neutral-200">Shimmering Twinkle</span>
+                      <p className="text-[10px] text-neutral-400">Pulsing luminance oscillation</p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={particleTwinkle}
+                      onChange={(e) => setParticleTwinkle(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-8 h-4 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[1px] after:left-[1px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-amber-500"></div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Motion Dynamics & Movement */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-cyan-400">air</span>
+                  Motion Dynamics & Direction
+                </span>
+
+                <div className="space-y-1">
+                  <span className="text-[11px] font-semibold text-neutral-300">Flow Direction</span>
+                  <div className="grid grid-cols-5 gap-1">
+                    {[
+                      { id: 'float', label: 'Floating', icon: 'all_inclusive' },
+                      { id: 'up', label: 'Rising', icon: 'north' },
+                      { id: 'down', label: 'Falling', icon: 'south' },
+                      { id: 'vortex', label: 'Vortex', icon: 'cyclone' },
+                      { id: 'explode', label: 'Explode', icon: 'fullscreen' }
+                    ].map((d) => (
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() => setParticleDirection(d.id)}
+                        className={`py-1.5 px-1 rounded flex flex-col items-center justify-center gap-0.5 border text-center transition-all ${particleDirection === d.id
+                          ? 'bg-cyan-500/20 text-cyan-200 border-cyan-400 font-bold'
+                          : 'bg-neutral-900/60 hover:bg-neutral-800 text-neutral-400 border-neutral-800'
+                          }`}
+                        title={d.label}
+                      >
+                        <span className="material-symbols-outlined text-sm">{d.icon}</span>
+                        <span className="text-[9px] truncate w-full">{d.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <NumberSliderInput
+                    label="Animation Speed"
+                    value={particleSpeed}
+                    onChange={setParticleSpeed}
+                    min={0.1}
+                    max={4.0}
+                    step={0.1}
+                    unit="x"
+                    color="cyan"
+                    precision={1}
+                    resetValue={1.0}
+                    showRange={true}
+                  />
+                  <NumberSliderInput
+                    label="Field Rotation"
+                    value={particleRotationSpeed}
+                    onChange={setParticleRotationSpeed}
+                    min={-1.5}
+                    max={1.5}
+                    step={0.05}
+                    color="cyan"
+                    precision={2}
+                    resetValue={0.2}
+                    showRange={true}
+                  />
+                </div>
+              </div>
+
+              {/* Spread Dimensions (Bounding Volume) */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-emerald-400">view_in_ar</span>
+                  Volume Spread & Bounds
+                </span>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <NumberSliderInput
+                    label="Width (X)"
+                    value={particleSpreadX}
+                    onChange={setParticleSpreadX}
+                    min={0.5}
+                    max={8.0}
+                    step={0.1}
+                    unit="m"
+                    color="emerald"
+                    precision={1}
+                    resetValue={3.0}
+                    showRange={true}
+                  />
+                  <NumberSliderInput
+                    label="Height (Y)"
+                    value={particleSpreadY}
+                    onChange={setParticleSpreadY}
+                    min={0.5}
+                    max={8.0}
+                    step={0.1}
+                    unit="m"
+                    color="emerald"
+                    precision={1}
+                    resetValue={3.0}
+                    showRange={true}
+                  />
+                  <NumberSliderInput
+                    label="Depth (Z)"
+                    value={particleSpreadZ}
+                    onChange={setParticleSpreadZ}
+                    min={0.5}
+                    max={8.0}
+                    step={0.1}
+                    unit="m"
+                    color="emerald"
+                    precision={1}
+                    resetValue={3.0}
+                    showRange={true}
+                  />
+                </div>
+              </div>
+
+              {/* 3D Spatial Position Offset */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-rose-400">open_with</span>
+                    Center Position
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setParticlePosX(0.0);
+                      setParticlePosY(0.0);
+                      setParticlePosZ(0.0);
+                    }}
+                    className="text-[10px] text-neutral-400 hover:text-white flex items-center gap-0.5 px-1.5 py-0.5 bg-neutral-800/80 rounded"
+                    title="Reset to center (0, 0, 0)"
+                  >
+                    <span className="material-symbols-outlined text-[11px]">restart_alt</span> Reset
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <NumberSliderInput
+                    label="Pos X (Left/Right)"
+                    value={particlePosX}
+                    onChange={setParticlePosX}
+                    min={-4.0}
+                    max={4.0}
+                    step={0.05}
+                    unit="m"
+                    color="rose"
+                    precision={2}
+                    resetValue={0.0}
+                    showRange={true}
+                  />
+                  <NumberSliderInput
+                    label="Pos Y (Height)"
+                    value={particlePosY}
+                    onChange={setParticlePosY}
+                    min={-4.0}
+                    max={4.0}
+                    step={0.05}
+                    unit="m"
+                    color="rose"
+                    precision={2}
+                    resetValue={0.0}
+                    showRange={true}
+                  />
+                  <NumberSliderInput
+                    label="Pos Z (Depth)"
+                    value={particlePosZ}
+                    onChange={setParticlePosZ}
+                    min={-4.0}
+                    max={4.0}
+                    step={0.05}
+                    unit="m"
+                    color="rose"
+                    precision={2}
+                    resetValue={0.0}
+                    showRange={true}
+                  />
+                </div>
+              </div>
+
+              {/* Dedicated Save Particle Configuration Button */}
+              <div className="pt-2 border-t border-neutral-800/80 space-y-2">
+                <button
+                  type="button"
+                  disabled={savingConfig}
+                  onClick={handleSaveConfig}
+                  className="w-full py-2.5 px-4 bg-gradient-to-r from-amber-600 via-orange-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 text-white font-bold rounded-lg shadow-lg shadow-amber-500/20 text-xs flex items-center justify-center gap-2 transition-all disabled:opacity-50 active:scale-[0.99]"
+                >
+                  <span className="material-symbols-outlined text-sm">save</span>
+                  <span>{savingConfig ? 'Saving Particle Configuration...' : `Save Particles to Batch (${batchId || 'Active'})`}</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -7014,9 +7725,9 @@ const ARTest = () => {
         style={{ touchAction: 'none' }}
         onContextMenu={(e) => e.preventDefault()}
       >
-        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled) ? (
+        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled) ? (
           <a-scene
-            key={batchId || localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || 'ar-portal-scene'}
+            key={batchId || localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || (portalEnabled ? 'portal-active' : '') || (particleSystemEnabled ? 'particles-active' : '') || 'ar-portal-scene'}
             embedded
             color-space="sRGB"
             renderer="colorManagement: true; physicallyCorrectLights: true; antialias: true; stencil: true;"
@@ -7069,7 +7780,15 @@ const ARTest = () => {
             {portalEnabled && (
               <a-entity
                 id="ar-portal-anchor"
-                ar-portal={`enabled: ${portalEnabled}; shape: ${portalShape}; width: ${portalWidth}; height: ${portalHeight}; radius: ${portalRadius}; depth: ${portalDepth}; frameColor: ${portalFrameColor}; frameWidth: ${portalFrameWidth}; frameDepth: 0.08; frameEmissive: ${portalFrameEmissive}; frameEmissiveIntensity: ${portalFrameEmissiveIntensity}; frameGlow: ${portalFrameGlow}; glassTint: ${portalGlassTint}; glassOpacity: ${portalGlassOpacity}; interiorType: ${portalInteriorType}; skyboxUrl: ${portalSkyboxUrl}; interiorColor: ${portalInteriorColor}; wallColor: ${portalWallColor}; floorColor: ${portalFloorColor}; gridColor: ${portalGridColor}; interiorLightColor: ${portalLightColor}; interiorLightIntensity: ${portalLightIntensity}; interiorModelType: ${portalModelType}; artifactType: ${portalArtifactType}; customModelUrl: ${portalCustomModelUrl}; currentModelUrl: ${localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || ''}; modelScale: ${portalModelScale}; modelPosX: ${portalModelPosX}; modelPosY: ${portalModelPosY}; modelPosZ: ${portalModelPosZ}; modelRotSpeed: ${portalModelRotSpeed}; modelRotX: ${portalModelRotX}; modelRotY: ${portalModelRotY}; modelRotZ: ${portalModelRotZ}; showVideo: ${portalShowVideo}; videoUrl: ${portalVideoUrl || activeVideoUrl || ''}; videoScale: ${portalVideoScale}; videoPosY: ${portalVideoPosY}; videoPosZ: ${portalVideoPosZ}; particles: ${portalParticles}; particleCount: ${portalParticleCount}; particleColor: ${portalParticleColor}; particleSpeed: ${portalParticleSpeed}; floatingText: ${portalFloatingText}; textColor: ${portalTextColor}; textScale: ${portalTextScale}; textPosY: ${portalTextPosY}; textPosZ: ${portalTextPosZ}; posX: ${portalPosX}; posY: ${portalPosY}; posZ: ${portalPosZ}; rotX: ${portalRotX}; rotY: ${portalRotY}; rotZ: ${portalRotZ};`}
+                ar-portal={`enabled: ${portalEnabled}; shape: ${portalShape}; width: ${portalWidth}; height: ${portalHeight}; radius: ${portalRadius}; depth: ${portalDepth}; frameColor: ${portalFrameColor}; frameWidth: ${portalFrameWidth}; frameDepth: 0.08; frameEmissive: ${portalFrameEmissive}; frameEmissiveIntensity: ${portalFrameEmissiveIntensity}; frameGlow: ${portalFrameGlow}; glassTint: ${portalGlassTint}; glassOpacity: ${portalGlassOpacity}; interiorType: ${portalInteriorType}; skyboxUrl: ${portalSkyboxUrl}; skyboxScale: ${portalSkyboxScale}; skyboxPosX: ${portalSkyboxPosX}; skyboxPosY: ${portalSkyboxPosY}; skyboxPosZ: ${portalSkyboxPosZ}; skyboxRotX: ${portalSkyboxRotX}; skyboxRotY: ${portalSkyboxRotY}; skyboxRotZ: ${portalSkyboxRotZ}; interiorColor: ${portalInteriorColor}; wallColor: ${portalWallColor}; floorColor: ${portalFloorColor}; gridColor: ${portalGridColor}; interiorLightColor: ${portalLightColor}; interiorLightIntensity: ${portalLightIntensity}; interiorModelType: ${portalModelType}; artifactType: ${portalArtifactType}; customModelUrl: ${portalCustomModelUrl}; currentModelUrl: ${localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || ''}; modelScale: ${portalModelScale}; modelPosX: ${portalModelPosX}; modelPosY: ${portalModelPosY}; modelPosZ: ${portalModelPosZ}; modelRotSpeed: ${portalModelRotSpeed}; modelRotX: ${portalModelRotX}; modelRotY: ${portalModelRotY}; modelRotZ: ${portalModelRotZ}; showVideo: ${portalShowVideo}; videoUrl: ${portalVideoUrl || activeVideoUrl || ''}; videoScale: ${portalVideoScale}; videoPosY: ${portalVideoPosY}; videoPosZ: ${portalVideoPosZ}; particles: ${portalParticles}; particleCount: ${portalParticleCount}; particleColor: ${portalParticleColor}; particleSpeed: ${portalParticleSpeed}; floatingText: ${portalFloatingText}; textColor: ${portalTextColor}; textScale: ${portalTextScale}; textPosY: ${portalTextPosY}; textPosZ: ${portalTextPosZ}; posX: ${portalPosX}; posY: ${portalPosY}; posZ: ${portalPosZ}; rotX: ${portalRotX}; rotY: ${portalRotY}; rotZ: ${portalRotZ};`}
+              ></a-entity>
+            )}
+
+            {/* Standalone AR Particle System Anchor */}
+            {particleSystemEnabled && (
+              <a-entity
+                id="ar-particle-system-anchor"
+                ar-particle-system={`enabled: ${particleSystemEnabled}; preset: ${particlePreset}; count: ${particleCount}; size: ${particleSize}; color: ${particleColor}; colorSecondary: ${particleColorSecondary}; opacity: ${particleOpacity}; shape: ${particleShape}; blending: ${particleBlending}; direction: ${particleDirection}; speed: ${particleSpeed}; rotationSpeed: ${particleRotationSpeed}; spreadX: ${particleSpreadX}; spreadY: ${particleSpreadY}; spreadZ: ${particleSpreadZ}; posX: ${particlePosX}; posY: ${particlePosY}; posZ: ${particlePosZ}; rotX: 0; rotY: 0; rotZ: 0; twinkle: ${particleTwinkle};`}
               ></a-entity>
             )}
           </a-scene>
