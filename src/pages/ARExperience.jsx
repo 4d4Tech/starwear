@@ -34,6 +34,13 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     window.addEventListener('starwear-video-mute-status', handleMuteStatus);
     return () => window.removeEventListener('starwear-video-mute-status', handleMuteStatus);
   }, []);
+
+  useEffect(() => {
+    document.documentElement.style.backgroundColor = '#0b0f19';
+    return () => {
+      document.documentElement.style.backgroundColor = '';
+    };
+  }, []);
   const [cameraEnabled, setCameraEnabled] = useState(!isTestMode);
   const [trackingStatus, setTrackingStatus] = useState('INITIALIZING'); // INITIALIZING | SCANNING | DETECTED | ERROR
   const [forceShowModel, setForceShowModel] = useState(false);
@@ -286,6 +293,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           if (docData.lightingConfig && typeof docData.lightingConfig === 'object') Object.assign(cfg, docData.lightingConfig);
           if (docData.portalConfig && typeof docData.portalConfig === 'object') cfg.portalConfig = docData.portalConfig;
           if (docData.particleConfig && typeof docData.particleConfig === 'object') cfg.particleConfig = docData.particleConfig;
+          if (Array.isArray(docData.additionalGeometries)) cfg.additionalGeometries = docData.additionalGeometries;
 
           const directLightingKeys = [
             'ambientColor', 'ambientIntensity',
@@ -310,7 +318,9 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           ...(assetDocData?.portalConfig ? { portalConfig: assetDocData.portalConfig } : {}),
           ...(assetDocData?.particleConfig ? { particleConfig: assetDocData.particleConfig } : {}),
           ...(batchDocData?.portalConfig ? { portalConfig: batchDocData.portalConfig } : {}),
-          ...(batchDocData?.particleConfig ? { particleConfig: batchDocData.particleConfig } : {})
+          ...(batchDocData?.particleConfig ? { particleConfig: batchDocData.particleConfig } : {}),
+          ...(Array.isArray(assetDocData?.additionalGeometries) ? { additionalGeometries: assetDocData.additionalGeometries } : {}),
+          ...(Array.isArray(batchDocData?.additionalGeometries) ? { additionalGeometries: batchDocData.additionalGeometries } : {})
         };
         const hasFsConfig = Object.keys(mergedFsConfig).length > 0;
         if (hasFsConfig) {
@@ -409,6 +419,10 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           ...(localPreviewConfig?.portalConfig ? { portalConfig: localPreviewConfig.portalConfig } : {}),
           ...(localPreviewConfig?.ar_config?.particleConfig ? { particleConfig: localPreviewConfig.ar_config.particleConfig } : {}),
           ...(localPreviewConfig?.particleConfig ? { particleConfig: localPreviewConfig.particleConfig } : {}),
+          ...(Array.isArray(data?.additionalGeometries) ? { additionalGeometries: data.additionalGeometries } : {}),
+          ...(Array.isArray(assetDocData?.additionalGeometries) ? { additionalGeometries: assetDocData.additionalGeometries } : {}),
+          ...(Array.isArray(batchDocData?.additionalGeometries) ? { additionalGeometries: batchDocData.additionalGeometries } : {}),
+          ...(Array.isArray(localPreviewConfig?.additionalGeometries) ? { additionalGeometries: localPreviewConfig.additionalGeometries } : {}),
           ...(urlPortalOverride ? { portalConfig: { ...(liveConfig?.portalConfig || {}), ...(localPreviewConfig?.portalConfig || {}), ...urlPortalOverride } } : {}),
           ...(urlParticlesOverride ? { particleConfig: { ...(liveConfig?.particleConfig || {}), ...(localPreviewConfig?.particleConfig || {}), ...urlParticlesOverride } } : {}),
           videoFlipX: isFlipX,
@@ -484,6 +498,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
     return () => {
       isMounted = false;
+      document.documentElement.style.backgroundColor = '';
       document.body.style.backgroundColor = '';
       const root = document.getElementById('root');
       if (root) root.style.backgroundColor = '';
@@ -495,10 +510,17 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     const sceneEl = sceneRef.current;
 
     if (cameraEnabled) {
-      document.body.style.backgroundColor = 'transparent';
-      const root = document.getElementById('root');
-      if (root) root.style.backgroundColor = 'transparent';
-      if (sceneEl) sceneEl.style.backgroundColor = 'transparent';
+      if (trackingStatus !== 'INITIALIZING' && trackingStatus !== 'ERROR') {
+        document.body.style.backgroundColor = 'transparent';
+        const root = document.getElementById('root');
+        if (root) root.style.backgroundColor = 'transparent';
+        if (sceneEl) sceneEl.style.backgroundColor = 'transparent';
+      } else {
+        document.body.style.backgroundColor = '#0b0f19';
+        const root = document.getElementById('root');
+        if (root) root.style.backgroundColor = '#0b0f19';
+        if (sceneEl) sceneEl.style.backgroundColor = 'transparent';
+      }
 
       // 1. Unhide camera feed video and re-enable video stream tracks
       const videos = document.querySelectorAll('video');
@@ -575,7 +597,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         controls.update();
       }
     }
-  }, [cameraEnabled, getOrbitControls, getThreeCamera]);
+  }, [cameraEnabled, trackingStatus, getOrbitControls, getThreeCamera]);
 
   // Clean up media streams and animations only on total component unmount
   useEffect(() => {
@@ -982,6 +1004,11 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   sceneEl.addEventListener('targetFound', onTargetFound);
   sceneEl.addEventListener('targetLost', onTargetLost);
 
+  // If MindAR is already initialized, trigger ready handler immediately
+  if (sceneEl.systems && sceneEl.systems['mindar-image-system']?.controller) {
+    onArReady();
+  }
+
   const modelIds = ['ar-model', 'preview-model', 'ar-model-forced'];
   modelIds.forEach((id) => {
     const el = document.getElementById(id);
@@ -1270,13 +1297,23 @@ useEffect(() => {
     ? `enabled: true; preset: ${particleCfg?.preset || 'cosmic-stardust'}; count: ${particleCfg?.count ?? 300}; size: ${particleCfg?.size ?? 0.04}; color: ${particleCfg?.color || particleCfg?.colorA || '#38bdf8'}; colorSecondary: ${particleCfg?.colorSecondary || particleCfg?.colorB || '#c084fc'}; opacity: ${particleCfg?.opacity ?? 0.85}; shape: ${particleCfg?.shape || 'sparkle'}; blending: ${particleCfg?.blending || 'additive'}; direction: ${particleCfg?.direction || particleCfg?.motionType || 'float'}; speed: ${particleCfg?.speed ?? 1.0}; rotationSpeed: ${particleCfg?.rotationSpeed ?? 0.2}; spreadX: ${particleCfg?.spreadX ?? 3.0}; spreadY: ${particleCfg?.spreadY ?? 3.0}; spreadZ: ${particleCfg?.spreadZ ?? 3.0}; posX: ${particleCfg?.posX ?? 0}; posY: ${particleCfg?.posY ?? 0}; posZ: ${particleCfg?.posZ ?? 0}; rotX: ${particleRotX}; rotY: ${particleRotY}; rotZ: ${particleRotZ}; twinkle: ${particleCfg?.twinkle ?? true};`
     : '';
 
-  const additionalGeometries = mergedConfig?.additionalGeometries || batchData?.additionalGeometries || [];
+  const additionalGeometries = Array.isArray(cfg?.additionalGeometries)
+    ? cfg.additionalGeometries
+    : Array.isArray(arData?.additionalGeometries)
+    ? arData.additionalGeometries
+    : [];
   const additionalGeometriesAttr = additionalGeometries && additionalGeometries.length > 0
     ? `geometries: ${encodeURIComponent(JSON.stringify(additionalGeometries))};`
     : '';
 
   return (
-    <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden select-none bg-transparent">
+    <div
+      className={`fixed inset-0 w-full h-[100dvh] overflow-hidden select-none transition-colors duration-300 ${
+        cameraEnabled && trackingStatus !== 'INITIALIZING' && trackingStatus !== 'ERROR'
+          ? 'bg-transparent'
+          : 'bg-slate-950'
+      }`}
+    >
       {/* Top Floating Control Bar */}
       <div className="absolute top-4 left-4 right-4 z-40 flex items-center justify-between pointer-events-none">
         {/* Left: Exit Test Button */}
@@ -1307,6 +1344,11 @@ useEffect(() => {
               <div className="flex items-center gap-2 px-3.5 py-1.5 bg-red-600 text-white text-xs font-black uppercase tracking-wider rounded-full shadow-xl backdrop-blur-md border border-red-300 animate-fade-in">
                 <span className="w-2 h-2 bg-white rounded-full"></span>
                 Camera Error
+              </div>
+            ) : trackingStatus === 'INITIALIZING' ? (
+              <div className="flex items-center gap-2 px-3.5 py-1.5 bg-slate-900/90 text-indigo-300 text-xs font-black uppercase tracking-wider rounded-full shadow-xl backdrop-blur-md border border-indigo-500/40">
+                <span className="w-2 h-2 bg-indigo-400 rounded-full animate-ping"></span>
+                Starting Camera...
               </div>
             ) : (
               <div className="flex items-center gap-2 px-3.5 py-1.5 bg-black text-amber-300 text-xs font-black uppercase tracking-wider rounded-full shadow-xl backdrop-blur-md border-2 border-amber-400 animate-pulse">
@@ -1711,6 +1753,72 @@ useEffect(() => {
           <p className="mt-5 text-emerald-300 text-xs font-mono font-black tracking-widest uppercase bg-black/95 px-4 py-2 rounded-full border-2 border-emerald-400 backdrop-blur-md shadow-2xl">
             Point Camera at Marker
           </p>
+        </div>
+      )}
+
+      {/* AR Camera Initializing HUD (Active before camera feed streams) */}
+      {cameraEnabled && trackingStatus === 'INITIALIZING' && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-950/95 backdrop-blur-md text-white px-6 text-center select-none animate-fade-in pointer-events-auto">
+          {/* Animated Aperture / Radar Ring */}
+          <div className="relative w-24 h-24 mb-6 flex items-center justify-center">
+            <div className="absolute inset-0 rounded-full border-2 border-indigo-500/30 animate-ping opacity-30"></div>
+            <div
+              className="absolute inset-2 rounded-full border border-dashed border-indigo-400/60 animate-spin"
+              style={{ animationDuration: '8s' }}
+            ></div>
+            <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-indigo-900/80 to-purple-900/60 border border-indigo-400/50 flex items-center justify-center shadow-[0_0_30px_rgba(99,102,241,0.3)]">
+              <span className="material-symbols-outlined text-3xl text-indigo-300 animate-pulse">
+                photo_camera
+              </span>
+            </div>
+          </div>
+
+          <h2 className="text-lg font-bold tracking-tight text-white mb-2">
+            Starting AR Camera Feed...
+          </h2>
+          <p className="text-xs text-neutral-400 max-w-xs mb-6 leading-relaxed">
+            Initializing computer vision tracking pipeline. Please allow camera permissions when prompted.
+          </p>
+
+          <button
+            type="button"
+            onClick={() => setCameraEnabled(false)}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700/80 rounded-full text-xs font-semibold text-neutral-300 hover:text-white shadow-lg active:scale-95 transition-all cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-base text-indigo-400">3d_rotation</span>
+            <span>Or switch to 3D Preview Mode</span>
+          </button>
+        </div>
+      )}
+
+      {/* AR Camera Error Fallback (Active if camera permissions denied or device error) */}
+      {cameraEnabled && trackingStatus === 'ERROR' && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-slate-950/95 backdrop-blur-md text-white px-6 text-center select-none animate-fade-in pointer-events-auto">
+          <div className="w-16 h-16 rounded-2xl bg-rose-950/50 border border-rose-500/40 text-rose-400 flex items-center justify-center mb-4 shadow-[0_0_30px_rgba(244,63,94,0.2)]">
+            <span className="material-symbols-outlined text-3xl">no_photography</span>
+          </div>
+          <h2 className="text-lg font-bold text-white mb-2">Camera Access Required</h2>
+          <p className="text-xs text-neutral-400 max-w-xs mb-6 leading-relaxed">
+            Unable to access the camera feed. Please check camera permissions in your browser settings, or explore the model in 3D Preview Mode.
+          </p>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full text-xs font-bold shadow-lg active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-sm">refresh</span>
+              <span>Try Again</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setCameraEnabled(false)}
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-neutral-200 rounded-full text-xs font-bold shadow-lg active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-sm text-indigo-400">3d_rotation</span>
+              <span>3D Mode</span>
+            </button>
+          </div>
         </div>
       )}
 
