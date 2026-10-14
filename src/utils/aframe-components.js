@@ -5480,8 +5480,8 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
 
             this.rootGroup.add(light);
 
-            // Add Visual Glowing 3D Light Source Emitter / Bulb
-            if (item.showHelper !== false) {
+            // Add Visual Glowing 3D Light Source Emitter / Bulb (only in editor mode when showHelpers is enabled)
+            if (this.data.showHelpers && item.showHelper !== false) {
               const bulbGroup = new THREE_LIB.Group();
               bulbGroup.name = `Bulb_${item.id}`;
 

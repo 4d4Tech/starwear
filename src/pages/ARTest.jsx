@@ -11573,105 +11573,215 @@ const ARTest = () => {
         style={{ touchAction: 'none' }}
         onContextMenu={(e) => e.preventDefault()}
       >
-        {/* Viewport Floating 3D Transform Gizmo Toolbar */}
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 p-1.5 bg-neutral-900/90 backdrop-blur-md border border-neutral-700/80 rounded-xl shadow-2xl select-none pointer-events-auto">
-          {/* Gizmo Mode Toggle Buttons */}
-          <div className="flex items-center gap-0.5 bg-black/60 p-0.5 rounded-lg border border-neutral-800">
-            <button
-              type="button"
-              onClick={() => setGizmoMode('translate')}
-              title="Translate / Move (W)"
-              className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${
-                gizmoMode === 'translate'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
-              }`}
-            >
-              <span className="material-symbols-outlined text-sm">open_with</span>
-              <span className="hidden sm:inline">Move</span>
-              <span className="text-[10px] font-mono opacity-60">W</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setGizmoMode('rotate')}
-              title="Rotate / Turn (E)"
-              className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${
-                gizmoMode === 'rotate'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
-              }`}
-            >
-              <span className="material-symbols-outlined text-sm">rotate_right</span>
-              <span className="hidden sm:inline">Rotate</span>
-              <span className="text-[10px] font-mono opacity-60">E</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setGizmoMode('scale')}
-              title="Scale / Resize (R)"
-              className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${
-                gizmoMode === 'scale'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
-              }`}
-            >
-              <span className="material-symbols-outlined text-sm">aspect_ratio</span>
-              <span className="hidden sm:inline">Scale</span>
-              <span className="text-[10px] font-mono opacity-60">R</span>
-            </button>
-          </div>
-
-          {/* Coordinate Space Toggle */}
-          <button
-            type="button"
-            onClick={() => setGizmoSpace((prev) => (prev === 'world' ? 'local' : 'world'))}
-            title={`Transform Coordinate Space (${gizmoSpace.toUpperCase()})`}
-            className="px-2 py-1 bg-black/60 hover:bg-neutral-800 border border-neutral-800 rounded-lg text-xs font-mono font-semibold text-neutral-300 transition-all uppercase"
-          >
-            {gizmoSpace}
-          </button>
-
-          {/* Snapping Toggle */}
-          <button
-            type="button"
-            onClick={() => setGizmoSnap((prev) => (prev === null ? 0.1 : prev === 0.1 ? 0.5 : null))}
-            title="Toggle Transform Snapping"
-            className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold border transition-all ${
-              gizmoSnap
-                ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
-                : 'bg-black/60 border-neutral-800 text-neutral-400 hover:text-neutral-200'
-            }`}
-          >
-            {gizmoSnap ? `Snap: ${gizmoSnap}m` : 'Snap: Off'}
-          </button>
-
-          {/* Selection Info Badge */}
-          {currentSelectedObjectInfo && (
-            <div className="flex items-center gap-1.5 pl-1.5 border-l border-neutral-800">
-              <div className="flex items-center gap-1 px-2 py-1 bg-neutral-800/90 border border-neutral-700/80 rounded-lg text-xs text-neutral-200 max-w-[160px] truncate">
-                <span className="material-symbols-outlined text-xs text-indigo-400">
-                  {currentSelectedObjectInfo.icon}
-                </span>
-                <span className="truncate font-semibold">{currentSelectedObjectInfo.name}</span>
-              </div>
+        {/* Floating Viewport Controls: Camera View Angles on Top, 3D Transform Gizmo Toolbar Directly Beneath */}
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 pointer-events-none select-none max-w-[95vw]">
+          {/* Top: Interactive Camera View Angle Presets Toolbar (Studio4D4 Style) */}
+          {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
+            <div className="pointer-events-auto bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-xl p-1 flex items-center gap-1 shadow-2xl overflow-x-auto max-w-full">
+              <span className="text-[10px] uppercase font-bold text-slate-400 px-2 flex items-center gap-1 font-mono shrink-0">
+                <span className="material-symbols-outlined text-sm text-indigo-400">videocam</span> Views
+              </span>
               <button
                 type="button"
-                onClick={focusCameraOnSelectedObject}
-                title="Focus Camera on Selected Object (F)"
-                className="p-1 rounded-lg bg-black/60 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-indigo-300 transition-colors"
+                onClick={() => setCameraView('perspective')}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+                title="Studio 3/4 Perspective View"
               >
-                <span className="material-symbols-outlined text-sm">filter_center_focus</span>
+                Perspective
               </button>
               <button
                 type="button"
-                onClick={clearSelectionAndDetachGizmo}
-                title="Deselect Object (Esc)"
-                className="p-1 rounded-lg bg-black/60 hover:bg-red-950/60 border border-neutral-800 hover:border-red-500/40 text-neutral-400 hover:text-red-400 transition-colors"
+                onClick={() => setCameraView('front')}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+                title="Direct Front-Facing View"
               >
-                <span className="material-symbols-outlined text-sm">close</span>
+                Front
+              </button>
+              <button
+                type="button"
+                onClick={() => setCameraView('back')}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+                title="Back View"
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={() => setCameraView('left')}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+                title="Left View"
+              >
+                Left
+              </button>
+              <button
+                type="button"
+                onClick={() => setCameraView('right')}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+                title="Right View"
+              >
+                Right
+              </button>
+              <button
+                type="button"
+                onClick={() => setCameraView('top')}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+                title="Top-Down View"
+              >
+                Top
+              </button>
+              <button
+                type="button"
+                onClick={() => setCameraView('bottom')}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm shrink-0"
+                title="Bottom-Up View"
+              >
+                Bottom
+              </button>
+              <div className="w-[1px] h-4 bg-slate-700 mx-0.5 shrink-0"></div>
+              <button
+                type="button"
+                onClick={() => setCameraView('reset')}
+                className="px-2 py-1 text-xs font-semibold rounded-lg bg-indigo-950/70 hover:bg-indigo-900 border border-indigo-500/40 text-indigo-200 hover:text-white transition-all flex items-center gap-1 shrink-0"
+                title="Reset View to Studio Perspective (F)"
+              >
+                <span className="material-symbols-outlined text-xs">restart_alt</span>
+              </button>
+              <div className="w-[1px] h-4 bg-slate-700 mx-0.5 shrink-0"></div>
+              <button
+                type="button"
+                onClick={() => setMarkerVisible((v) => !v)}
+                className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all shadow-sm flex items-center gap-1 shrink-0 ${
+                  markerVisible
+                    ? 'bg-emerald-600 text-white shadow-emerald-900/30'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200'
+                }`}
+                title="Toggle Target Marker Reference Plane in Viewport (M)"
+              >
+                <span className="material-symbols-outlined text-xs">qr_code_2</span>
+                <span>Marker</span>
+              </button>
+              <button
+                type="button"
+                onClick={frameCameraToMarker}
+                className="px-2 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-emerald-700 text-slate-300 hover:text-white transition-all shadow-sm flex items-center shrink-0"
+                title="Align Camera Perpendicular to Marker Face"
+              >
+                <span className="material-symbols-outlined text-xs">crop_free</span>
+              </button>
+              <div className="w-[1px] h-4 bg-slate-700 mx-0.5 shrink-0"></div>
+              <button
+                type="button"
+                onClick={handleCaptureThumbnail}
+                disabled={savingConfig || !batchId.trim()}
+                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-cyan-700 hover:bg-cyan-600 text-white transition-all shadow-sm flex items-center gap-1 cursor-pointer shrink-0"
+                title="Capture & Save Current 3D View Angle as Asset Thumbnail"
+              >
+                <span className="material-symbols-outlined text-xs">photo_camera</span>
+                <span>Snap Thumb</span>
               </button>
             </div>
           )}
+
+          {/* Beneath: 3D Transform Controls Gizmo Toolbar (Move, Rotate, Scale) */}
+          <div className="pointer-events-auto flex items-center gap-1.5 p-1.5 bg-neutral-900/90 backdrop-blur-md border border-neutral-700/80 rounded-xl shadow-2xl">
+            {/* Gizmo Mode Toggle Buttons */}
+            <div className="flex items-center gap-0.5 bg-black/60 p-0.5 rounded-lg border border-neutral-800">
+              <button
+                type="button"
+                onClick={() => setGizmoMode('translate')}
+                title="Translate / Move (W)"
+                className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${
+                  gizmoMode === 'translate'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+                }`}
+              >
+                <span className="material-symbols-outlined text-sm">open_with</span>
+                <span className="hidden sm:inline">Move</span>
+                <span className="text-[10px] font-mono opacity-60">W</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setGizmoMode('rotate')}
+                title="Rotate / Turn (E)"
+                className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${
+                  gizmoMode === 'rotate'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+                }`}
+              >
+                <span className="material-symbols-outlined text-sm">rotate_right</span>
+                <span className="hidden sm:inline">Rotate</span>
+                <span className="text-[10px] font-mono opacity-60">E</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setGizmoMode('scale')}
+                title="Scale / Resize (R)"
+                className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${
+                  gizmoMode === 'scale'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+                }`}
+              >
+                <span className="material-symbols-outlined text-sm">aspect_ratio</span>
+                <span className="hidden sm:inline">Scale</span>
+                <span className="text-[10px] font-mono opacity-60">R</span>
+              </button>
+            </div>
+
+            {/* Coordinate Space Toggle */}
+            <button
+              type="button"
+              onClick={() => setGizmoSpace((prev) => (prev === 'world' ? 'local' : 'world'))}
+              title={`Transform Coordinate Space (${gizmoSpace.toUpperCase()})`}
+              className="px-2 py-1 bg-black/60 hover:bg-neutral-800 border border-neutral-800 rounded-lg text-xs font-mono font-semibold text-neutral-300 transition-all uppercase"
+            >
+              {gizmoSpace}
+            </button>
+
+            {/* Snapping Toggle */}
+            <button
+              type="button"
+              onClick={() => setGizmoSnap((prev) => (prev === null ? 0.1 : prev === 0.1 ? 0.5 : null))}
+              title="Toggle Transform Snapping"
+              className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold border transition-all ${
+                gizmoSnap
+                  ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
+                  : 'bg-black/60 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+              }`}
+            >
+              {gizmoSnap ? `Snap: ${gizmoSnap}m` : 'Snap: Off'}
+            </button>
+
+            {/* Selection Info Badge */}
+            {currentSelectedObjectInfo && (
+              <div className="flex items-center gap-1.5 pl-1.5 border-l border-neutral-800">
+                <div className="flex items-center gap-1 px-2 py-1 bg-neutral-800/90 border border-neutral-700/80 rounded-lg text-xs text-neutral-200 max-w-[160px] truncate">
+                  <span className="material-symbols-outlined text-xs text-indigo-400">
+                    {currentSelectedObjectInfo.icon}
+                  </span>
+                  <span className="truncate font-semibold">{currentSelectedObjectInfo.name}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={focusCameraOnSelectedObject}
+                  title="Focus Camera on Selected Object (F)"
+                  className="p-1 rounded-lg bg-black/60 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-indigo-300 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-sm">filter_center_focus</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={clearSelectionAndDetachGizmo}
+                  title="Deselect Object (Esc)"
+                  className="p-1 rounded-lg bg-black/60 hover:bg-red-950/60 border border-neutral-800 hover:border-red-500/40 text-neutral-400 hover:text-red-400 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-sm">close</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0 || custom3DTexts.length > 0 || customLights.length > 0 || (markerVisible && markerImageUrl) || (websiteEnabled && websiteUrl)) ? (
@@ -11816,112 +11926,7 @@ const ARTest = () => {
           )
         )}
 
-        {/* Interactive Camera View Angle Presets Toolbar (Studio4D4 Style) */}
-        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-xl p-1 flex items-center gap-1 shadow-2xl">
-            <span className="text-[10px] uppercase font-bold text-slate-400 px-2 flex items-center gap-1 font-mono">
-              <span className="material-symbols-outlined text-sm text-indigo-400">videocam</span> Views
-            </span>
-            <button
-              type="button"
-              onClick={() => setCameraView('perspective')}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
-              title="Studio 3/4 Perspective View"
-            >
-              Perspective
-            </button>
-            <button
-              type="button"
-              onClick={() => setCameraView('front')}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
-              title="Direct Front-Facing View"
-            >
-              Front
-            </button>
-            <button
-              type="button"
-              onClick={() => setCameraView('back')}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
-              title="Back View"
-            >
-              Back
-            </button>
-            <button
-              type="button"
-              onClick={() => setCameraView('left')}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
-              title="Left View"
-            >
-              Left
-            </button>
-            <button
-              type="button"
-              onClick={() => setCameraView('right')}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
-              title="Right View"
-            >
-              Right
-            </button>
-            <button
-              type="button"
-              onClick={() => setCameraView('top')}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
-              title="Top-Down View"
-            >
-              Top
-            </button>
-            <button
-              type="button"
-              onClick={() => setCameraView('bottom')}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white transition-all shadow-sm"
-              title="Bottom-Up View"
-            >
-              Bottom
-            </button>
-            <div className="w-[1px] h-4 bg-slate-700 mx-0.5"></div>
-            <button
-              type="button"
-              onClick={() => setCameraView('reset')}
-              className="px-2 py-1 text-xs font-semibold rounded-lg bg-indigo-950/70 hover:bg-indigo-900 border border-indigo-500/40 text-indigo-200 hover:text-white transition-all flex items-center gap-1"
-              title="Reset View to Studio Perspective (F)"
-            >
-              <span className="material-symbols-outlined text-xs">restart_alt</span>
-            </button>
-            <div className="w-[1px] h-4 bg-slate-700 mx-0.5"></div>
-            <button
-              type="button"
-              onClick={() => setMarkerVisible((v) => !v)}
-              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all shadow-sm flex items-center gap-1 ${
-                markerVisible
-                  ? 'bg-emerald-600 text-white shadow-emerald-900/30'
-                  : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200'
-              }`}
-              title="Toggle Target Marker Reference Plane in Viewport (M)"
-            >
-              <span className="material-symbols-outlined text-xs">qr_code_2</span>
-              <span>Marker</span>
-            </button>
-            <button
-              type="button"
-              onClick={frameCameraToMarker}
-              className="px-2 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-emerald-700 text-slate-300 hover:text-white transition-all shadow-sm flex items-center"
-              title="Align Camera Perpendicular to Marker Face"
-            >
-              <span className="material-symbols-outlined text-xs">crop_free</span>
-            </button>
-            <div className="w-[1px] h-4 bg-slate-700 mx-0.5"></div>
-            <button
-              type="button"
-              onClick={handleCaptureThumbnail}
-              disabled={savingConfig || !batchId.trim()}
-              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-cyan-700 hover:bg-cyan-600 text-white transition-all shadow-sm flex items-center gap-1 cursor-pointer"
-              title="Capture & Save Current 3D View Angle as Asset Thumbnail"
-            >
-              <span className="material-symbols-outlined text-xs">photo_camera</span>
-              <span>Snap Thumb</span>
-            </button>
-          </div>
-        )}
+
 
         {/* Media Controls Floating Action Buttons (Play/Pause + Sound Mute/Unmute) */}
         <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 1000, display: 'flex', alignItems: 'center', gap: '8px' }}>

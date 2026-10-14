@@ -473,7 +473,7 @@ export async function captureModelThumbnail(modelUrlOrFile, customConfig = null)
       const customLights = customConfig?.customLights || customConfig?.ar_config?.customLights || [];
       let customLightsGroup = null;
       if (Array.isArray(customLights) && customLights.length > 0) {
-        customLightsGroup = createCustomLightsGroup(customLights, THREE, { showVisualBulb: true });
+        customLightsGroup = createCustomLightsGroup(customLights, THREE, { showVisualBulb: false });
         if (customLightsGroup) gl.scene.add(customLightsGroup);
       }
 

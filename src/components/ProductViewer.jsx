@@ -511,7 +511,7 @@ function SceneContent({
   const customLights = config?.customLights || config?.ar_config?.customLights || [];
   const customLightsGroup = useMemo(() => {
     if (!Array.isArray(customLights) || customLights.length === 0) return null;
-    return createCustomLightsGroup(customLights, THREE, { showVisualBulb: true });
+    return createCustomLightsGroup(customLights, THREE, { showVisualBulb: false });
   }, [JSON.stringify(customLights)]);
 
   useEffect(() => {

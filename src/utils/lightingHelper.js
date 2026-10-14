@@ -11,7 +11,7 @@ import * as THREE from 'three';
  * @returns {THREE.Group|null}
  */
 export function createCustomLightsGroup(lightsList, THREE_LIB = THREE, options = {}) {
-  const { showVisualBulb = true } = options;
+  const { showVisualBulb = false } = options;
   if (!Array.isArray(lightsList) || lightsList.length === 0) return null;
 
   const group = new THREE_LIB.Group();
