@@ -1306,6 +1306,12 @@ useEffect(() => {
     ? `geometries: ${encodeURIComponent(JSON.stringify(additionalGeometries))};`
     : '';
 
+  const webCfg = cfg?.websiteLayer || cfg?.webLayer || arData?.websiteLayer || null;
+  const websiteLayerEnabled = Boolean(webCfg && (webCfg.enabled !== false) && webCfg.url);
+  const websiteLayerAttr = websiteLayerEnabled
+    ? `enabled: true; url: ${encodeURIComponent(webCfg.url)}; width: ${webCfg.width ?? 1.2}; height: ${webCfg.height ?? 0.675}; aspectRatio: ${webCfg.aspectRatio || '16:9'}; resolution: ${webCfg.resolution || '1280x720'}; interactive: ${webCfg.interactive !== false}; opacity: ${webCfg.opacity ?? 1.0}; frameStyle: ${webCfg.frameStyle || 'cyber_bezel'}; frameColor: ${webCfg.frameColor || '#6366f1'}; frameGlow: ${webCfg.frameGlow !== false}; curved: ${webCfg.curved || false}; curveRadius: ${webCfg.curveRadius ?? 3.0}; billboard: ${webCfg.billboard || false}; posX: ${webCfg.posX ?? 0}; posY: ${webCfg.posY ?? 0.8}; posZ: ${webCfg.posZ ?? 0.05}; rotX: ${webCfg.rotX ?? 0}; rotY: ${webCfg.rotY ?? 0}; rotZ: ${webCfg.rotZ ?? 0}; scale: ${webCfg.scale ?? 1.0}; showAddressBar: ${webCfg.showAddressBar !== false};`
+    : '';
+
   return (
     <div
       className={`fixed inset-0 w-full h-[100dvh] overflow-hidden select-none transition-colors duration-300 ${
@@ -1527,6 +1533,13 @@ useEffect(() => {
               ar-additional-geometries={additionalGeometriesAttr}
             ></a-entity>
           )}
+
+          {cameraEnabled && websiteLayerEnabled && (
+            <a-entity
+              id="ar-website-layer-anchor"
+              ar-website-layer={websiteLayerAttr}
+            ></a-entity>
+          )}
         </a-entity>
 
         {/* Center 3D Model Anchor: Active in 3D Preview Mode (Studio4D4 OrbitControls) */}
@@ -1592,6 +1605,13 @@ useEffect(() => {
                 ar-additional-geometries={additionalGeometriesAttr}
               ></a-entity>
             )}
+
+            {websiteLayerEnabled && (
+              <a-entity
+                id="ar-website-layer-anchor-preview"
+                ar-website-layer={websiteLayerAttr}
+              ></a-entity>
+            )}
           </a-entity>
         )}
 
@@ -1654,6 +1674,13 @@ useEffect(() => {
               <a-entity
                 id="ar-additional-geometries-anchor-forced"
                 ar-additional-geometries={additionalGeometriesAttr}
+              ></a-entity>
+            )}
+
+            {websiteLayerEnabled && (
+              <a-entity
+                id="ar-website-layer-anchor-forced"
+                ar-website-layer={websiteLayerAttr}
               ></a-entity>
             )}
           </a-entity>

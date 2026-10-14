@@ -4433,4 +4433,709 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
       }
     }
   });
+
+  // =========================================================================
+  // 11. AR-MARKER-REFERENCE COMPONENT
+  // Renders a 3D visual reference plane of the physical MindAR target marker
+  // positioned at (0, 0, 0) in the XY plane. Allows users in ARTest to visually
+  // calibrate and position 3D models, portals, particles, and geometries
+  // relative to where they will physically appear when the real marker is scanned.
+  // =========================================================================
+  if (!AFRAME.components['ar-marker-reference']) {
+    AFRAME.registerComponent('ar-marker-reference', {
+      schema: {
+        enabled: { type: 'boolean', default: true },
+        imageUrl: { type: 'string', default: '' },
+        src: { type: 'string', default: '' },
+        width: { type: 'number', default: 1.0 },
+        height: { type: 'number', default: 0 },
+        aspectRatio: { type: 'number', default: 0.5926 },
+        opacity: { type: 'number', default: 0.85 },
+        showFrame: { type: 'boolean', default: true },
+        showBorder: { type: 'boolean', default: true },
+        showAxes: { type: 'boolean', default: true },
+        showTriad: { type: 'boolean', default: true },
+        frameColor: { type: 'color', default: '#10b981' }
+      },
+
+      init: function () {
+        this.rootGroup = null;
+        this.planeMesh = null;
+        this.frameGroup = null;
+        this.axesGroup = null;
+        this.texture = null;
+        this.buildMarker();
+      },
+
+      buildMarker: function () {
+        const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
+        this.cleanUp();
+
+        if (!this.data.enabled) {
+          if (this.rootGroup) this.rootGroup.visible = false;
+          return;
+        }
+
+        this.rootGroup = new THREE_LIB.Group();
+        this.rootGroup.name = 'ar-marker-reference-root';
+
+        const width = Math.max(0.1, Number(this.data.width) || 1.0);
+        const ar = Number(this.data.aspectRatio) > 0 ? Number(this.data.aspectRatio) : 0.5926;
+        const height = Number(this.data.height) > 0 ? Number(this.data.height) : (width * ar);
+        const opacity = Math.min(1.0, Math.max(0.05, Number(this.data.opacity) || 0.85));
+        const frameColor = new THREE_LIB.Color(this.data.frameColor || '#10b981');
+        const imgUrl = this.data.imageUrl || this.data.src || '';
+
+        // 1. Target Marker Image Plane (in XY plane, matching MindAR anchor orientation)
+        const planeGeo = new THREE_LIB.PlaneGeometry(width, height);
+        let planeMat;
+
+        if (imgUrl) {
+          const loader = new THREE_LIB.TextureLoader();
+          this.texture = loader.load(
+            imgUrl,
+            (tex) => {
+              if (tex) {
+                tex.colorSpace = THREE_LIB.SRGBColorSpace || THREE_LIB.sRGBEncoding;
+                tex.needsUpdate = true;
+              }
+            },
+            undefined,
+            (err) => console.warn('[ar-marker-reference] Texture load error:', err)
+          );
+
+          planeMat = new THREE_LIB.MeshBasicMaterial({
+            map: this.texture,
+            transparent: true,
+            opacity: opacity,
+            side: THREE_LIB.DoubleSide,
+            depthWrite: false
+          });
+        } else {
+          // Subtle dark blueprint plane if texture is not yet loaded
+          planeMat = new THREE_LIB.MeshBasicMaterial({
+            color: new THREE_LIB.Color('#060913'),
+            transparent: true,
+            opacity: opacity,
+            side: THREE_LIB.DoubleSide,
+            depthWrite: false
+          });
+        }
+
+        this.planeMesh = new THREE_LIB.Mesh(planeGeo, planeMat);
+        this.planeMesh.name = 'ar-marker-plane';
+        this.rootGroup.add(this.planeMesh);
+
+        // 2. High-Tech Calibration Frame (Border & Corner Brackets)
+        const showFrame = this.data.showFrame !== false && this.data.showBorder !== false;
+        if (showFrame) {
+          this.frameGroup = new THREE_LIB.Group();
+          this.frameGroup.name = 'ar-marker-frame';
+
+          const halfW = width / 2;
+          const halfH = height / 2;
+          const bracketLen = Math.min(halfW, halfH) * 0.25;
+
+          const lineMat = new THREE_LIB.LineBasicMaterial({
+            color: frameColor,
+            transparent: true,
+            opacity: Math.min(1.0, opacity + 0.15),
+            linewidth: 2,
+            depthWrite: false
+          });
+
+          // Outer border rectangle
+          const borderPoints = [
+            new THREE_LIB.Vector3(-halfW, -halfH, 0.001),
+            new THREE_LIB.Vector3(halfW, -halfH, 0.001),
+            new THREE_LIB.Vector3(halfW, halfH, 0.001),
+            new THREE_LIB.Vector3(-halfW, halfH, 0.001),
+            new THREE_LIB.Vector3(-halfW, -halfH, 0.001)
+          ];
+          const borderGeo = new THREE_LIB.BufferGeometry().setFromPoints(borderPoints);
+          const borderLine = new THREE_LIB.Line(borderGeo, lineMat);
+          this.frameGroup.add(borderLine);
+
+          // 4 Corner Brackets (L-shapes standing out for visual recognition)
+          const bracketPoints = [];
+          // Top-Left
+          bracketPoints.push(new THREE_LIB.Vector3(-halfW, halfH - bracketLen, 0.002), new THREE_LIB.Vector3(-halfW, halfH, 0.002));
+          bracketPoints.push(new THREE_LIB.Vector3(-halfW, halfH, 0.002), new THREE_LIB.Vector3(-halfW + bracketLen, halfH, 0.002));
+          // Top-Right
+          bracketPoints.push(new THREE_LIB.Vector3(halfW - bracketLen, halfH, 0.002), new THREE_LIB.Vector3(halfW, halfH, 0.002));
+          bracketPoints.push(new THREE_LIB.Vector3(halfW, halfH, 0.002), new THREE_LIB.Vector3(halfW, halfH - bracketLen, 0.002));
+          // Bottom-Right
+          bracketPoints.push(new THREE_LIB.Vector3(halfW, -halfH + bracketLen, 0.002), new THREE_LIB.Vector3(halfW, -halfH, 0.002));
+          bracketPoints.push(new THREE_LIB.Vector3(halfW, -halfH, 0.002), new THREE_LIB.Vector3(halfW - bracketLen, -halfH, 0.002));
+          // Bottom-Left
+          bracketPoints.push(new THREE_LIB.Vector3(-halfW + bracketLen, -halfH, 0.002), new THREE_LIB.Vector3(-halfW, -halfH, 0.002));
+          bracketPoints.push(new THREE_LIB.Vector3(-halfW, -halfH, 0.002), new THREE_LIB.Vector3(-halfW, -halfH + bracketLen, 0.002));
+
+          // Center Crosshair Reticle (+)
+          const crossSize = Math.min(width, height) * 0.08;
+          bracketPoints.push(new THREE_LIB.Vector3(-crossSize, 0, 0.002), new THREE_LIB.Vector3(crossSize, 0, 0.002));
+          bracketPoints.push(new THREE_LIB.Vector3(0, -crossSize, 0.002), new THREE_LIB.Vector3(0, crossSize, 0.002));
+
+          const bracketsGeo = new THREE_LIB.BufferGeometry().setFromPoints(bracketPoints);
+          const bracketsSegments = new THREE_LIB.LineSegments(bracketsGeo, lineMat);
+          this.frameGroup.add(bracketsSegments);
+
+          // Center origin ring
+          const ringGeo = new THREE_LIB.RingGeometry(crossSize * 0.2, crossSize * 0.28, 24);
+          const ringMat = new THREE_LIB.MeshBasicMaterial({ color: frameColor, side: THREE_LIB.DoubleSide, depthWrite: false });
+          const ringMesh = new THREE_LIB.Mesh(ringGeo, ringMat);
+          ringMesh.position.z = 0.002;
+          this.frameGroup.add(ringMesh);
+
+          this.rootGroup.add(this.frameGroup);
+        }
+
+        // 3. Coordinate Triad Indicator (+X Red, +Y Green, +Z Blue)
+        const showAxes = this.data.showAxes !== false && this.data.showTriad !== false;
+        if (showAxes) {
+          this.axesGroup = new THREE_LIB.Group();
+          this.axesGroup.name = 'ar-marker-axes';
+
+          const axisLen = Math.min(width, height) * 0.18;
+          const axisWidth = 2;
+
+          // +X Axis (Right) - Red
+          const xPoints = [new THREE_LIB.Vector3(0, 0, 0.003), new THREE_LIB.Vector3(axisLen, 0, 0.003)];
+          const xGeo = new THREE_LIB.BufferGeometry().setFromPoints(xPoints);
+          const xMat = new THREE_LIB.LineBasicMaterial({ color: 0xef4444, linewidth: axisWidth, depthWrite: false });
+          this.axesGroup.add(new THREE_LIB.Line(xGeo, xMat));
+
+          // +Y Axis (Up) - Green
+          const yPoints = [new THREE_LIB.Vector3(0, 0, 0.003), new THREE_LIB.Vector3(0, axisLen, 0.003)];
+          const yGeo = new THREE_LIB.BufferGeometry().setFromPoints(yPoints);
+          const yMat = new THREE_LIB.LineBasicMaterial({ color: 0x10b981, linewidth: axisWidth, depthWrite: false });
+          this.axesGroup.add(new THREE_LIB.Line(yGeo, yMat));
+
+          // +Z Axis (Forward / Out of Marker toward Camera) - Blue
+          const zPoints = [new THREE_LIB.Vector3(0, 0, 0.003), new THREE_LIB.Vector3(0, 0, axisLen + 0.003)];
+          const zGeo = new THREE_LIB.BufferGeometry().setFromPoints(zPoints);
+          const zMat = new THREE_LIB.LineBasicMaterial({ color: 0x38bdf8, linewidth: axisWidth, depthWrite: false });
+          this.axesGroup.add(new THREE_LIB.Line(zGeo, zMat));
+
+          this.rootGroup.add(this.axesGroup);
+        }
+
+        if (this.el) {
+          this.el.setObject3D('markerReferenceRoot', this.rootGroup);
+        }
+      },
+
+      update: function (oldData) {
+        if (!oldData) return;
+        if (
+          oldData.enabled !== this.data.enabled ||
+          oldData.imageUrl !== this.data.imageUrl ||
+          oldData.src !== this.data.src ||
+          oldData.width !== this.data.width ||
+          oldData.height !== this.data.height ||
+          oldData.aspectRatio !== this.data.aspectRatio ||
+          oldData.opacity !== this.data.opacity ||
+          oldData.showFrame !== this.data.showFrame ||
+          oldData.showBorder !== this.data.showBorder ||
+          oldData.showAxes !== this.data.showAxes ||
+          oldData.showTriad !== this.data.showTriad ||
+          oldData.frameColor !== this.data.frameColor
+        ) {
+          this.buildMarker();
+        }
+      },
+
+      cleanUp: function () {
+        if (this.texture) {
+          this.texture.dispose();
+          this.texture = null;
+        }
+        if (this.rootGroup) {
+          while (this.rootGroup.children.length > 0) {
+            const child = this.rootGroup.children[0];
+            this.rootGroup.remove(child);
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+              if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+              else child.material.dispose();
+            }
+          }
+          if (this.el && typeof this.el.removeObject3D === 'function') {
+            this.el.removeObject3D('markerReferenceRoot');
+          }
+          this.rootGroup = null;
+        }
+      },
+
+      remove: function () {
+        this.cleanUp();
+      }
+    });
+  }
+
+  // =========================================================================
+  // 12. AR-WEBSITE-LAYER COMPONENT
+  // Renders a live, interactive 3D website layer (virtual browser viewport)
+  // in AR/3D scenes using CSS3DObject + CSS3DRenderer with customizable
+  // physical 3D enclosures, address bar navigation, pointer-events interactivity,
+  // responsive aspect ratio sizing, and world matrix synchronization.
+  // =========================================================================
+  if (!AFRAME.components['ar-website-layer']) {
+    AFRAME.registerComponent('ar-website-layer', {
+      schema: {
+        enabled: { type: 'boolean', default: true },
+        url: { type: 'string', default: 'https://starwear.app' },
+        width: { type: 'number', default: 1.2 },
+        height: { type: 'number', default: 0.675 },
+        aspectRatio: { type: 'string', default: '16:9' },
+        resolution: { type: 'string', default: '1280x720' },
+        interactive: { type: 'boolean', default: true },
+        opacity: { type: 'number', default: 1.0 },
+        frameStyle: { type: 'string', default: 'cyber_bezel' }, // cyber_bezel | obsidian | minimal_glass | frameless
+        frameColor: { type: 'color', default: '#6366f1' },
+        frameGlow: { type: 'boolean', default: true },
+        curved: { type: 'boolean', default: false },
+        curveRadius: { type: 'number', default: 3.0 },
+        billboard: { type: 'boolean', default: false },
+        posX: { type: 'number', default: 0 },
+        posY: { type: 'number', default: 0.8 },
+        posZ: { type: 'number', default: 0.05 },
+        rotX: { type: 'number', default: 0 },
+        rotY: { type: 'number', default: 0 },
+        rotZ: { type: 'number', default: 0 },
+        scale: { type: 'number', default: 1.0 },
+        showAddressBar: { type: 'boolean', default: true }
+      },
+
+      init: function () {
+        this.rootMesh = null;
+        this.cssObject = null;
+        this.containerDiv = null;
+        this.iframe = null;
+        this._tempWorldPos = new THREE.Vector3();
+        this._tempWorldQuat = new THREE.Quaternion();
+        this._tempWorldScale = new THREE.Vector3();
+        this.buildLayer();
+      },
+
+      ensureCSS3D: function () {
+        const sceneEl = this.el.sceneEl;
+        if (!sceneEl) return null;
+        const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
+
+        let cssRenderer = sceneEl._css3dRenderer;
+        let cssScene = sceneEl._css3dScene;
+
+        if (!cssRenderer) {
+          cssRenderer = new CSS3DRenderer();
+          const container = sceneEl.canvas?.parentElement || sceneEl;
+          const w = container.clientWidth || window.innerWidth;
+          const h = container.clientHeight || window.innerHeight;
+          cssRenderer.setSize(w, h);
+
+          const dom = cssRenderer.domElement;
+          dom.id = 'aframe-css3d-canvas-overlay';
+          dom.style.position = 'absolute';
+          dom.style.top = '0';
+          dom.style.left = '0';
+          dom.style.width = '100%';
+          dom.style.height = '100%';
+          dom.style.pointerEvents = 'none';
+          dom.style.zIndex = '10';
+
+          container.appendChild(dom);
+
+          cssScene = new THREE_LIB.Scene();
+          sceneEl._css3dRenderer = cssRenderer;
+          sceneEl._css3dScene = cssScene;
+
+          const handleResize = () => {
+            if (sceneEl.canvas && cssRenderer) {
+              const rw = sceneEl.canvas.parentElement ? sceneEl.canvas.parentElement.clientWidth : window.innerWidth;
+              const rh = sceneEl.canvas.parentElement ? sceneEl.canvas.parentElement.clientHeight : window.innerHeight;
+              cssRenderer.setSize(rw, rh);
+            }
+          };
+          window.addEventListener('resize', handleResize);
+          sceneEl._css3dResizeHandler = handleResize;
+        }
+
+        return { cssRenderer, cssScene };
+      },
+
+      buildLayer: function () {
+        this.cleanUp();
+        if (!this.data.enabled) return;
+
+        const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
+        const sceneEl = this.el.sceneEl;
+        if (!sceneEl) return;
+
+        const cssSetup = this.ensureCSS3D();
+        if (!cssSetup) return;
+        const { cssScene } = cssSetup;
+
+        // 1. Resolve URL
+        let rawUrl = (this.data.url || '').trim();
+        if (rawUrl.startsWith('http%3A') || rawUrl.startsWith('https%3A') || rawUrl.includes('%2F')) {
+          try { rawUrl = decodeURIComponent(rawUrl); } catch {}
+        }
+        if (rawUrl && !/^https?:\/\//i.test(rawUrl) && !rawUrl.startsWith('about:')) {
+          rawUrl = 'https://' + rawUrl;
+        }
+        if (!rawUrl) rawUrl = 'https://starwear.app';
+
+        // 2. Resolve virtual pixel resolution
+        let resW = 1280;
+        let resH = 720;
+        if (this.data.resolution && this.data.resolution.includes('x')) {
+          const parts = this.data.resolution.split('x').map(Number);
+          if (parts.length === 2 && parts[0] > 0 && parts[1] > 0) {
+            resW = parts[0];
+            resH = parts[1];
+          }
+        } else {
+          switch (this.data.aspectRatio) {
+            case '9:16': resW = 720; resH = 1280; break;
+            case '4:3': resW = 1024; resH = 768; break;
+            case '1:1': resW = 800; resH = 800; break;
+            case '21:9': resW = 1680; resH = 720; break;
+            case '16:9':
+            default: resW = 1280; resH = 720; break;
+          }
+        }
+
+        // 3. Resolve physical dimensions in 3D scene (meters)
+        const physicalW = Math.max(0.1, Number(this.data.width) || 1.2);
+        let physicalH = Number(this.data.height);
+        if (!physicalH || physicalH <= 0) {
+          physicalH = physicalW * (resH / resW);
+        }
+
+        const baseScale = physicalW / resW;
+        this.baseScale = baseScale;
+        this.resW = resW;
+        this.resH = resH;
+        this.physicalW = physicalW;
+        this.physicalH = physicalH;
+
+        // 4. Build 3D Physical Enclosure Frame in Three.js
+        this.rootMesh = new THREE_LIB.Group();
+        this.rootMesh.name = 'ar-website-layer-root';
+
+        const frameStyle = this.data.frameStyle || 'cyber_bezel';
+        const frameColor = new THREE_LIB.Color(this.data.frameColor || '#6366f1');
+        const showBar = this.data.showAddressBar !== false;
+        const barHeightOffset = showBar ? 0.08 : 0.0;
+        const totalFrameH = physicalH + barHeightOffset + 0.04;
+        const totalFrameW = physicalW + 0.04;
+        const frameDepth = frameStyle === 'frameless' ? 0.005 : 0.035;
+
+        let frameMat;
+        if (frameStyle === 'obsidian') {
+          frameMat = new THREE_LIB.MeshStandardMaterial({
+            color: 0x09090b,
+            metalness: 0.9,
+            roughness: 0.15,
+            side: THREE_LIB.DoubleSide
+          });
+        } else if (frameStyle === 'minimal_glass') {
+          frameMat = new THREE_LIB.MeshPhysicalMaterial({
+            color: 0x1e293b,
+            metalness: 0.1,
+            roughness: 0.2,
+            transmission: 0.7,
+            transparent: true,
+            opacity: 0.85,
+            side: THREE_LIB.DoubleSide
+          });
+        } else if (frameStyle === 'frameless') {
+          frameMat = new THREE_LIB.MeshBasicMaterial({
+            color: 0x020617,
+            transparent: true,
+            opacity: 0.4,
+            side: THREE_LIB.DoubleSide
+          });
+        } else {
+          // cyber_bezel default
+          frameMat = new THREE_LIB.MeshStandardMaterial({
+            color: 0x0f172a,
+            metalness: 0.8,
+            roughness: 0.25,
+            side: THREE_LIB.DoubleSide
+          });
+        }
+
+        const boxGeo = new THREE_LIB.BoxGeometry(totalFrameW, totalFrameH, frameDepth);
+        const backingMesh = new THREE_LIB.Mesh(boxGeo, frameMat);
+        backingMesh.position.set(0, barHeightOffset / 2, -frameDepth / 2);
+        this.rootMesh.add(backingMesh);
+
+        // Glowing perimeter frame border
+        if (frameStyle !== 'frameless' && this.data.frameGlow !== false) {
+          const borderPoints = [
+            new THREE_LIB.Vector3(-totalFrameW / 2, -totalFrameH / 2 + barHeightOffset / 2, 0.002),
+            new THREE_LIB.Vector3(totalFrameW / 2, -totalFrameH / 2 + barHeightOffset / 2, 0.002),
+            new THREE_LIB.Vector3(totalFrameW / 2, totalFrameH / 2 + barHeightOffset / 2, 0.002),
+            new THREE_LIB.Vector3(-totalFrameW / 2, totalFrameH / 2 + barHeightOffset / 2, 0.002),
+            new THREE_LIB.Vector3(-totalFrameW / 2, -totalFrameH / 2 + barHeightOffset / 2, 0.002)
+          ];
+          const borderGeo = new THREE_LIB.BufferGeometry().setFromPoints(borderPoints);
+          const borderLineMat = new THREE_LIB.LineBasicMaterial({
+            color: frameColor,
+            linewidth: 2,
+            transparent: true,
+            opacity: 0.9
+          });
+          const borderLine = new THREE_LIB.Line(borderGeo, borderLineMat);
+          this.rootMesh.add(borderLine);
+        }
+
+        // Apply initial local transforms to rootMesh
+        this.rootMesh.position.set(
+          Number(this.data.posX) || 0,
+          Number(this.data.posY) || 0.8,
+          Number(this.data.posZ) || 0.05
+        );
+        const rotXRad = (Number(this.data.rotX) || 0) * (Math.PI / 180);
+        const rotYRad = (Number(this.data.rotY) || 0) * (Math.PI / 180);
+        const rotZRad = (Number(this.data.rotZ) || 0) * (Math.PI / 180);
+        this.rootMesh.rotation.set(rotXRad, rotYRad, rotZRad);
+        const s = Math.max(0.01, Number(this.data.scale) || 1.0);
+        this.rootMesh.scale.set(s, s, s);
+        this.rootMesh.updateMatrixWorld(true);
+
+        this.el.setObject3D('websiteLayerRoot', this.rootMesh);
+
+        // 5. Build HTML DOM Container for CSS3D
+        const containerDiv = document.createElement('div');
+        containerDiv.style.width = `${resW}px`;
+        containerDiv.style.height = `${resH}px`;
+        containerDiv.style.background = '#0a0e17';
+        containerDiv.style.borderRadius = frameStyle === 'frameless' ? '6px' : '14px';
+        containerDiv.style.overflow = 'hidden';
+        containerDiv.style.position = 'relative';
+        containerDiv.style.display = 'flex';
+        containerDiv.style.flexDirection = 'column';
+        containerDiv.style.boxShadow = '0 25px 60px rgba(0,0,0,0.85)';
+        containerDiv.style.border = `2px solid ${this.data.frameColor || '#6366f1'}`;
+        containerDiv.style.pointerEvents = this.data.interactive ? 'auto' : 'none';
+        containerDiv.style.backfaceVisibility = 'hidden';
+        containerDiv.style.webkitBackfaceVisibility = 'hidden';
+        containerDiv.style.transition = 'opacity 0.15s ease-out';
+        containerDiv.style.opacity = String(this.data.opacity ?? 1.0);
+
+        // Optional Top Cyber Address / Controls Bar
+        if (showBar) {
+          const header = document.createElement('div');
+          header.style.cssText = 'height:46px;background:rgba(15,23,42,0.95);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid rgba(255,255,255,0.1);user-select:none;gap:12px;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;shrink:0;';
+
+          // macOS style window control dots
+          const dots = document.createElement('div');
+          dots.style.cssText = 'display:flex;align-items:center;gap:6px;';
+          dots.innerHTML = '<span style="width:10px;height:10px;border-radius:50%;background:#ef4444;display:inline-block;"></span><span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;display:inline-block;"></span><span style="width:10px;height:10px;border-radius:50%;background:#10b981;display:inline-block;"></span>';
+          header.appendChild(dots);
+
+          // URL Pill
+          const urlPill = document.createElement('div');
+          urlPill.style.cssText = 'flex:1;background:rgba(2,6,23,0.7);border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:4px 12px;font-size:12px;font-family:monospace;color:#93c5fd;display:flex;align-items:center;gap:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+          urlPill.innerHTML = `<span style="font-size:11px;">🔒</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${rawUrl}</span>`;
+          header.appendChild(urlPill);
+
+          // Action Buttons: Reload, Popout, Interactivity Lock
+          const actions = document.createElement('div');
+          actions.style.cssText = 'display:flex;align-items:center;gap:6px;';
+
+          // Interactive lock toggle
+          const lockBtn = document.createElement('button');
+          lockBtn.type = 'button';
+          lockBtn.style.cssText = `padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;border:1px solid ${this.data.interactive ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)'};background:${this.data.interactive ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'};color:${this.data.interactive ? '#34d399' : '#f87171'};cursor:pointer;`;
+          lockBtn.textContent = this.data.interactive ? '🖱️ Touch On' : '🔒 Orbit Locked';
+          lockBtn.onclick = (e) => {
+            e.stopPropagation();
+            const next = !this.data.interactive;
+            this.data.interactive = next;
+            containerDiv.style.pointerEvents = next ? 'auto' : 'none';
+            if (this.iframe) this.iframe.style.pointerEvents = next ? 'auto' : 'none';
+            lockBtn.textContent = next ? '🖱️ Touch On' : '🔒 Orbit Locked';
+            lockBtn.style.borderColor = next ? 'rgba(16,185,129,0.5)' : 'rgba(239,68,68,0.5)';
+            lockBtn.style.background = next ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)';
+            lockBtn.style.color = next ? '#34d399' : '#f87171';
+          };
+          actions.appendChild(lockBtn);
+
+          // Reload button
+          const reloadBtn = document.createElement('button');
+          reloadBtn.type = 'button';
+          reloadBtn.style.cssText = 'padding:4px 8px;border-radius:6px;font-size:12px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.06);color:#cbd5e1;cursor:pointer;';
+          reloadBtn.textContent = '🔄';
+          reloadBtn.title = 'Reload page';
+          reloadBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (this.iframe) this.iframe.src = rawUrl;
+          };
+          actions.appendChild(reloadBtn);
+
+          // Popout external button
+          const popoutBtn = document.createElement('button');
+          popoutBtn.type = 'button';
+          popoutBtn.style.cssText = 'padding:4px 8px;border-radius:6px;font-size:12px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.06);color:#cbd5e1;cursor:pointer;';
+          popoutBtn.textContent = '↗';
+          popoutBtn.title = 'Open URL in new tab';
+          popoutBtn.onclick = (e) => {
+            e.stopPropagation();
+            window.open(rawUrl, '_blank', 'noopener,noreferrer');
+          };
+          actions.appendChild(popoutBtn);
+
+          header.appendChild(actions);
+          containerDiv.appendChild(header);
+        }
+
+        // Live IFrame
+        const iframe = document.createElement('iframe');
+        iframe.style.flex = '1';
+        iframe.style.width = '100%';
+        iframe.style.height = showBar ? `calc(100% - 46px)` : '100%';
+        iframe.style.border = '0px';
+        iframe.style.background = '#ffffff';
+        iframe.style.pointerEvents = this.data.interactive ? 'auto' : 'none';
+        iframe.src = rawUrl;
+        iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+        iframe.allowFullscreen = true;
+        iframe.sandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-presentation';
+        containerDiv.appendChild(iframe);
+
+        this.iframe = iframe;
+        this.containerDiv = containerDiv;
+
+        // 6. Create CSS3DObject and add to cssScene
+        this.cssObject = new CSS3DObject(containerDiv);
+        this.cssObject.scale.set(baseScale, baseScale, baseScale);
+        cssScene.add(this.cssObject);
+      },
+
+      tick: function () {
+        if (!this.rootMesh || !this.cssObject || !this.data.enabled) return;
+        const sceneEl = this.el.sceneEl;
+        if (!sceneEl) return;
+        const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
+
+        // Update local transform of 3D frame
+        this.rootMesh.position.set(
+          Number(this.data.posX) || 0,
+          Number(this.data.posY) || 0.8,
+          Number(this.data.posZ) || 0.05
+        );
+        const rotXRad = (Number(this.data.rotX) || 0) * (Math.PI / 180);
+        const rotYRad = (Number(this.data.rotY) || 0) * (Math.PI / 180);
+        const rotZRad = (Number(this.data.rotZ) || 0) * (Math.PI / 180);
+        this.rootMesh.rotation.set(rotXRad, rotYRad, rotZRad);
+        const s = Math.max(0.01, Number(this.data.scale) || 1.0);
+        this.rootMesh.scale.set(s, s, s);
+
+        // Billboard mode (face camera)
+        if (this.data.billboard && sceneEl.camera) {
+          const camWorldPos = new THREE_LIB.Vector3();
+          sceneEl.camera.getWorldPosition(camWorldPos);
+          this.rootMesh.lookAt(camWorldPos.x, this.rootMesh.position.y, camWorldPos.z);
+        }
+
+        this.rootMesh.updateMatrixWorld(true);
+
+        // Compute world position & quaternion
+        this.rootMesh.getWorldPosition(this._tempWorldPos);
+        this.rootMesh.getWorldQuaternion(this._tempWorldQuat);
+        this.rootMesh.getWorldScale(this._tempWorldScale);
+
+        // Position CSS3DObject slightly forward (+Z * 0.02) to sit on the front surface of the bezel
+        const forward = new THREE_LIB.Vector3(0, 0, 0.02).applyQuaternion(this._tempWorldQuat);
+        const targetPos = this._tempWorldPos.clone().add(forward);
+
+        this.cssObject.position.copy(targetPos);
+        this.cssObject.quaternion.copy(this._tempWorldQuat);
+        const finalScale = (this.baseScale || 0.001) * this._tempWorldScale.x;
+        this.cssObject.scale.set(finalScale, finalScale, finalScale);
+
+        // Backface Culling (prevent reversed backwards text when behind the frame)
+        if (sceneEl.camera && this.containerDiv) {
+          const camPos = new THREE_LIB.Vector3();
+          sceneEl.camera.getWorldPosition(camPos);
+          const viewDir = camPos.sub(targetPos).normalize();
+          const normal = new THREE_LIB.Vector3(0, 0, 1).applyQuaternion(this._tempWorldQuat);
+          const dot = normal.dot(viewDir);
+
+          if (dot < -0.05) {
+            this.containerDiv.style.opacity = '0';
+            this.containerDiv.style.pointerEvents = 'none';
+          } else {
+            this.containerDiv.style.opacity = String(this.data.opacity ?? 1.0);
+            this.containerDiv.style.pointerEvents = this.data.interactive ? 'auto' : 'none';
+          }
+        }
+
+        // Render CSS3D scene
+        if (sceneEl._css3dRenderer && sceneEl._css3dScene && sceneEl.camera) {
+          sceneEl.camera.updateMatrixWorld(true);
+          sceneEl.camera.matrixWorldInverse.copy(sceneEl.camera.matrixWorld).invert();
+          sceneEl._css3dRenderer.render(sceneEl._css3dScene, sceneEl.camera);
+        }
+      },
+
+      update: function (oldData) {
+        if (!oldData) return;
+        if (
+          oldData.enabled !== this.data.enabled ||
+          oldData.url !== this.data.url ||
+          oldData.width !== this.data.width ||
+          oldData.height !== this.data.height ||
+          oldData.aspectRatio !== this.data.aspectRatio ||
+          oldData.resolution !== this.data.resolution ||
+          oldData.frameStyle !== this.data.frameStyle ||
+          oldData.frameColor !== this.data.frameColor ||
+          oldData.frameGlow !== this.data.frameGlow ||
+          oldData.showAddressBar !== this.data.showAddressBar
+        ) {
+          this.buildLayer();
+        } else {
+          if (this.containerDiv) {
+            this.containerDiv.style.pointerEvents = this.data.interactive ? 'auto' : 'none';
+            this.containerDiv.style.opacity = String(this.data.opacity ?? 1.0);
+          }
+          if (this.iframe) {
+            this.iframe.style.pointerEvents = this.data.interactive ? 'auto' : 'none';
+          }
+        }
+      },
+
+      cleanUp: function () {
+        const sceneEl = this.el && this.el.sceneEl;
+        if (this.cssObject && sceneEl && sceneEl._css3dScene) {
+          try {
+            sceneEl._css3dScene.remove(this.cssObject);
+          } catch {}
+          this.cssObject = null;
+        }
+        if (this.rootMesh) {
+          while (this.rootMesh.children.length > 0) {
+            const child = this.rootMesh.children[0];
+            this.rootMesh.remove(child);
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+              if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+              else child.material.dispose();
+            }
+          }
+          if (this.el && typeof this.el.removeObject3D === 'function') {
+            this.el.removeObject3D('websiteLayerRoot');
+          }
+          this.rootMesh = null;
+        }
+      },
+
+      remove: function () {
+        this.cleanUp();
+      }
+    });
+  }
 }

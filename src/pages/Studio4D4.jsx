@@ -2853,19 +2853,15 @@ export default function Studio4D4() {
           mesh.castShadow = true;
           mesh.receiveShadow = true;
 
-          // Position mesh centered on grid
-          mesh.geometry.computeBoundingBox();
-          const meshBBox = mesh.geometry.boundingBox;
-          const heightOffset = (meshBBox.max.y - meshBBox.min.y) / 2;
-          mesh.position.set(0, heightOffset, 0);
+          // Position mesh centered at (0, 0, 0)
+          mesh.geometry.center();
+          mesh.position.set(0, 0, 0);
 
           this.addSceneObject(mesh);
           this.selectObject(mesh);
 
-          // Focus camera and OrbitControls on the object
-          this.orbit.target.set(0, heightOffset, 0);
-          this.camera.position.set(0, heightOffset + 1.5, 7.5);
-          this.orbit.update();
+          // Focus camera and OrbitControls on the object center
+          this.focusCameraOnScene(mesh);
 
           this.updateDiagnostics(
             `✅ 3D Model Successfully Created!\n` +
@@ -3292,12 +3288,16 @@ export default function Studio4D4() {
         document.getElementById('view-lit')?.addEventListener('click', () => this.setViewMode('lit'));
         document.getElementById('view-unlit')?.addEventListener('click', () => this.setViewMode('unlit'));
         document.getElementById('view-wire')?.addEventListener('click', () => this.setViewMode('wire'));
+        document.getElementById('btn-center-scene')?.addEventListener('click', () => this.centerSceneAndCamera());
+        document.getElementById('btn-focus-camera')?.addEventListener('click', () => this.focusCameraOnScene(this.selectedObject));
 
         this.keydownHandler = (e) => {
           if (document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
           if (e.key.toLowerCase() === 'w') { this.transformControl.setMode('translate'); this.updateGizmoBtns('translate'); }
           if (e.key.toLowerCase() === 'e') { this.transformControl.setMode('rotate'); this.updateGizmoBtns('rotate'); }
           if (e.key.toLowerCase() === 'r') { this.transformControl.setMode('scale'); this.updateGizmoBtns('scale'); }
+          if (e.key.toLowerCase() === 'c') { this.centerSceneAndCamera(); }
+          if (e.key.toLowerCase() === 'f') { this.focusCameraOnScene(this.selectedObject); }
           if (e.key === 'Delete' || e.key === 'Backspace') {
             if (this.selectedObject) {
               const obj = this.selectedObject;
@@ -3705,6 +3705,62 @@ export default function Studio4D4() {
         });
       }
 
+      focusCameraOnScene(targetObject = null) {
+        if (!this.camera || !this.orbit) return;
+        const box = new THREE.Box3();
+        if (targetObject) {
+          box.setFromObject(targetObject);
+        } else {
+          const exportable = this.objects.filter((o) => o && !o.isLight && !o.isHelper);
+          if (exportable.length === 0) {
+            this.orbit.target.set(0, 0, 0);
+            this.camera.position.set(0, 1.5, 7.5);
+            this.orbit.update();
+            return;
+          }
+          exportable.forEach((o) => box.expandByObject(o));
+        }
+
+        if (box.isEmpty()) return;
+
+        const center = new THREE.Vector3();
+        const size = new THREE.Vector3();
+        box.getCenter(center);
+        box.getSize(size);
+
+        const maxDim = Math.max(size.x, size.y, size.z, 0.5);
+        const fov = (this.camera.fov || 45) * (Math.PI / 180);
+        let dist = (maxDim / 2) / Math.tan(fov / 2) * 1.6;
+        dist = Math.max(1.5, Math.min(dist, 50.0));
+
+        this.orbit.target.copy(center);
+        this.camera.position.set(center.x, center.y + maxDim * 0.25, center.z + dist);
+        this.camera.lookAt(center);
+        this.orbit.update();
+      }
+
+      centerSceneAndCamera() {
+        const exportable = this.objects.filter((o) => o && !o.isLight && !o.isHelper);
+        if (exportable.length === 0) return;
+
+        const sceneBox = new THREE.Box3();
+        exportable.forEach((o) => sceneBox.expandByObject(o));
+        if (sceneBox.isEmpty()) return;
+
+        const center = new THREE.Vector3();
+        sceneBox.getCenter(center);
+
+        // Shift each top-level scene object so the collective scene is centered at (0, 0, 0)
+        exportable.forEach((obj) => {
+          obj.position.x -= center.x;
+          obj.position.y -= center.y;
+          obj.position.z -= center.z;
+        });
+
+        this.focusCameraOnScene();
+        this.updateDiagnostics('Scene aligned and centered at (0, 0, 0) with camera focused on center.');
+      }
+
       async import3DModelFile(file) {
         if (!file) return;
         const filename = file.name;
@@ -3809,7 +3865,7 @@ export default function Studio4D4() {
             }
           });
 
-          // Auto-scale and center in the studio scene
+          // Auto-scale and align perfectly centered in the studio scene at (0, 0, 0)
           const bbox = new THREE.Box3().setFromObject(loadedObject);
           const size = new THREE.Vector3();
           const center = new THREE.Vector3();
@@ -3822,21 +3878,12 @@ export default function Studio4D4() {
             const scaleFactor = targetSize / maxDim;
             loadedObject.scale.multiplyScalar(scaleFactor);
 
-            // Re-calculate after scaling
+            // Re-calculate after scaling and align center precisely at (0, 0, 0)
             bbox.setFromObject(loadedObject);
             bbox.getCenter(center);
             loadedObject.position.x -= center.x;
-            loadedObject.position.y -= bbox.min.y; // Place bottom flush with ground grid (y=0)
+            loadedObject.position.y -= center.y;
             loadedObject.position.z -= center.z;
-          }
-
-          // If there are already objects in the scene, apply a stagger offset so models don't occlude each other
-          const existingModels = this.objects.filter((o) => (o.isMesh || o.isGroup) && !o.isLight && !o.isHelper);
-          if (existingModels.length > 0) {
-            const count = existingModels.length;
-            const sign = count % 2 === 1 ? 1 : -1;
-            const mult = Math.ceil(count / 2);
-            loadedObject.position.x += sign * mult * 2.8;
           }
 
           loadedObject.userData = {
@@ -3855,7 +3902,11 @@ export default function Studio4D4() {
           if (this.characterAnimationManager) {
             this.characterAnimationManager.setupForObject(loadedObject);
           }
-          this.updateDiagnostics(`Successfully imported "${filename}" (${meshes.length} mesh part${meshes.length === 1 ? '' : 's'}). Ready for PBR editing, video texture layering, and .GLB export.`);
+
+          // Automatically focus camera on the centered model
+          this.focusCameraOnScene(loadedObject);
+
+          this.updateDiagnostics(`Successfully imported "${filename}" (${meshes.length} mesh part${meshes.length === 1 ? '' : 's'}) centered at (0, 0, 0). Ready for PBR editing, video texture layering, and .GLB export.`);
         } catch (err) {
           console.error('3D import error:', err);
           this.updateDiagnostics(`Failed to import "${filename}": ${err.message}`, true);
@@ -4085,15 +4136,13 @@ export default function Studio4D4() {
         mesh.receiveShadow = true;
 
         geometry.computeBoundingBox();
-        const bbox = geometry.boundingBox;
-        const baseY = bbox ? -bbox.min.y : 0.5;
+        geometry.center();
 
         const existingPrimitives = this.objects.filter((o) => o.userData?.archetype === 'PRIMITIVE_GEOMETRY');
         const count = existingPrimitives.length;
-        const offsetX = (count % 5 - 2) * 0.45;
-        const offsetZ = Math.floor(count / 5) * 0.45;
 
-        mesh.position.set(offsetX, baseY, offsetZ);
+        // Position primitive perfectly centered at scene origin (0, 0, 0)
+        mesh.position.set(0, 0, 0);
 
         const cleanTypeName = type.charAt(0).toUpperCase() + type.slice(1);
         mesh.name = options.name || `${cleanTypeName} ${count + 1}`;
@@ -4113,7 +4162,8 @@ export default function Studio4D4() {
         this.addSceneObject(mesh);
         this.selectObject(mesh);
         this.flashMeshHighlight(mesh);
-        this.updateDiagnostics(`Added 3D ${cleanTypeName} to scene.`);
+        this.focusCameraOnScene(mesh);
+        this.updateDiagnostics(`Added 3D ${cleanTypeName} centered at (0, 0, 0).`);
         return mesh;
       }
 
@@ -4424,7 +4474,10 @@ export default function Studio4D4() {
       async exportGLTF(customName = '') {
         if (this.isExporting) return;
         this.isExporting = true;
-        this.updateDiagnostics('Preparing 3D scene, character armature & animations for export...');
+
+        // 0. Ensure scene is aligned in center with camera focused on center
+        this.centerSceneAndCamera();
+        this.updateDiagnostics('Preparing 3D scene, character armature & animations for export (aligned at center)...');
 
         // 1. Upload any local video files (from root or child submeshes) to Firebase Storage
         const videoObjectsToUpload = [];
@@ -4467,6 +4520,20 @@ export default function Studio4D4() {
             exportScene.add(exportedMesh);
           }
         });
+
+        // Guarantee that the exported scene has its exact geometric center at (0, 0, 0)
+        const exportBox = new THREE.Box3().setFromObject(exportScene);
+        if (!exportBox.isEmpty()) {
+          const exportCenter = new THREE.Vector3();
+          exportBox.getCenter(exportCenter);
+          if (exportCenter.lengthSq() > 0.000001) {
+            exportScene.children.forEach((child) => {
+              child.position.x -= exportCenter.x;
+              child.position.y -= exportCenter.y;
+              child.position.z -= exportCenter.z;
+            });
+          }
+        }
 
         // Collect all animations from scene objects and animation manager
         const allClips = [];
@@ -5016,15 +5083,34 @@ export default function Studio4D4() {
         )}
 
         {/* Top Center Viewport Mode Bar */}
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[20] bg-slate-900/90 backdrop-blur-md rounded-xl p-1 flex gap-1 border border-slate-800 shadow-xl">
-          <button id="view-lit" className="px-3.5 py-1 text-xs font-bold rounded-lg bg-indigo-600 text-white shadow-sm transition-colors">
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[20] bg-slate-900/90 backdrop-blur-md rounded-xl p-1 flex items-center gap-1 border border-slate-800 shadow-xl">
+          <button id="view-lit" className="px-3 py-1 text-xs font-bold rounded-lg bg-indigo-600 text-white shadow-sm transition-colors">
             Lit (PBR)
           </button>
-          <button id="view-unlit" className="px-3.5 py-1 text-xs font-bold rounded-lg hover:bg-slate-800 text-slate-400 transition-colors">
+          <button id="view-unlit" className="px-3 py-1 text-xs font-bold rounded-lg hover:bg-slate-800 text-slate-400 transition-colors">
             Unlit
           </button>
-          <button id="view-wire" className="px-3.5 py-1 text-xs font-bold rounded-lg hover:bg-slate-800 text-slate-400 transition-colors">
+          <button id="view-wire" className="px-3 py-1 text-xs font-bold rounded-lg hover:bg-slate-800 text-slate-400 transition-colors">
             Wireframe
+          </button>
+          <div className="w-[1px] h-4 bg-slate-800 mx-1"></div>
+          <button
+            id="btn-center-scene"
+            type="button"
+            title="Center Scene & Camera (Press C)"
+            className="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-slate-800 text-indigo-300 hover:text-white transition-colors flex items-center gap-1.5 cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-sm text-indigo-400">filter_center_focus</span>
+            <span>Center (C)</span>
+          </button>
+          <button
+            id="btn-focus-camera"
+            type="button"
+            title="Focus Camera on Target (Press F)"
+            className="px-2.5 py-1 text-xs font-semibold rounded-lg hover:bg-slate-800 text-indigo-300 hover:text-white transition-colors flex items-center gap-1.5 cursor-pointer"
+          >
+            <span className="material-symbols-outlined text-sm text-indigo-400">center_focus_strong</span>
+            <span>Focus (F)</span>
           </button>
         </div>
 

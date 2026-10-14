@@ -16,6 +16,7 @@ import { logEvent } from 'firebase/analytics';
 import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfaceFrame, purgeAllSceneVideoLayers, PORTAL_PRESETS, PARTICLE_PRESETS } from '../utils/aframe-components';
 import AddGeometryModal from '../components/AddGeometryModal';
 import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES } from '../utils/geometryHelper';
+import { loadMarkerForBatch, createDefaultMarkerDataUrl, getImageDimensions } from '../utils/markerHelper';
 
 // =========================================================================
 // 1. REUSABLE TYPED SLIDER CONTROL WITH DUAL-WAY DATA BINDING
@@ -639,6 +640,26 @@ const ARTest = () => {
     return () => window.removeEventListener('starwear-video-mute-status', handleMuteStatus);
   }, []);
 
+  // Target Marker Visual Reference States (MindAR Physical Anchor Plane at 0, 0, 0)
+  const [markerVisible, setMarkerVisible] = useState(true);
+  const [markerImageUrl, setMarkerImageUrl] = useState('');
+  const [markerAspectRatio, setMarkerAspectRatio] = useState(0.5926); // height / width
+  const [markerWidth, setMarkerWidth] = useState(1.0); // 1.0m MindAR default
+  const [markerOpacity, setMarkerOpacity] = useState(0.85);
+  const [markerLoading, setMarkerLoading] = useState(false);
+  const [markerInfo, setMarkerInfo] = useState(null); // { width, height, source }
+  const markerFileInputRef = useRef(null);
+
+  // Initialize procedural default marker on mount if none loaded
+  useEffect(() => {
+    if (!markerImageUrl) {
+      const fb = createDefaultMarkerDataUrl('STAR weAR');
+      setMarkerImageUrl(fb.dataUrl);
+      setMarkerAspectRatio(fb.aspectRatio);
+      setMarkerInfo({ width: fb.width, height: fb.height, source: 'default' });
+    }
+  }, []);
+
   // OrbitControls & Camera References (Controlled like ProductViewer)
   const controlsRef = useRef(null);
   const cameraRef = useRef(null);
@@ -946,6 +967,52 @@ const ARTest = () => {
     if (p.shape !== undefined) setParticleShape(p.shape);
     if (p.rotationSpeed !== undefined) setParticleRotationSpeed(p.rotationSpeed);
     if (p.twinkle !== undefined) setParticleTwinkle(p.twinkle);
+  };
+
+  // =========================================================================
+  // LIVE WEBSITE LAYER CONFIGURATION STATES
+  // =========================================================================
+  const [websiteEnabled, setWebsiteEnabled] = useState(false);
+  const [websiteUrl, setWebsiteUrl] = useState('https://starwear.app');
+  const [websiteWidth, setWebsiteWidth] = useState(1.2);
+  const [websiteHeight, setWebsiteHeight] = useState(0.675);
+  const [websiteAspectRatio, setWebsiteAspectRatio] = useState('16:9'); // '16:9' | '4:3' | '1:1' | '9:16' | '21:9' | 'custom'
+  const [websiteResolution, setWebsiteResolution] = useState('1280x720'); // '1280x720' | '1920x1080' | '1024x768' | '720x1280' | '800x800'
+  const [websiteInteractive, setWebsiteInteractive] = useState(true);
+  const [websiteOpacity, setWebsiteOpacity] = useState(1.0);
+  const [websiteFrameStyle, setWebsiteFrameStyle] = useState('cyber_bezel'); // 'cyber_bezel' | 'obsidian' | 'minimal_glass' | 'frameless'
+  const [websiteFrameColor, setWebsiteFrameColor] = useState('#6366f1');
+  const [websiteFrameGlow, setWebsiteFrameGlow] = useState(true);
+  const [websiteCurved, setWebsiteCurved] = useState(false);
+  const [websiteCurveRadius, setWebsiteCurveRadius] = useState(3.0);
+  const [websiteBillboard, setWebsiteBillboard] = useState(false);
+  const [websitePosX, setWebsitePosX] = useState(0.0);
+  const [websitePosY, setWebsitePosY] = useState(0.8);
+  const [websitePosZ, setWebsitePosZ] = useState(0.05);
+  const [websiteRotX, setWebsiteRotX] = useState(0);
+  const [websiteRotY, setWebsiteRotY] = useState(0);
+  const [websiteRotZ, setWebsiteRotZ] = useState(0);
+  const [websiteScale, setWebsiteScale] = useState(1.0);
+  const [websiteShowAddressBar, setWebsiteShowAddressBar] = useState(true);
+
+  const applyWebsiteAspectRatio = (ar) => {
+    setWebsiteAspectRatio(ar);
+    if (ar === '16:9') {
+      setWebsiteHeight(Number((websiteWidth * (9 / 16)).toFixed(4)));
+      setWebsiteResolution('1280x720');
+    } else if (ar === '4:3') {
+      setWebsiteHeight(Number((websiteWidth * (3 / 4)).toFixed(4)));
+      setWebsiteResolution('1024x768');
+    } else if (ar === '1:1') {
+      setWebsiteHeight(websiteWidth);
+      setWebsiteResolution('800x800');
+    } else if (ar === '9:16') {
+      setWebsiteHeight(Number((websiteWidth * (16 / 9)).toFixed(4)));
+      setWebsiteResolution('720x1280');
+    } else if (ar === '21:9') {
+      setWebsiteHeight(Number((websiteWidth * (9 / 21)).toFixed(4)));
+      setWebsiteResolution('1680x720');
+    }
   };
 
   // =========================================================================
@@ -1997,7 +2064,7 @@ const ARTest = () => {
     setSelectedMeshUuid(uuid);
   }, [transitionCamera]);
 
-  // Studio4D4 Keyboard Shortcut: 'F' key to Frame / Focus Selected Mesh (or Reset View if none selected)
+  // Studio4D4 Keyboard Shortcut: 'F' key to Frame / Focus Selected Mesh (or Reset View), 'M' key to Toggle Marker Reference
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
@@ -2007,11 +2074,75 @@ const ARTest = () => {
         } else {
           setCameraView('reset');
         }
+      } else if (e.key.toLowerCase() === 'm') {
+        setMarkerVisible((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedMeshUuid, focusCameraOnMesh, setCameraView]);
+
+  // Target Marker Alignment & Calibration Actions
+  const frameCameraToMarker = useCallback(() => {
+    const markerH = markerWidth * (markerAspectRatio || 1);
+    const maxDim = Math.max(markerWidth, markerH, 0.5);
+    const fov = 45 * (Math.PI / 180);
+    let dist = (maxDim / 2) / Math.tan(fov / 2) * 1.5;
+    dist = Math.max(0.6, Math.min(dist, 4.0));
+    transitionCamera(new THREE.Vector3(0, 0, dist), new THREE.Vector3(0, 0, 0), 400);
+  }, [markerWidth, markerAspectRatio, transitionCamera]);
+
+  const snapModelToMarkerOrigin = () => {
+    setModelPosX(0);
+    setModelPosY(0);
+    setModelPosZ(0);
+  };
+
+  const snapModelToMarkerSurface = () => {
+    setModelPosZ(0);
+  };
+
+  const snapModelToMarkerBottom = () => {
+    const markerH = markerWidth * (markerAspectRatio || 1);
+    setModelPosY(Number((-markerH / 2).toFixed(3)));
+  };
+
+  const handleCustomMarkerUpload = async (file) => {
+    if (!file) return;
+    try {
+      setMarkerLoading(true);
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const dataUrl = e.target.result;
+        try {
+          const dims = await getImageDimensions(dataUrl);
+          setMarkerImageUrl(dataUrl);
+          setMarkerAspectRatio(dims.aspectRatio);
+          setMarkerInfo({ width: dims.width, height: dims.height, source: 'custom', name: file.name });
+          setMarkerVisible(true);
+        } catch (err) {
+          console.error("Failed to read marker image dimensions:", err);
+          setMarkerImageUrl(dataUrl);
+          setMarkerVisible(true);
+        } finally {
+          setMarkerLoading(false);
+        }
+      };
+      reader.onerror = () => setMarkerLoading(false);
+      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error("Failed to upload custom marker:", err);
+      setMarkerLoading(false);
+    }
+  };
+
+  const handleResetMarkerToDefault = () => {
+    const fb = createDefaultMarkerDataUrl('STAR weAR');
+    setMarkerImageUrl(fb.dataUrl);
+    setMarkerAspectRatio(fb.aspectRatio);
+    setMarkerInfo({ width: fb.width, height: fb.height, source: 'default' });
+    setMarkerVisible(true);
+  };
 
   // Handlers to update either individual mesh or root model transform/materials
   const handleRotationChange = (axis, deg) => {
@@ -2925,6 +3056,7 @@ const ARTest = () => {
         batchSnap = await getDoc(batchRef);
       }
       let batchConfig = null;
+      let assetSnap = null;
 
       if (batchSnap && batchSnap.exists()) {
         const batchData = batchSnap.data();
@@ -2936,17 +3068,18 @@ const ARTest = () => {
         }
       }
 
-      if (!batchConfig) {
+      // Check asset doc for config and marker data (using batchData.asset_id or batchId)
+      try {
+        const assetId = (batchSnap && batchSnap.exists() && (batchSnap.data()?.asset_id || batchSnap.data()?.assetId)) || batchId.trim();
+        const assetRef = doc(db, 'assets', assetId);
         try {
-          const assetRef = doc(db, 'assets', batchId.trim());
-          let assetSnap = null;
-          try {
-            assetSnap = await getDocFromServer(assetRef);
-          } catch {
-            assetSnap = await getDoc(assetRef);
-          }
-          if (assetSnap && assetSnap.exists()) {
-            const aData = assetSnap.data();
+          assetSnap = await getDocFromServer(assetRef);
+        } catch {
+          assetSnap = await getDoc(assetRef);
+        }
+        if (assetSnap && assetSnap.exists()) {
+          const aData = assetSnap.data();
+          if (!batchConfig) {
             if (aData.video_url || aData.videoUrl) {
               videoUrl = aData.video_url || aData.videoUrl;
             }
@@ -2954,7 +3087,9 @@ const ARTest = () => {
               batchConfig = aData.ar_config;
             }
           }
-        } catch { }
+        }
+      } catch (assetErr) {
+        console.warn("[ARTest] Asset document fetch skipped:", assetErr);
       }
 
       const cfg = batchConfig || data.arExperience?.config || data.ar_config || {};
@@ -3136,6 +3271,35 @@ const ARTest = () => {
         setParticleSystemEnabled(false);
       }
 
+      // Populate Live Website Layer Settings if configured on batch
+      const webCfg = cfg.websiteLayer || cfg.webLayer || cfg.website || null;
+      if (webCfg) {
+        if (webCfg.enabled !== undefined) setWebsiteEnabled(Boolean(webCfg.enabled));
+        if (webCfg.url !== undefined) setWebsiteUrl(webCfg.url);
+        if (webCfg.width !== undefined) setWebsiteWidth(Number(webCfg.width));
+        if (webCfg.height !== undefined) setWebsiteHeight(Number(webCfg.height));
+        if (webCfg.aspectRatio !== undefined) setWebsiteAspectRatio(webCfg.aspectRatio);
+        if (webCfg.resolution !== undefined) setWebsiteResolution(webCfg.resolution);
+        if (webCfg.interactive !== undefined) setWebsiteInteractive(Boolean(webCfg.interactive));
+        if (webCfg.opacity !== undefined) setWebsiteOpacity(Number(webCfg.opacity));
+        if (webCfg.frameStyle !== undefined) setWebsiteFrameStyle(webCfg.frameStyle);
+        if (webCfg.frameColor !== undefined) setWebsiteFrameColor(webCfg.frameColor);
+        if (webCfg.frameGlow !== undefined) setWebsiteFrameGlow(Boolean(webCfg.frameGlow));
+        if (webCfg.curved !== undefined) setWebsiteCurved(Boolean(webCfg.curved));
+        if (webCfg.curveRadius !== undefined) setWebsiteCurveRadius(Number(webCfg.curveRadius));
+        if (webCfg.billboard !== undefined) setWebsiteBillboard(Boolean(webCfg.billboard));
+        if (webCfg.posX !== undefined) setWebsitePosX(Number(webCfg.posX));
+        if (webCfg.posY !== undefined) setWebsitePosY(Number(webCfg.posY));
+        if (webCfg.posZ !== undefined) setWebsitePosZ(Number(webCfg.posZ));
+        if (webCfg.rotX !== undefined) setWebsiteRotX(Number(webCfg.rotX));
+        if (webCfg.rotY !== undefined) setWebsiteRotY(Number(webCfg.rotY));
+        if (webCfg.rotZ !== undefined) setWebsiteRotZ(Number(webCfg.rotZ));
+        if (webCfg.scale !== undefined) setWebsiteScale(Number(webCfg.scale));
+        if (webCfg.showAddressBar !== undefined) setWebsiteShowAddressBar(Boolean(webCfg.showAddressBar));
+      } else {
+        setWebsiteEnabled(false);
+      }
+
       // Populate Additional 3D Primitive Geometries if configured on batch
       const loadedGeoms = cfg.additionalGeometries || data.additionalGeometries || data.arExperience?.additionalGeometries || null;
       if (Array.isArray(loadedGeoms)) {
@@ -3152,6 +3316,47 @@ const ARTest = () => {
           setDeletedMeshNames(loadedDeleted);
         }
       }
+
+      // Target Marker Reference Settings
+      const markerCfg = cfg?.markerConfig || cfg?.targetMarker || null;
+      if (markerCfg) {
+        if (markerCfg.visible !== undefined) setMarkerVisible(Boolean(markerCfg.visible));
+        if (markerCfg.opacity !== undefined) setMarkerOpacity(Number(markerCfg.opacity));
+        if (markerCfg.width !== undefined) setMarkerWidth(Number(markerCfg.width));
+        if (markerCfg.imageUrl) {
+          setMarkerImageUrl(markerCfg.imageUrl);
+          if (markerCfg.aspectRatio) setMarkerAspectRatio(Number(markerCfg.aspectRatio));
+          setMarkerInfo({ width: markerCfg.widthPx, height: markerCfg.heightPx, source: 'batch_config' });
+        }
+      }
+
+      // Automatically load/extract marker from batch (marker image, Firebase Storage path, or .mind file)
+      const batchMarkerPayload = {
+        batchId: batchId.trim(),
+        customMarkerUrl: markerCfg?.imageUrl || null,
+        data,
+        batchData: (typeof batchSnap !== 'undefined' && batchSnap?.exists()) ? batchSnap.data() : null,
+        assetData: (typeof assetSnap !== 'undefined' && assetSnap?.exists()) ? assetSnap.data() : null,
+        cfg
+      };
+      setMarkerLoading(true);
+      loadMarkerForBatch(batchMarkerPayload).then((res) => {
+        if (res && res.dataUrl) {
+          setMarkerImageUrl(res.dataUrl);
+          setMarkerAspectRatio(res.aspectRatio || 0.5926);
+          setMarkerInfo({
+            width: res.width,
+            height: res.height,
+            source: res.source,
+            confidence: res.confidence
+          });
+          setMarkerVisible(true);
+        }
+      }).catch((err) => {
+        console.warn("[ARTest] Failed to load marker image for batch:", err);
+      }).finally(() => {
+        setMarkerLoading(false);
+      });
 
       setActiveVideoUrl(videoUrl);
       if (isYouTubeUrl(videoUrl)) {
@@ -3254,6 +3459,16 @@ const ARTest = () => {
         uiLoading: trackingUiLoading,
         uiScanning: trackingUiScanning,
         uiError: trackingUiError
+      },
+      markerConfig: {
+        visible: Boolean(markerVisible),
+        opacity: Number(markerOpacity),
+        width: Number(markerWidth),
+        aspectRatio: Number(markerAspectRatio),
+        imageUrl: (markerImageUrl && !markerImageUrl.startsWith('data:')) ? markerImageUrl : (markerInfo?.source === 'custom' ? markerImageUrl : ''),
+        widthPx: markerInfo?.width,
+        heightPx: markerInfo?.height,
+        source: markerInfo?.source
       },
       portalConfig: {
         enabled: Boolean(portalEnabled),
@@ -3660,6 +3875,30 @@ const ARTest = () => {
           rotationSpeed: Number(particleRotationSpeed),
           twinkle: Boolean(particleTwinkle)
         },
+        websiteLayer: {
+          enabled: Boolean(websiteEnabled),
+          url: websiteUrl,
+          width: Number(websiteWidth),
+          height: Number(websiteHeight),
+          aspectRatio: websiteAspectRatio,
+          resolution: websiteResolution,
+          interactive: Boolean(websiteInteractive),
+          opacity: Number(websiteOpacity),
+          frameStyle: websiteFrameStyle,
+          frameColor: websiteFrameColor,
+          frameGlow: Boolean(websiteFrameGlow),
+          curved: Boolean(websiteCurved),
+          curveRadius: Number(websiteCurveRadius),
+          billboard: Boolean(websiteBillboard),
+          posX: Number(websitePosX),
+          posY: Number(websitePosY),
+          posZ: Number(websitePosZ),
+          rotX: Number(websiteRotX),
+          rotY: Number(websiteRotY),
+          rotZ: Number(websiteRotZ),
+          scale: Number(websiteScale),
+          showAddressBar: Boolean(websiteShowAddressBar)
+        },
         additionalGeometries: additionalGeometries || [],
         updatedAt: new Date().toISOString()
       };
@@ -3672,6 +3911,7 @@ const ARTest = () => {
         ar_config: arConfigPayload,
         portalConfig: arConfigPayload.portalConfig,
         particleConfig: arConfigPayload.particleConfig,
+        websiteLayer: arConfigPayload.websiteLayer,
         additionalGeometries: additionalGeometries || []
       };
 
@@ -4134,6 +4374,20 @@ const ARTest = () => {
           </button>
           <button
             type="button"
+            onClick={() => setActiveTab('website')}
+            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'website'
+              ? 'bg-neutral-800 text-indigo-300 font-bold shadow border border-indigo-500/50'
+              : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
+              }`}
+          >
+            <span className="material-symbols-outlined text-sm text-indigo-400">language</span>
+            <span>Website</span>
+            {websiteEnabled && (
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse ml-0.5"></span>
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('tracking')}
             className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'tracking'
               ? 'bg-neutral-800 text-cyan-300 font-bold shadow border border-cyan-500/50'
@@ -4273,6 +4527,56 @@ const ARTest = () => {
                     handlePositionChange('z', 0);
                   }}
                 />
+
+                {/* Target Marker Snapping & Alignment */}
+                <div className="p-2.5 rounded-lg bg-neutral-900/90 border border-emerald-500/30 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+                      <span className="material-symbols-outlined text-xs">qr_code_2</span>
+                      Marker Alignment
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setMarkerVisible((v) => !v)}
+                      className={`text-[10px] font-mono px-2 py-0.5 rounded border transition-colors ${
+                        markerVisible
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                          : 'bg-neutral-800 text-neutral-400 border-neutral-700'
+                      }`}
+                    >
+                      {markerVisible ? 'Marker: Visible' : 'Marker: Hidden'}
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={snapModelToMarkerOrigin}
+                      className="px-2 py-1.5 rounded bg-neutral-800 hover:bg-emerald-950/60 hover:border-emerald-500/50 border border-neutral-700 text-neutral-300 hover:text-emerald-200 text-[10px] font-semibold flex flex-col items-center gap-1 transition-all"
+                      title="Snap object to exact marker center (0, 0, 0)"
+                    >
+                      <span className="material-symbols-outlined text-xs text-emerald-400">filter_center_focus</span>
+                      Center (0,0,0)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={snapModelToMarkerSurface}
+                      className="px-2 py-1.5 rounded bg-neutral-800 hover:bg-emerald-950/60 hover:border-emerald-500/50 border border-neutral-700 text-neutral-300 hover:text-emerald-200 text-[10px] font-semibold flex flex-col items-center gap-1 transition-all"
+                      title="Align object flush to marker face (Z = 0)"
+                    >
+                      <span className="material-symbols-outlined text-xs text-cyan-400">vertical_align_center</span>
+                      Flush (Z=0)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={snapModelToMarkerBottom}
+                      className="px-2 py-1.5 rounded bg-neutral-800 hover:bg-emerald-950/60 hover:border-emerald-500/50 border border-neutral-700 text-neutral-300 hover:text-emerald-200 text-[10px] font-semibold flex flex-col items-center gap-1 transition-all"
+                      title="Ground object along bottom edge of marker"
+                    >
+                      <span className="material-symbols-outlined text-xs text-amber-400">vertical_align_bottom</span>
+                      Bottom Edge
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* Scale & Auto-Spin Animation */}
@@ -6453,6 +6757,192 @@ const ARTest = () => {
           {/* ========================================================================= */}
           {activeTab === 'tracking' && (
             <div className="space-y-5">
+              {/* Target Marker Visual Reference Card */}
+              <div className="p-3.5 bg-neutral-900/90 border border-emerald-500/40 rounded-xl space-y-3.5 shadow-lg">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
+                      <span className="material-symbols-outlined text-base">qr_code_2</span>
+                    </div>
+                    <div>
+                      <h2 className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
+                        Target Marker Reference
+                        <span className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-bold uppercase ${
+                          markerVisible ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-neutral-800 text-neutral-400'
+                        }`}>
+                          {markerVisible ? 'Active in Viewport' : 'Hidden'}
+                        </span>
+                      </h2>
+                      <p className="text-[10px] text-neutral-400">Physical image anchor tracked by MindAR (0, 0, 0)</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMarkerVisible((v) => !v)}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold border transition-all ${
+                      markerVisible
+                        ? 'bg-emerald-600 text-white border-emerald-400 shadow-md shadow-emerald-900/40'
+                        : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border-neutral-700'
+                    }`}
+                  >
+                    {markerVisible ? 'Hide Marker' : 'Show Marker'}
+                  </button>
+                </div>
+
+                {/* Marker Image Thumbnail & Meta Details */}
+                <div className="flex items-start gap-3 p-2.5 rounded-lg bg-black/60 border border-neutral-800">
+                  <div className="relative w-24 h-24 shrink-0 rounded-lg overflow-hidden border border-emerald-500/30 bg-neutral-950 flex items-center justify-center group">
+                    {markerImageUrl ? (
+                      <img
+                        src={markerImageUrl}
+                        alt="Target Marker"
+                        className="w-full h-full object-contain"
+                      />
+                    ) : (
+                      <div className="text-center p-2 text-neutral-500">
+                        <span className="material-symbols-outlined text-xl">image_not_supported</span>
+                      </div>
+                    )}
+                    {markerLoading && (
+                      <div className="absolute inset-0 bg-black/70 flex items-center justify-center">
+                        <span className="w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex-1 min-w-0 space-y-1.5 text-[11px]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-neutral-400">Resolution:</span>
+                      <span className="font-mono text-emerald-300 font-bold">
+                        {markerInfo?.width ? `${markerInfo.width} × ${markerInfo.height} px` : '1024 × 607 px (Procedural)'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-neutral-400">Aspect Ratio:</span>
+                      <span className="font-mono text-cyan-300 font-bold">
+                        {(markerAspectRatio || 0.5926).toFixed(4)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-neutral-400">Anchor Origin:</span>
+                      <span className="font-mono text-purple-300">(0.00, 0.00, 0.00)</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-neutral-400">Source:</span>
+                      <span className="font-mono text-xs px-1 py-0.2 rounded bg-neutral-800 text-neutral-300 border border-neutral-700">
+                        {markerInfo?.source === 'mind_extracted' ? 'Extracted from .MIND' :
+                         markerInfo?.source === 'batch_marker_image' ? 'Batch Target Image' :
+                         markerInfo?.source === 'storage_image_path' ? 'Storage Target Image' :
+                         markerInfo?.source === 'custom' ? 'Custom Upload' : 'Default Calibration'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sliders: Opacity & Physical Width */}
+                <div className="space-y-2 pt-1">
+                  <NumberSliderInput
+                    label="Marker Opacity in Viewport"
+                    value={markerOpacity}
+                    onChange={setMarkerOpacity}
+                    min={0.1}
+                    max={1.0}
+                    step={0.05}
+                    color="emerald"
+                    precision={2}
+                    resetValue={0.85}
+                    description="Adjust visual transparency of reference marker in 3D scene"
+                  />
+                  <NumberSliderInput
+                    label="Physical Marker Width"
+                    value={markerWidth}
+                    onChange={setMarkerWidth}
+                    min={0.2}
+                    max={3.0}
+                    step={0.05}
+                    unit="m"
+                    color="cyan"
+                    precision={2}
+                    resetValue={1.0}
+                    description="MindAR default is normalized to 1.0 meter width in scene space"
+                  />
+                </div>
+
+                {/* Alignment & Actions Grid */}
+                <div className="pt-2 border-t border-neutral-800 space-y-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">Quick Alignment Actions</span>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={snapModelToMarkerOrigin}
+                      className="p-1.5 rounded bg-neutral-800 hover:bg-emerald-950/70 border border-neutral-700 hover:border-emerald-500/50 text-neutral-300 hover:text-emerald-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+                      title="Set model position to (0, 0, 0)"
+                    >
+                      <span className="material-symbols-outlined text-xs text-emerald-400">filter_center_focus</span>
+                      Center on Marker
+                    </button>
+                    <button
+                      type="button"
+                      onClick={snapModelToMarkerSurface}
+                      className="p-1.5 rounded bg-neutral-800 hover:bg-emerald-950/70 border border-neutral-700 hover:border-emerald-500/50 text-neutral-300 hover:text-emerald-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+                      title="Set model Z depth to 0 (flush to surface)"
+                    >
+                      <span className="material-symbols-outlined text-xs text-cyan-400">vertical_align_center</span>
+                      Flush to Surface
+                    </button>
+                    <button
+                      type="button"
+                      onClick={snapModelToMarkerBottom}
+                      className="p-1.5 rounded bg-neutral-800 hover:bg-emerald-950/70 border border-neutral-700 hover:border-emerald-500/50 text-neutral-300 hover:text-emerald-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+                      title="Ground model on bottom edge of marker"
+                    >
+                      <span className="material-symbols-outlined text-xs text-amber-400">vertical_align_bottom</span>
+                      Ground to Bottom
+                    </button>
+                    <button
+                      type="button"
+                      onClick={frameCameraToMarker}
+                      className="p-1.5 rounded bg-neutral-800 hover:bg-indigo-950/70 border border-neutral-700 hover:border-indigo-500/50 text-neutral-300 hover:text-indigo-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+                      title="Align camera directly perpendicular to marker face"
+                    >
+                      <span className="material-symbols-outlined text-xs text-indigo-400">crop_free</span>
+                      Frame Marker Face
+                    </button>
+                  </div>
+
+                  {/* Marker Image Upload & Reset */}
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="file"
+                      ref={markerFileInputRef}
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleCustomMarkerUpload(file);
+                        e.target.value = '';
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => markerFileInputRef.current?.click()}
+                      className="flex-1 py-1.5 px-2 bg-neutral-800 hover:bg-emerald-900/60 text-neutral-200 hover:text-emerald-200 border border-neutral-700 hover:border-emerald-500/50 rounded text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                    >
+                      <span className="material-symbols-outlined text-xs">file_upload</span>
+                      Upload Custom Marker
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetMarkerToDefault}
+                      className="py-1.5 px-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-neutral-200 border border-neutral-700 rounded text-xs font-semibold transition-all"
+                      title="Reset to procedural calibration marker"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               {/* Scope Selection Box */}
               <div className="p-3 bg-neutral-900/90 border border-cyan-500/40 rounded-lg space-y-3">
                 <div className="flex items-center justify-between">
@@ -8459,6 +8949,501 @@ const ARTest = () => {
               </div>
             </div>
           )}
+
+          {/* ========================================================================= */}
+          {/* TAB: LIVE INTERACTIVE 3D WEBSITE LAYER                                    */}
+          {/* ========================================================================= */}
+          {activeTab === 'website' && (
+            <div className="space-y-5">
+              {/* Master Live Website Layer Toggle & Intro */}
+              <div className="p-3 bg-gradient-to-r from-indigo-950/60 to-purple-950/40 rounded-xl border border-indigo-500/30 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-lg text-indigo-400">language</span>
+                    <div>
+                      <h2 className="text-xs font-bold uppercase tracking-wider text-white">Live 3D Website Layer</h2>
+                      <p className="text-[10px] text-neutral-400">Interactive Web Browser Viewport in 3D & AR</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setWebsiteEnabled(!websiteEnabled)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer ${
+                      websiteEnabled
+                        ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+                        : 'bg-neutral-800 text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-sm">
+                      {websiteEnabled ? 'check_circle' : 'power_settings_new'}
+                    </span>
+                    <span>{websiteEnabled ? 'Enabled' : 'Disabled'}</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-neutral-300 leading-relaxed">
+                  Project any interactive live website, store, documentation, or dashboard floating directly in 3D and AR space with synchronized CSS3D.
+                </p>
+              </div>
+
+              {/* URL Input & Presets */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-sky-400">link</span>
+                    Website Target URL
+                  </h3>
+                  <a
+                    href={websiteUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-0.5"
+                    title="Open website in new browser tab"
+                  >
+                    <span>Open External</span>
+                    <span className="material-symbols-outlined text-xs">open_in_new</span>
+                  </a>
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={websiteUrl}
+                    onChange={(e) => setWebsiteUrl(e.target.value)}
+                    placeholder="https://example.com"
+                    className="flex-1 bg-black/60 border border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-white placeholder-neutral-500 font-mono focus:border-indigo-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!websiteEnabled) setWebsiteEnabled(true);
+                      const current = websiteUrl;
+                      setWebsiteUrl('');
+                      setTimeout(() => setWebsiteUrl(current), 50);
+                    }}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-all shrink-0 flex items-center gap-1 cursor-pointer"
+                    title="Reload website in 3D viewport"
+                  >
+                    <span className="material-symbols-outlined text-sm">refresh</span>
+                    <span>Load</span>
+                  </button>
+                </div>
+
+                {/* Quick Presets */}
+                <div className="space-y-1.5">
+                  <span className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider">Quick Presets</span>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {[
+                      { label: 'Star weAR Store', url: 'https://starwear.app', icon: 'shopping_bag' },
+                      { label: 'Three.js Visuals', url: 'https://threejs.org', icon: 'view_in_ar' },
+                      { label: 'NASA Eyes 3D', url: 'https://eyes.nasa.gov', icon: 'public' },
+                      { label: 'Wikipedia AR', url: 'https://en.m.wikipedia.org/wiki/Augmented_reality', icon: 'menu_book' }
+                    ].map((preset) => (
+                      <button
+                        key={preset.url}
+                        type="button"
+                        onClick={() => {
+                          setWebsiteUrl(preset.url);
+                          if (!websiteEnabled) setWebsiteEnabled(true);
+                        }}
+                        className={`p-2 rounded-lg text-left text-[11px] font-semibold border transition-all flex items-center gap-2 cursor-pointer ${
+                          websiteUrl === preset.url
+                            ? 'bg-indigo-950/80 border-indigo-500/80 text-indigo-300'
+                            : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-700'
+                        }`}
+                      >
+                        <span className="material-symbols-outlined text-sm text-indigo-400">{preset.icon}</span>
+                        <span className="truncate">{preset.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Interactivity & Display Mode */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5 border-b border-neutral-800 pb-1.5">
+                  <span className="material-symbols-outlined text-sm text-emerald-400">touch_app</span>
+                  Interactivity & Navigation
+                </h3>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setWebsiteInteractive(true)}
+                    className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                      websiteInteractive
+                        ? 'bg-emerald-950/80 border-emerald-500/80 text-emerald-300 shadow-md shadow-emerald-950/40'
+                        : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:border-neutral-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-xs">
+                      <span className="material-symbols-outlined text-sm text-emerald-400">ads_click</span>
+                      <span>Interactive</span>
+                    </div>
+                    <p className="text-[10px] text-neutral-400 mt-1 leading-snug">
+                      Clicks, scrolls & text input interact with the website inside the 3D scene.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setWebsiteInteractive(false)}
+                    className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                      !websiteInteractive
+                        ? 'bg-amber-950/80 border-amber-500/80 text-amber-300 shadow-md shadow-amber-950/40'
+                        : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:border-neutral-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-xs">
+                      <span className="material-symbols-outlined text-sm text-amber-400">orbit</span>
+                      <span>Orbit Locked</span>
+                    </div>
+                    <p className="text-[10px] text-neutral-400 mt-1 leading-snug">
+                      Dragging on the screen orbits the 3D scene around the website display.
+                    </p>
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <label className="text-xs font-medium text-neutral-300 flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={websiteShowAddressBar}
+                      onChange={(e) => setWebsiteShowAddressBar(e.target.checked)}
+                      className="rounded bg-neutral-900 border-neutral-700 text-indigo-600 focus:ring-0"
+                    />
+                    <span>Show 3D Floating Address Bar</span>
+                  </label>
+
+                  <label className="text-xs font-medium text-neutral-300 flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={websiteBillboard}
+                      onChange={(e) => setWebsiteBillboard(e.target.checked)}
+                      className="rounded bg-neutral-900 border-neutral-700 text-indigo-600 focus:ring-0"
+                    />
+                    <span>Billboard (Face Camera)</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Aspect Ratio & Resolution */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5 border-b border-neutral-800 pb-1.5">
+                  <span className="material-symbols-outlined text-sm text-purple-400">aspect_ratio</span>
+                  Aspect Ratio & Virtual Resolution
+                </h3>
+
+                <div className="grid grid-cols-5 gap-1.5">
+                  {[
+                    { key: '16:9', label: '16:9', desc: 'Landscape' },
+                    { key: '4:3', label: '4:3', desc: 'Desktop' },
+                    { key: '1:1', label: '1:1', desc: 'Square' },
+                    { key: '9:16', label: '9:16', desc: 'Phone' },
+                    { key: '21:9', label: '21:9', desc: 'Ultra' }
+                  ].map((ratio) => (
+                    <button
+                      key={ratio.key}
+                      type="button"
+                      onClick={() => applyWebsiteAspectRatio(ratio.key)}
+                      className={`py-2 px-1 rounded-lg text-center border transition-all cursor-pointer ${
+                        websiteAspectRatio === ratio.key
+                          ? 'bg-indigo-950/90 border-indigo-500 text-white font-bold'
+                          : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-700'
+                      }`}
+                    >
+                      <div className="text-xs font-mono">{ratio.label}</div>
+                      <div className="text-[9px] text-neutral-400 truncate">{ratio.desc}</div>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center justify-between text-xs pt-1">
+                  <span className="text-neutral-400">Virtual Pixel Resolution:</span>
+                  <select
+                    value={websiteResolution}
+                    onChange={(e) => setWebsiteResolution(e.target.value)}
+                    className="bg-black/80 border border-neutral-700 rounded-lg px-2.5 py-1 text-xs text-indigo-300 font-mono focus:border-indigo-500 focus:outline-none"
+                  >
+                    <option value="1280x720">1280 × 720 (Standard HD)</option>
+                    <option value="1920x1080">1920 × 1080 (Full HD)</option>
+                    <option value="1024x768">1024 × 768 (XGA 4:3)</option>
+                    <option value="800x800">800 × 800 (Square Widget)</option>
+                    <option value="720x1280">720 × 1280 (Mobile Vertical)</option>
+                    <option value="1680x720">1680 × 720 (Ultrawide 21:9)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Physical Sizing & 3D Transform Sliders */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5 border-b border-neutral-800 pb-1.5">
+                  <span className="material-symbols-outlined text-sm text-amber-400">straighten</span>
+                  Physical Sizing & Scale
+                </h3>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <NumberSliderInput
+                    label="Physical Width"
+                    value={websiteWidth}
+                    onChange={(val) => {
+                      setWebsiteWidth(val);
+                      if (websiteAspectRatio === '16:9') setWebsiteHeight(Number((val * (9 / 16)).toFixed(4)));
+                      else if (websiteAspectRatio === '4:3') setWebsiteHeight(Number((val * (3 / 4)).toFixed(4)));
+                      else if (websiteAspectRatio === '1:1') setWebsiteHeight(val);
+                      else if (websiteAspectRatio === '9:16') setWebsiteHeight(Number((val * (16 / 9)).toFixed(4)));
+                      else if (websiteAspectRatio === '21:9') setWebsiteHeight(Number((val * (9 / 21)).toFixed(4)));
+                    }}
+                    min={0.2}
+                    max={4.0}
+                    step={0.05}
+                    unit="m"
+                    color="indigo"
+                    precision={2}
+                    resetValue={1.2}
+                  />
+                  <NumberSliderInput
+                    label="Physical Height"
+                    value={websiteHeight}
+                    onChange={setWebsiteHeight}
+                    min={0.2}
+                    max={4.0}
+                    step={0.05}
+                    unit="m"
+                    color="indigo"
+                    precision={2}
+                    resetValue={0.675}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <NumberSliderInput
+                    label="Display Scale"
+                    value={websiteScale}
+                    onChange={setWebsiteScale}
+                    min={0.2}
+                    max={3.0}
+                    step={0.05}
+                    unit="x"
+                    color="indigo"
+                    precision={2}
+                    resetValue={1.0}
+                  />
+                  <NumberSliderInput
+                    label="Opacity"
+                    value={websiteOpacity}
+                    onChange={setWebsiteOpacity}
+                    min={0.1}
+                    max={1.0}
+                    step={0.05}
+                    color="indigo"
+                    precision={2}
+                    resetValue={1.0}
+                  />
+                </div>
+              </div>
+
+              {/* 3D Spatial Position Offset */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-indigo-400">open_with</span>
+                    3D Spatial Position
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => { setWebsitePosX(0); setWebsitePosY(0.8); setWebsitePosZ(0.05); }}
+                    className="text-[10px] text-neutral-400 hover:text-white font-mono cursor-pointer"
+                  >
+                    Reset (0, 0.8, 0.05)
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <NumberSliderInput
+                    label="X (Left / Right)"
+                    value={websitePosX}
+                    onChange={setWebsitePosX}
+                    min={-3.0}
+                    max={3.0}
+                    step={0.05}
+                    unit="m"
+                    color="rose"
+                    precision={2}
+                    resetValue={0.0}
+                  />
+                  <NumberSliderInput
+                    label="Y (Height)"
+                    value={websitePosY}
+                    onChange={setWebsitePosY}
+                    min={-2.0}
+                    max={4.0}
+                    step={0.05}
+                    unit="m"
+                    color="emerald"
+                    precision={2}
+                    resetValue={0.8}
+                  />
+                  <NumberSliderInput
+                    label="Z (Forward / Back)"
+                    value={websitePosZ}
+                    onChange={setWebsitePosZ}
+                    min={-3.0}
+                    max={3.0}
+                    step={0.05}
+                    unit="m"
+                    color="sky"
+                    precision={2}
+                    resetValue={0.05}
+                  />
+                </div>
+              </div>
+
+              {/* 3D Spatial Rotation */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-cyan-400">sync</span>
+                    3D Spatial Rotation (Euler)
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => { setWebsiteRotX(0); setWebsiteRotY(0); setWebsiteRotZ(0); }}
+                    className="text-[10px] text-neutral-400 hover:text-white font-mono cursor-pointer"
+                  >
+                    Reset (0°, 0°, 0°)
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <NumberSliderInput
+                    label="Pitch (X)"
+                    value={websiteRotX}
+                    onChange={setWebsiteRotX}
+                    min={-180}
+                    max={180}
+                    step={1}
+                    unit="°"
+                    color="rose"
+                    precision={0}
+                    resetValue={0}
+                  />
+                  <NumberSliderInput
+                    label="Yaw (Y)"
+                    value={websiteRotY}
+                    onChange={setWebsiteRotY}
+                    min={-180}
+                    max={180}
+                    step={1}
+                    unit="°"
+                    color="emerald"
+                    precision={0}
+                    resetValue={0}
+                  />
+                  <NumberSliderInput
+                    label="Roll (Z)"
+                    value={websiteRotZ}
+                    onChange={setWebsiteRotZ}
+                    min={-180}
+                    max={180}
+                    step={1}
+                    unit="°"
+                    color="sky"
+                    precision={0}
+                    resetValue={0}
+                  />
+                </div>
+              </div>
+
+              {/* 3D Physical Enclosure Frame Styling */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5 border-b border-neutral-800 pb-1.5">
+                  <span className="material-symbols-outlined text-sm text-pink-400">crop_free</span>
+                  Enclosure Frame & Aesthetics
+                </h3>
+
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { key: 'cyber_bezel', label: 'Cyber Bezel', desc: 'Illuminated border & alloy casing' },
+                    { key: 'obsidian', label: 'Obsidian Black', desc: 'Glossy dark luxury housing' },
+                    { key: 'minimal_glass', label: 'Minimal Glass', desc: 'Translucent frosted glass frame' },
+                    { key: 'frameless', label: 'Frameless Floating', desc: 'Edge-to-edge floating viewport' }
+                  ].map((style) => (
+                    <button
+                      key={style.key}
+                      type="button"
+                      onClick={() => setWebsiteFrameStyle(style.key)}
+                      className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                        websiteFrameStyle === style.key
+                          ? 'bg-indigo-950/90 border-indigo-500 text-white font-bold'
+                          : 'bg-neutral-950 border-neutral-800 text-neutral-400 hover:text-white hover:border-neutral-700'
+                      }`}
+                    >
+                      <div className="text-xs">{style.label}</div>
+                      <div className="text-[10px] text-neutral-400 mt-0.5">{style.desc}</div>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-neutral-400">Frame Accent Color:</span>
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="w-5 h-5 rounded-full border border-white/20 shadow-sm"
+                        style={{ backgroundColor: websiteFrameColor }}
+                      ></div>
+                      <input
+                        type="color"
+                        value={websiteFrameColor}
+                        onChange={(e) => setWebsiteFrameColor(e.target.value)}
+                        className="w-7 h-7 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-1.5">
+                    {['#6366f1', '#38bdf8', '#10b981', '#ec4899', '#f59e0b', '#a855f7', '#ffffff'].map((hex) => (
+                      <button
+                        key={hex}
+                        type="button"
+                        onClick={() => setWebsiteFrameColor(hex)}
+                        style={{ backgroundColor: hex }}
+                        className={`w-6 h-6 rounded-full border transition-all cursor-pointer ${
+                          websiteFrameColor.toLowerCase() === hex.toLowerCase()
+                            ? 'ring-2 ring-white scale-110 border-black'
+                            : 'border-black/40 hover:scale-105'
+                        }`}
+                      ></button>
+                    ))}
+                  </div>
+
+                  <label className="flex items-center gap-2 text-xs font-medium text-neutral-300 cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={websiteFrameGlow}
+                      onChange={(e) => setWebsiteFrameGlow(e.target.checked)}
+                      className="rounded bg-neutral-900 border-neutral-700 text-indigo-600 focus:ring-0"
+                    />
+                    <span>Neon Frame Edge Glow</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Dedicated Save Web Layer to Batch Button */}
+              <div className="pt-2 border-t border-neutral-800/80 space-y-2">
+                <button
+                  type="button"
+                  disabled={savingConfig}
+                  onClick={handleSaveConfig}
+                  className="w-full py-2.5 px-4 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 text-white font-bold rounded-lg shadow-lg shadow-indigo-500/20 text-xs flex items-center justify-center gap-2 transition-all disabled:opacity-50 active:scale-[0.99] cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-sm">save</span>
+                  <span>{savingConfig ? 'Saving Web Layer Configuration...' : `Save Web Layer to Batch (${batchId || 'Active'})`}</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -8471,9 +9456,9 @@ const ARTest = () => {
         style={{ touchAction: 'none' }}
         onContextMenu={(e) => e.preventDefault()}
       >
-        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0) ? (
+        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0 || (markerVisible && markerImageUrl) || (websiteEnabled && websiteUrl)) ? (
           <a-scene
-            key={batchId || localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || (portalEnabled ? 'portal-active' : '') || (particleSystemEnabled ? 'particles-active' : '') || (additionalGeometries.length > 0 ? 'geoms-active' : '') || 'ar-portal-scene'}
+            key={batchId || localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || (portalEnabled ? 'portal-active' : '') || (particleSystemEnabled ? 'particles-active' : '') || (additionalGeometries.length > 0 ? 'geoms-active' : '') || (markerImageUrl ? 'marker-active' : '') || (websiteEnabled ? 'website-active' : '') || 'ar-portal-scene'}
             embedded
             color-space="sRGB"
             renderer="colorManagement: true; antialias: true; stencil: true;"
@@ -8516,6 +9501,15 @@ const ARTest = () => {
               light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false;`}
               position={rimPosition}
             ></a-entity>
+
+            {/* MindAR Target Marker Reference Plane Anchor (XY plane at 0, 0, 0) */}
+            {markerVisible && markerImageUrl && (
+              <a-entity
+                id="ar-marker-reference-anchor"
+                position="0 0 0"
+                ar-marker-reference={`enabled: ${markerVisible}; imageUrl: ${markerImageUrl}; src: ${markerImageUrl}; width: ${markerWidth}; height: ${Number((markerWidth * (markerAspectRatio || 0.5926)).toFixed(4))}; aspectRatio: ${markerAspectRatio}; opacity: ${markerOpacity}; showAxes: true; showFrame: true;`}
+              ></a-entity>
+            )}
 
             {/* Center Model Entity Anchor */}
             {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
@@ -8563,6 +9557,14 @@ const ARTest = () => {
               <a-entity
                 id="ar-additional-geometries-anchor"
                 ar-additional-geometries={`geometries: ${encodeURIComponent(JSON.stringify(additionalGeometries))};`}
+              ></a-entity>
+            )}
+
+            {/* Live Interactive 3D Website Layer Anchor */}
+            {websiteEnabled && websiteUrl && (
+              <a-entity
+                id="ar-website-layer-anchor"
+                ar-website-layer={`enabled: ${websiteEnabled}; url: ${encodeURIComponent(websiteUrl)}; width: ${websiteWidth}; height: ${websiteHeight}; aspectRatio: ${websiteAspectRatio}; resolution: ${websiteResolution}; interactive: ${websiteInteractive}; opacity: ${websiteOpacity}; frameStyle: ${websiteFrameStyle}; frameColor: ${websiteFrameColor}; frameGlow: ${websiteFrameGlow}; curved: ${websiteCurved}; curveRadius: ${websiteCurveRadius}; billboard: ${websiteBillboard}; posX: ${websitePosX}; posY: ${websitePosY}; posZ: ${websitePosZ}; rotX: ${websiteRotX}; rotY: ${websiteRotY}; rotZ: ${websiteRotZ}; scale: ${websiteScale}; showAddressBar: ${websiteShowAddressBar};`}
               ></a-entity>
             )}
           </a-scene>
@@ -8650,6 +9652,28 @@ const ARTest = () => {
               title="Reset View to Studio Perspective (F)"
             >
               <span className="material-symbols-outlined text-xs">restart_alt</span>
+            </button>
+            <div className="w-[1px] h-4 bg-slate-700 mx-0.5"></div>
+            <button
+              type="button"
+              onClick={() => setMarkerVisible((v) => !v)}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-all shadow-sm flex items-center gap-1 ${
+                markerVisible
+                  ? 'bg-emerald-600 text-white shadow-emerald-900/30'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200'
+              }`}
+              title="Toggle Target Marker Reference Plane in Viewport (M)"
+            >
+              <span className="material-symbols-outlined text-xs">qr_code_2</span>
+              <span>Marker</span>
+            </button>
+            <button
+              type="button"
+              onClick={frameCameraToMarker}
+              className="px-2 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-emerald-700 text-slate-300 hover:text-white transition-all shadow-sm flex items-center"
+              title="Align Camera Perpendicular to Marker Face"
+            >
+              <span className="material-symbols-outlined text-xs">crop_free</span>
             </button>
           </div>
         )}
