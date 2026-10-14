@@ -5,6 +5,9 @@ import { ref, getDownloadURL, uploadBytes } from 'firebase/storage';
 import { doc, setDoc, getDocs, collection } from 'firebase/firestore';
 import { storage, db } from '../firebase';
 import { createPortalObject3D, createParticleSystemObject3D } from './portalThreeHelper';
+import { createGeometriesGroup } from './geometryHelper';
+import { createCustomLightsGroup } from './lightingHelper';
+import { create3DTextsGroup } from './text3DHelper';
 
 // Static mapping of pre-rendered 3D model snapshots
 const PRE_RENDERED_THUMBNAILS = {
@@ -458,6 +461,34 @@ export async function captureModelThumbnail(modelUrlOrFile, customConfig = null)
         }
       }
 
+      // Support Additional Geometries
+      const additionalGeometries = customConfig?.additionalGeometries || customConfig?.ar_config?.additionalGeometries || [];
+      let geometriesGroup = null;
+      if (Array.isArray(additionalGeometries) && additionalGeometries.length > 0) {
+        geometriesGroup = createGeometriesGroup(additionalGeometries, THREE);
+        if (geometriesGroup) gl.scene.add(geometriesGroup);
+      }
+
+      // Support Custom Multi-Source Lighting
+      const customLights = customConfig?.customLights || customConfig?.ar_config?.customLights || [];
+      let customLightsGroup = null;
+      if (Array.isArray(customLights) && customLights.length > 0) {
+        customLightsGroup = createCustomLightsGroup(customLights, THREE, { showVisualBulb: true });
+        if (customLightsGroup) gl.scene.add(customLightsGroup);
+      }
+
+      // Support Extruded 3D Typography Texts
+      const custom3DTexts = customConfig?.custom3DTexts || customConfig?.ar_config?.custom3DTexts || [];
+      let texts3DGroup = null;
+      if (Array.isArray(custom3DTexts) && custom3DTexts.length > 0) {
+        try {
+          texts3DGroup = await create3DTextsGroup(custom3DTexts, THREE);
+          if (texts3DGroup) gl.scene.add(texts3DGroup);
+        } catch (tErr) {
+          console.warn('[ThumbnailRenderer] 3D text render notice:', tErr);
+        }
+      }
+
       // Three-quarter dynamic showroom perspective angle
       gl.camera.position.set(0.55, 0.22, 1.55);
       gl.camera.lookAt(0, 0, 0);
@@ -477,6 +508,37 @@ export async function captureModelThumbnail(modelUrlOrFile, customConfig = null)
       if (particleInstance) {
         if (particleInstance.group) gl.scene.remove(particleInstance.group);
         if (particleInstance.dispose) particleInstance.dispose();
+      }
+      if (geometriesGroup) {
+        gl.scene.remove(geometriesGroup);
+        geometriesGroup.traverse((child) => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+        });
+      }
+      if (customLightsGroup) {
+        gl.scene.remove(customLightsGroup);
+        customLightsGroup.traverse((child) => {
+          if (child.dispose) child.dispose();
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+        });
+      }
+      if (texts3DGroup) {
+        gl.scene.remove(texts3DGroup);
+        texts3DGroup.traverse((child) => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+        });
       }
 
       gl.scene.remove(model);

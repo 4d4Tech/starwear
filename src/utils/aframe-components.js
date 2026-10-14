@@ -5422,8 +5422,8 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
 
           switch (item.type) {
             case 'point': {
-              const distance = item.distance !== undefined ? Number(item.distance) : 20;
-              const decay = item.decay !== undefined ? Number(item.decay) : 2;
+              const distance = item.distance !== undefined ? Number(item.distance) : 25;
+              const decay = item.decay !== undefined ? Number(item.decay) : 1.5;
               light = new THREE_LIB.PointLight(color, intensity, distance, decay);
               light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 2), Number(item.posZ ?? 2));
               if (this.data.showHelpers && item.showHelper !== false) {
@@ -5432,10 +5432,10 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
               break;
             }
             case 'spot': {
-              const distance = item.distance !== undefined ? Number(item.distance) : 25;
+              const distance = item.distance !== undefined ? Number(item.distance) : 30;
               const angleRad = ((Number(item.angle || 45)) * Math.PI) / 180;
-              const penumbra = item.penumbra !== undefined ? Number(item.penumbra) : 0.3;
-              const decay = item.decay !== undefined ? Number(item.decay) : 2;
+              const penumbra = item.penumbra !== undefined ? Number(item.penumbra) : 0.35;
+              const decay = item.decay !== undefined ? Number(item.decay) : 1.5;
               light = new THREE_LIB.SpotLight(color, intensity, distance, angleRad, penumbra, decay);
               light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 2.5), Number(item.posZ ?? 2));
               light.target.position.set(Number(item.targetX ?? 0), Number(item.targetY ?? 0), Number(item.targetZ ?? 0));
@@ -5480,9 +5480,43 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
 
             this.rootGroup.add(light);
 
-            // Add Clickable 3D Anchor Mesh for raycasting and visual selection
+            // Add Visual Glowing 3D Light Source Emitter / Bulb
+            if (item.showHelper !== false) {
+              const bulbGroup = new THREE_LIB.Group();
+              bulbGroup.name = `Bulb_${item.id}`;
+
+              const coreGeo = new THREE_LIB.SphereGeometry(0.06, 16, 16);
+              const coreMat = new THREE_LIB.MeshStandardMaterial({
+                color: color,
+                emissive: color,
+                emissiveIntensity: 3.0,
+                roughness: 0.1,
+                metalness: 0.2
+              });
+              bulbGroup.add(new THREE_LIB.Mesh(coreGeo, coreMat));
+
+              const auraGeo = new THREE_LIB.SphereGeometry(0.09, 12, 12);
+              const auraMat = new THREE_LIB.MeshBasicMaterial({
+                color: color,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.6
+              });
+              bulbGroup.add(new THREE_LIB.Mesh(auraGeo, auraMat));
+
+              bulbGroup.position.copy(light.position);
+              bulbGroup.userData = {
+                ...(item || {}),
+                isCustomLight: true,
+                lightId: item.id,
+                lightRef: light
+              };
+              this.rootGroup.add(bulbGroup);
+            }
+
+            // Add Clickable 3D Anchor Mesh for raycasting and visual selection in editor mode
             if (this.data.showHelpers && item.showHelper !== false) {
-              const anchorGeo = new THREE_LIB.SphereGeometry(0.12, 16, 16);
+              const anchorGeo = new THREE_LIB.SphereGeometry(0.14, 16, 16);
               const anchorMat = new THREE_LIB.MeshBasicMaterial({
                 color: color,
                 wireframe: true,

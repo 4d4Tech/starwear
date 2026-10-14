@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { ref, getDownloadURL } from 'firebase/storage';
 import { ReactLenis, useLenis } from 'lenis/react';
 import { db, storage } from '../firebase';
@@ -230,6 +230,7 @@ export const CURATED_COLLECTION = [
 export default function Shop() {
   const [collectionList, setCollectionList] = useState(CURATED_COLLECTION);
   const [selectedProduct, setSelectedProduct] = useState(CURATED_COLLECTION[0]);
+  const [selectedBatchConfig, setSelectedBatchConfig] = useState(null);
   const [activeModelUrl, setActiveModelUrl] = useState('');
   const [activeVideoUrl, setActiveVideoUrl] = useState('');
   const [selectedSizes, setSelectedSizes] = useState({});
@@ -384,6 +385,18 @@ export default function Shop() {
         }
       }
       if (isMounted) setActiveVideoUrl(vUrl);
+
+      // 3. Resolve Batch Configuration for fine-tuned AR lights/texts
+      try {
+        const bSnap = await getDoc(doc(db, 'batches', selectedProduct.id));
+        if (bSnap.exists() && isMounted) {
+          setSelectedBatchConfig(bSnap.data());
+        } else if (isMounted) {
+          setSelectedBatchConfig(null);
+        }
+      } catch {
+        if (isMounted) setSelectedBatchConfig(null);
+      }
     }
     resolveMedia();
     return () => { isMounted = false; };
@@ -1101,12 +1114,21 @@ export default function Shop() {
                     ...(selectedProduct?.config || {}),
                     ...(selectedProduct?.arExperience?.config || {}),
                     ...(selectedProduct?.ar_config || {}),
+                    ...(selectedBatchConfig?.config || {}),
+                    ...(selectedBatchConfig?.arExperience?.config || {}),
+                    ...(selectedBatchConfig?.ar_config || {}),
                     ...(selectedProduct?.lighting || {}),
                     ...(selectedProduct?.lightingConfig || {}),
+                    ...(selectedBatchConfig?.lighting || {}),
+                    ...(selectedBatchConfig?.lightingConfig || {}),
                     ...(selectedProduct?.portalConfig ? { portalConfig: selectedProduct.portalConfig } : {}),
                     ...(selectedProduct?.particleConfig ? { particleConfig: selectedProduct.particleConfig } : {}),
+                    ...(selectedBatchConfig?.portalConfig ? { portalConfig: selectedBatchConfig.portalConfig } : {}),
+                    ...(selectedBatchConfig?.particleConfig ? { particleConfig: selectedBatchConfig.particleConfig } : {}),
                     ...(selectedProduct?.ar_config?.portalConfig ? { portalConfig: selectedProduct.ar_config.portalConfig } : {}),
                     ...(selectedProduct?.ar_config?.particleConfig ? { particleConfig: selectedProduct.ar_config.particleConfig } : {}),
+                    ...(selectedBatchConfig?.ar_config?.portalConfig ? { portalConfig: selectedBatchConfig.ar_config.portalConfig } : {}),
+                    ...(selectedBatchConfig?.ar_config?.particleConfig ? { particleConfig: selectedBatchConfig.ar_config.particleConfig } : {}),
                     ...(selectedProduct?.ambientColor ? { ambientColor: selectedProduct.ambientColor } : {}),
                     ...(selectedProduct?.ambientIntensity !== undefined ? { ambientIntensity: selectedProduct.ambientIntensity } : {}),
                     ...(selectedProduct?.dir1Color ? { dir1Color: selectedProduct.dir1Color } : {}),
@@ -1117,7 +1139,28 @@ export default function Shop() {
                     ...(selectedProduct?.dir2Position ? { dir2Position: selectedProduct.dir2Position } : {}),
                     ...(selectedProduct?.rimColor ? { rimColor: selectedProduct.rimColor } : {}),
                     ...(selectedProduct?.rimIntensity !== undefined ? { rimIntensity: selectedProduct.rimIntensity } : {}),
-                    ...(selectedProduct?.rimPosition ? { rimPosition: selectedProduct.rimPosition } : {})
+                    ...(selectedProduct?.rimPosition ? { rimPosition: selectedProduct.rimPosition } : {}),
+                    additionalGeometries: (Array.isArray(selectedBatchConfig?.additionalGeometries) && selectedBatchConfig.additionalGeometries.length > 0)
+                      ? selectedBatchConfig.additionalGeometries
+                      : (Array.isArray(selectedBatchConfig?.ar_config?.additionalGeometries) && selectedBatchConfig.ar_config.additionalGeometries.length > 0)
+                      ? selectedBatchConfig.ar_config.additionalGeometries
+                      : (Array.isArray(selectedProduct?.additionalGeometries) && selectedProduct.additionalGeometries.length > 0)
+                      ? selectedProduct.additionalGeometries
+                      : (Array.isArray(selectedProduct?.ar_config?.additionalGeometries) ? selectedProduct.ar_config.additionalGeometries : []),
+                    custom3DTexts: (Array.isArray(selectedBatchConfig?.custom3DTexts) && selectedBatchConfig.custom3DTexts.length > 0)
+                      ? selectedBatchConfig.custom3DTexts
+                      : (Array.isArray(selectedBatchConfig?.ar_config?.custom3DTexts) && selectedBatchConfig.ar_config.custom3DTexts.length > 0)
+                      ? selectedBatchConfig.ar_config.custom3DTexts
+                      : (Array.isArray(selectedProduct?.custom3DTexts) && selectedProduct.custom3DTexts.length > 0)
+                      ? selectedProduct.custom3DTexts
+                      : (Array.isArray(selectedProduct?.ar_config?.custom3DTexts) ? selectedProduct.ar_config.custom3DTexts : []),
+                    customLights: (Array.isArray(selectedBatchConfig?.customLights) && selectedBatchConfig.customLights.length > 0)
+                      ? selectedBatchConfig.customLights
+                      : (Array.isArray(selectedBatchConfig?.ar_config?.customLights) && selectedBatchConfig.ar_config.customLights.length > 0)
+                      ? selectedBatchConfig.ar_config.customLights
+                      : (Array.isArray(selectedProduct?.customLights) && selectedProduct.customLights.length > 0)
+                      ? selectedProduct.customLights
+                      : (Array.isArray(selectedProduct?.ar_config?.customLights) ? selectedProduct.ar_config.customLights : [])
                   }}
                   assetName={selectedProduct?.name || selectedProduct?.id}
                   assetId={selectedProduct?.id}

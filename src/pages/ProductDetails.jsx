@@ -94,6 +94,14 @@ function ProductDetails() {
           if (data.lightingConfig && typeof data.lightingConfig === 'object') Object.assign(res, data.lightingConfig);
           if (data.portalConfig && typeof data.portalConfig === 'object') res.portalConfig = data.portalConfig;
           if (data.particleConfig && typeof data.particleConfig === 'object') res.particleConfig = data.particleConfig;
+          if (Array.isArray(data.additionalGeometries)) res.additionalGeometries = data.additionalGeometries;
+          if (Array.isArray(data.custom3DTexts)) res.custom3DTexts = data.custom3DTexts;
+          if (Array.isArray(data.customLights)) res.customLights = data.customLights;
+          if (Array.isArray(data.ar_config?.additionalGeometries)) res.additionalGeometries = data.ar_config.additionalGeometries;
+          if (Array.isArray(data.ar_config?.custom3DTexts)) res.custom3DTexts = data.ar_config.custom3DTexts;
+          if (Array.isArray(data.ar_config?.customLights)) res.customLights = data.ar_config.customLights;
+          if (Array.isArray(data.config?.custom3DTexts)) res.custom3DTexts = data.config.custom3DTexts;
+          if (Array.isArray(data.config?.customLights)) res.customLights = data.config.customLights;
           const keys = [
             'ambientColor', 'ambientIntensity',
             'dir1Color', 'dir1Intensity', 'dir1Position',
@@ -111,9 +119,19 @@ function ProductDetails() {
           const bSnap = await getDoc(doc(db, 'batches', targetId));
           if (bSnap.exists()) {
             const bData = bSnap.data();
+            const bLighting = extractLighting(bData);
             mergedConfig = {
               ...(mergedConfig || {}),
-              ...extractLighting(bData)
+              ...bLighting,
+              customLights: (Array.isArray(bLighting.customLights) && bLighting.customLights.length > 0)
+                ? bLighting.customLights
+                : mergedConfig.customLights,
+              custom3DTexts: (Array.isArray(bLighting.custom3DTexts) && bLighting.custom3DTexts.length > 0)
+                ? bLighting.custom3DTexts
+                : mergedConfig.custom3DTexts,
+              additionalGeometries: (Array.isArray(bLighting.additionalGeometries) && bLighting.additionalGeometries.length > 0)
+                ? bLighting.additionalGeometries
+                : mergedConfig.additionalGeometries
             };
           }
         } catch (bErr) {

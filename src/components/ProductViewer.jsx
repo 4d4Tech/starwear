@@ -8,6 +8,8 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { computeGeometrySurfaceFrame } from '../utils/aframe-components';
 import { createPortalObject3D, createParticleSystemObject3D } from '../utils/portalThreeHelper';
 import { createGeometriesGroup } from '../utils/geometryHelper';
+import { createCustomLightsGroup } from '../utils/lightingHelper';
+import { create3DTextsGroup } from '../utils/text3DHelper';
 
 // YouTube URL parser & ID extractor
 export function isYouTubeUrl(url) {
@@ -505,6 +507,58 @@ function SceneContent({
     };
   }, [geometriesGroup]);
 
+  // Custom Multi-Source Lighting
+  const customLights = config?.customLights || config?.ar_config?.customLights || [];
+  const customLightsGroup = useMemo(() => {
+    if (!Array.isArray(customLights) || customLights.length === 0) return null;
+    return createCustomLightsGroup(customLights, THREE, { showVisualBulb: true });
+  }, [JSON.stringify(customLights)]);
+
+  useEffect(() => {
+    return () => {
+      if (customLightsGroup) {
+        customLightsGroup.traverse((child) => {
+          if (child.dispose) child.dispose();
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+        });
+      }
+    };
+  }, [customLightsGroup]);
+
+  // Extruded 3D Typography Texts
+  const custom3DTexts = config?.custom3DTexts || config?.ar_config?.custom3DTexts || [];
+  const [texts3DGroup, setTexts3DGroup] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    if (!Array.isArray(custom3DTexts) || custom3DTexts.length === 0) {
+      setTexts3DGroup(null);
+      return;
+    }
+    create3DTextsGroup(custom3DTexts, THREE)
+      .then((grp) => {
+        if (active) setTexts3DGroup(grp);
+      })
+      .catch((err) => console.warn('[ProductViewer] 3D text build notice:', err));
+
+    return () => {
+      active = false;
+      if (texts3DGroup) {
+        texts3DGroup.traverse((child) => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+        });
+      }
+    };
+  }, [JSON.stringify(custom3DTexts)]);
+
   useFrame((state, delta) => {
     if (portalInstance) {
       portalInstance.update(state.clock.elapsedTime * 1000, delta * 1000, state.camera);
@@ -517,6 +571,23 @@ function SceneContent({
         const mesh = geometriesGroup.children[i];
         if (mesh && mesh.userData && Number(mesh.userData.rotationSpeed)) {
           mesh.rotation.y += Number(mesh.userData.rotationSpeed) * delta;
+        }
+      }
+    }
+    if (texts3DGroup) {
+      for (let i = 0; i < texts3DGroup.children.length; i++) {
+        const mesh = texts3DGroup.children[i];
+        if (mesh && mesh.userData) {
+          if (Number(mesh.userData.rotationSpeed)) {
+            mesh.rotation.y += Number(mesh.userData.rotationSpeed) * delta;
+          }
+          if (Number(mesh.userData.bobbingSpeed) > 0 && Number(mesh.userData.bobbingHeight) > 0) {
+            const basePosY = mesh.userData.initialY ?? 0.6;
+            mesh.position.y =
+              basePosY +
+              Math.sin(state.clock.elapsedTime * Number(mesh.userData.bobbingSpeed) * 3) *
+                Number(mesh.userData.bobbingHeight);
+          }
         }
       }
     }
@@ -547,6 +618,11 @@ function SceneContent({
         intensity={config.rimIntensity !== undefined ? config.rimIntensity : 1.0}
       />
 
+      {/* Custom Multi-Source Scene Lights */}
+      {customLightsGroup && (
+        <primitive object={customLightsGroup} />
+      )}
+
       {/* Floor Grid */}
       <gridHelper args={[4, 16, 0x312e81, 0x1e293b]} position={[0, gridY, 0]} />
 
@@ -575,6 +651,11 @@ function SceneContent({
       {/* Additional 3D Primitive Geometries */}
       {geometriesGroup && (
         <primitive object={geometriesGroup} />
+      )}
+
+      {/* Extruded 3D Typography Texts */}
+      {texts3DGroup && (
+        <primitive object={texts3DGroup} />
       )}
 
       {/* 3D Asset or Stylized Placeholder */}

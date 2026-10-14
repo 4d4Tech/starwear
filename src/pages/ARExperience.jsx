@@ -296,6 +296,11 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           if (Array.isArray(docData.additionalGeometries)) cfg.additionalGeometries = docData.additionalGeometries;
           if (Array.isArray(docData.custom3DTexts)) cfg.custom3DTexts = docData.custom3DTexts;
           if (Array.isArray(docData.customLights)) cfg.customLights = docData.customLights;
+          if (Array.isArray(docData.ar_config?.additionalGeometries)) cfg.additionalGeometries = docData.ar_config.additionalGeometries;
+          if (Array.isArray(docData.ar_config?.custom3DTexts)) cfg.custom3DTexts = docData.ar_config.custom3DTexts;
+          if (Array.isArray(docData.ar_config?.customLights)) cfg.customLights = docData.ar_config.customLights;
+          if (Array.isArray(docData.config?.custom3DTexts)) cfg.custom3DTexts = docData.config.custom3DTexts;
+          if (Array.isArray(docData.config?.customLights)) cfg.customLights = docData.config.customLights;
 
           const directLightingKeys = [
             'ambientColor', 'ambientIntensity',
@@ -324,9 +329,13 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           ...(Array.isArray(assetDocData?.additionalGeometries) ? { additionalGeometries: assetDocData.additionalGeometries } : {}),
           ...(Array.isArray(batchDocData?.additionalGeometries) ? { additionalGeometries: batchDocData.additionalGeometries } : {}),
           ...(Array.isArray(assetDocData?.custom3DTexts) ? { custom3DTexts: assetDocData.custom3DTexts } : {}),
+          ...(Array.isArray(assetDocData?.ar_config?.custom3DTexts) ? { custom3DTexts: assetDocData.ar_config.custom3DTexts } : {}),
           ...(Array.isArray(batchDocData?.custom3DTexts) ? { custom3DTexts: batchDocData.custom3DTexts } : {}),
+          ...(Array.isArray(batchDocData?.ar_config?.custom3DTexts) ? { custom3DTexts: batchDocData.ar_config.custom3DTexts } : {}),
           ...(Array.isArray(assetDocData?.customLights) ? { customLights: assetDocData.customLights } : {}),
-          ...(Array.isArray(batchDocData?.customLights) ? { customLights: batchDocData.customLights } : {})
+          ...(Array.isArray(assetDocData?.ar_config?.customLights) ? { customLights: assetDocData.ar_config.customLights } : {}),
+          ...(Array.isArray(batchDocData?.customLights) ? { customLights: batchDocData.customLights } : {}),
+          ...(Array.isArray(batchDocData?.ar_config?.customLights) ? { customLights: batchDocData.ar_config.customLights } : {})
         };
         const hasFsConfig = Object.keys(mergedFsConfig).length > 0;
         if (hasFsConfig) {
@@ -406,6 +415,48 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           ...activeTracking
         };
 
+        const getNonEmptyArray = (...candidates) => {
+          for (const cand of candidates) {
+            if (Array.isArray(cand) && cand.length > 0) return cand;
+          }
+          for (const cand of candidates) {
+            if (Array.isArray(cand)) return cand;
+          }
+          return [];
+        };
+
+        const resolvedGeometries = getNonEmptyArray(
+          localPreviewConfig?.additionalGeometries,
+          batchDocData?.additionalGeometries,
+          batchDocData?.ar_config?.additionalGeometries,
+          assetDocData?.additionalGeometries,
+          assetDocData?.ar_config?.additionalGeometries,
+          data?.additionalGeometries,
+          data?.ar_config?.additionalGeometries
+        );
+
+        const resolved3DTexts = getNonEmptyArray(
+          localPreviewConfig?.custom3DTexts,
+          localPreviewConfig?.ar_config?.custom3DTexts,
+          batchDocData?.custom3DTexts,
+          batchDocData?.ar_config?.custom3DTexts,
+          assetDocData?.custom3DTexts,
+          assetDocData?.ar_config?.custom3DTexts,
+          data?.custom3DTexts,
+          data?.ar_config?.custom3DTexts
+        );
+
+        const resolvedLights = getNonEmptyArray(
+          localPreviewConfig?.customLights,
+          localPreviewConfig?.ar_config?.customLights,
+          batchDocData?.customLights,
+          batchDocData?.ar_config?.customLights,
+          assetDocData?.customLights,
+          assetDocData?.ar_config?.customLights,
+          data?.customLights,
+          data?.ar_config?.customLights
+        );
+
         const mergedConfig = {
           ...(data.arExperience?.config || {}),
           ...(data.ar_config || {}),
@@ -425,18 +476,9 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           ...(localPreviewConfig?.portalConfig ? { portalConfig: localPreviewConfig.portalConfig } : {}),
           ...(localPreviewConfig?.ar_config?.particleConfig ? { particleConfig: localPreviewConfig.ar_config.particleConfig } : {}),
           ...(localPreviewConfig?.particleConfig ? { particleConfig: localPreviewConfig.particleConfig } : {}),
-          ...(Array.isArray(data?.additionalGeometries) ? { additionalGeometries: data.additionalGeometries } : {}),
-          ...(Array.isArray(assetDocData?.additionalGeometries) ? { additionalGeometries: assetDocData.additionalGeometries } : {}),
-          ...(Array.isArray(batchDocData?.additionalGeometries) ? { additionalGeometries: batchDocData.additionalGeometries } : {}),
-          ...(Array.isArray(localPreviewConfig?.additionalGeometries) ? { additionalGeometries: localPreviewConfig.additionalGeometries } : {}),
-          ...(Array.isArray(data?.custom3DTexts) ? { custom3DTexts: data.custom3DTexts } : {}),
-          ...(Array.isArray(assetDocData?.custom3DTexts) ? { custom3DTexts: assetDocData.custom3DTexts } : {}),
-          ...(Array.isArray(batchDocData?.custom3DTexts) ? { custom3DTexts: batchDocData.custom3DTexts } : {}),
-          ...(Array.isArray(localPreviewConfig?.custom3DTexts) ? { custom3DTexts: localPreviewConfig.custom3DTexts } : {}),
-          ...(Array.isArray(data?.customLights) ? { customLights: data.customLights } : {}),
-          ...(Array.isArray(assetDocData?.customLights) ? { customLights: assetDocData.customLights } : {}),
-          ...(Array.isArray(batchDocData?.customLights) ? { customLights: batchDocData.customLights } : {}),
-          ...(Array.isArray(localPreviewConfig?.customLights) ? { customLights: localPreviewConfig.customLights } : {}),
+          additionalGeometries: resolvedGeometries,
+          custom3DTexts: resolved3DTexts,
+          customLights: resolvedLights,
           ...(urlPortalOverride ? { portalConfig: { ...(liveConfig?.portalConfig || {}), ...(localPreviewConfig?.portalConfig || {}), ...urlPortalOverride } } : {}),
           ...(urlParticlesOverride ? { particleConfig: { ...(liveConfig?.particleConfig || {}), ...(localPreviewConfig?.particleConfig || {}), ...urlParticlesOverride } } : {}),
           videoFlipX: isFlipX,
@@ -1320,20 +1362,32 @@ useEffect(() => {
     ? `geometries: ${encodeURIComponent(JSON.stringify(additionalGeometries))};`
     : '';
 
-  const custom3DTexts = Array.isArray(cfg?.custom3DTexts)
+  const custom3DTexts = (Array.isArray(cfg?.custom3DTexts) && cfg.custom3DTexts.length > 0)
     ? cfg.custom3DTexts
-    : Array.isArray(arData?.custom3DTexts)
+    : (Array.isArray(cfg?.ar_config?.custom3DTexts) && cfg.ar_config.custom3DTexts.length > 0)
+    ? cfg.ar_config.custom3DTexts
+    : (Array.isArray(arData?.custom3DTexts) && arData.custom3DTexts.length > 0)
     ? arData.custom3DTexts
-    : [];
+    : (Array.isArray(arData?.config?.custom3DTexts) && arData.config.custom3DTexts.length > 0)
+    ? arData.config.custom3DTexts
+    : (Array.isArray(arData?.ar_config?.custom3DTexts) && arData.ar_config.custom3DTexts.length > 0)
+    ? arData.ar_config.custom3DTexts
+    : (Array.isArray(cfg?.custom3DTexts) ? cfg.custom3DTexts : []);
   const custom3DTextsAttr = custom3DTexts && custom3DTexts.length > 0
     ? `texts: ${encodeURIComponent(JSON.stringify(custom3DTexts))};`
     : '';
 
-  const customLights = Array.isArray(cfg?.customLights)
+  const customLights = (Array.isArray(cfg?.customLights) && cfg.customLights.length > 0)
     ? cfg.customLights
-    : Array.isArray(arData?.customLights)
+    : (Array.isArray(cfg?.ar_config?.customLights) && cfg.ar_config.customLights.length > 0)
+    ? cfg.ar_config.customLights
+    : (Array.isArray(arData?.customLights) && arData.customLights.length > 0)
     ? arData.customLights
-    : [];
+    : (Array.isArray(arData?.config?.customLights) && arData.config.customLights.length > 0)
+    ? arData.config.customLights
+    : (Array.isArray(arData?.ar_config?.customLights) && arData.ar_config.customLights.length > 0)
+    ? arData.ar_config.customLights
+    : (Array.isArray(cfg?.customLights) ? cfg.customLights : []);
   const customLightsAttr = customLights && customLights.length > 0
     ? `lights: ${encodeURIComponent(JSON.stringify(customLights))}; showHelpers: false;`
     : '';

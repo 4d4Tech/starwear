@@ -146,3 +146,29 @@ export function create3DTextMesh(config = {}, THREE_LIB = THREE, font) {
 
   return mesh;
 }
+
+/**
+ * Asynchronously loads fonts and builds a Three.js Group with all extruded 3D typography meshes.
+ */
+export async function create3DTextsGroup(texts = [], THREE_LIB = THREE) {
+  const group = new THREE_LIB.Group();
+  group.name = 'custom_3d_texts_group';
+  if (!Array.isArray(texts) || texts.length === 0) return group;
+
+  for (const item of texts) {
+    if (!item || item.visible === false) continue;
+    try {
+      const font = await loadTypefaceFont(item.fontFamily || 'helvetiker_bold');
+      const mesh = create3DTextMesh(item, THREE_LIB, font);
+      if (mesh) {
+        mesh.visible = item.visible !== false;
+        group.add(mesh);
+      }
+    } catch (err) {
+      console.warn('[text3DHelper] Failed to create 3D text mesh for item:', item, err);
+    }
+  }
+
+  return group;
+}
+

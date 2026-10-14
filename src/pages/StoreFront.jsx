@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { ref, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../firebase';
 import Header from '../components/Header';
@@ -16,6 +16,7 @@ export default function StoreFront() {
   const [cartToast, setCartToast] = useState('');
   const [featuredModelUrl, setFeaturedModelUrl] = useState('');
   const [featuredVideoUrl, setFeaturedVideoUrl] = useState('');
+  const [featuredBatchConfig, setFeaturedBatchConfig] = useState(null);
   const { addToCart } = useCart();
   const { isAdmin, isSuperAdmin } = useAuth();
   const navigate = useNavigate();
@@ -98,6 +99,18 @@ export default function StoreFront() {
         }
       }
       if (isMounted) setFeaturedVideoUrl(vUrl);
+
+      // 3. Resolve Batch Configuration for fine-tuned AR lights/texts
+      try {
+        const bSnap = await getDoc(doc(db, 'batches', featuredAsset.id));
+        if (bSnap.exists() && isMounted) {
+          setFeaturedBatchConfig(bSnap.data());
+        } else if (isMounted) {
+          setFeaturedBatchConfig(null);
+        }
+      } catch {
+        if (isMounted) setFeaturedBatchConfig(null);
+      }
     }
 
     resolveFeaturedMedia();
@@ -259,12 +272,21 @@ export default function StoreFront() {
                       ...(featuredAsset?.config || {}),
                       ...(featuredAsset?.arExperience?.config || {}),
                       ...(featuredAsset?.ar_config || {}),
+                      ...(featuredBatchConfig?.config || {}),
+                      ...(featuredBatchConfig?.arExperience?.config || {}),
+                      ...(featuredBatchConfig?.ar_config || {}),
                       ...(featuredAsset?.lighting || {}),
                       ...(featuredAsset?.lightingConfig || {}),
+                      ...(featuredBatchConfig?.lighting || {}),
+                      ...(featuredBatchConfig?.lightingConfig || {}),
                       ...(featuredAsset?.portalConfig ? { portalConfig: featuredAsset.portalConfig } : {}),
                       ...(featuredAsset?.particleConfig ? { particleConfig: featuredAsset.particleConfig } : {}),
+                      ...(featuredBatchConfig?.portalConfig ? { portalConfig: featuredBatchConfig.portalConfig } : {}),
+                      ...(featuredBatchConfig?.particleConfig ? { particleConfig: featuredBatchConfig.particleConfig } : {}),
                       ...(featuredAsset?.ar_config?.portalConfig ? { portalConfig: featuredAsset.ar_config.portalConfig } : {}),
                       ...(featuredAsset?.ar_config?.particleConfig ? { particleConfig: featuredAsset.ar_config.particleConfig } : {}),
+                      ...(featuredBatchConfig?.ar_config?.portalConfig ? { portalConfig: featuredBatchConfig.ar_config.portalConfig } : {}),
+                      ...(featuredBatchConfig?.ar_config?.particleConfig ? { particleConfig: featuredBatchConfig.ar_config.particleConfig } : {}),
                       ...(featuredAsset?.ambientColor ? { ambientColor: featuredAsset.ambientColor } : {}),
                       ...(featuredAsset?.ambientIntensity !== undefined ? { ambientIntensity: featuredAsset.ambientIntensity } : {}),
                       ...(featuredAsset?.dir1Color ? { dir1Color: featuredAsset.dir1Color } : {}),
@@ -275,7 +297,28 @@ export default function StoreFront() {
                       ...(featuredAsset?.dir2Position ? { dir2Position: featuredAsset.dir2Position } : {}),
                       ...(featuredAsset?.rimColor ? { rimColor: featuredAsset.rimColor } : {}),
                       ...(featuredAsset?.rimIntensity !== undefined ? { rimIntensity: featuredAsset.rimIntensity } : {}),
-                      ...(featuredAsset?.rimPosition ? { rimPosition: featuredAsset.rimPosition } : {})
+                      ...(featuredAsset?.rimPosition ? { rimPosition: featuredAsset.rimPosition } : {}),
+                      additionalGeometries: (Array.isArray(featuredBatchConfig?.additionalGeometries) && featuredBatchConfig.additionalGeometries.length > 0)
+                        ? featuredBatchConfig.additionalGeometries
+                        : (Array.isArray(featuredBatchConfig?.ar_config?.additionalGeometries) && featuredBatchConfig.ar_config.additionalGeometries.length > 0)
+                        ? featuredBatchConfig.ar_config.additionalGeometries
+                        : (Array.isArray(featuredAsset?.additionalGeometries) && featuredAsset.additionalGeometries.length > 0)
+                        ? featuredAsset.additionalGeometries
+                        : (Array.isArray(featuredAsset?.ar_config?.additionalGeometries) ? featuredAsset.ar_config.additionalGeometries : []),
+                      custom3DTexts: (Array.isArray(featuredBatchConfig?.custom3DTexts) && featuredBatchConfig.custom3DTexts.length > 0)
+                        ? featuredBatchConfig.custom3DTexts
+                        : (Array.isArray(featuredBatchConfig?.ar_config?.custom3DTexts) && featuredBatchConfig.ar_config.custom3DTexts.length > 0)
+                        ? featuredBatchConfig.ar_config.custom3DTexts
+                        : (Array.isArray(featuredAsset?.custom3DTexts) && featuredAsset.custom3DTexts.length > 0)
+                        ? featuredAsset.custom3DTexts
+                        : (Array.isArray(featuredAsset?.ar_config?.custom3DTexts) ? featuredAsset.ar_config.custom3DTexts : []),
+                      customLights: (Array.isArray(featuredBatchConfig?.customLights) && featuredBatchConfig.customLights.length > 0)
+                        ? featuredBatchConfig.customLights
+                        : (Array.isArray(featuredBatchConfig?.ar_config?.customLights) && featuredBatchConfig.ar_config.customLights.length > 0)
+                        ? featuredBatchConfig.ar_config.customLights
+                        : (Array.isArray(featuredAsset?.customLights) && featuredAsset.customLights.length > 0)
+                        ? featuredAsset.customLights
+                        : (Array.isArray(featuredAsset?.ar_config?.customLights) ? featuredAsset.ar_config.customLights : [])
                     }}
                     assetName={featuredAsset?.name || featuredAsset?.id || 'Featured Digital Asset'}
                     assetId={featuredAsset?.id || ''}
