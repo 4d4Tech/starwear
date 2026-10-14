@@ -5,6 +5,7 @@ import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRe
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { createPrimitiveMesh } from './geometryHelper.js';
+import { create3DTextMesh, loadTypefaceFont } from './text3DHelper.js';
 
 
 // =========================================================================
@@ -4484,28 +4485,45 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
         const height = Number(this.data.height) > 0 ? Number(this.data.height) : (width * ar);
         const opacity = Math.min(1.0, Math.max(0.05, Number(this.data.opacity) || 0.85));
         const frameColor = new THREE_LIB.Color(this.data.frameColor || '#10b981');
-        const imgUrl = this.data.imageUrl || this.data.src || '';
+
+        let imgUrl = this.data.imageUrl || this.data.src || '';
+        // Semicolon-truncated URL safeguard (from A-Frame styleParser)
+        if (!imgUrl || imgUrl === 'data:image/png' || (imgUrl.startsWith('data:') && !imgUrl.includes('base64,'))) {
+          if (typeof window !== 'undefined' && window.__starwear_active_marker_image) {
+            imgUrl = window.__starwear_active_marker_image;
+          }
+        }
+        if (!imgUrl && typeof window !== 'undefined' && window.__starwear_active_marker_image) {
+          imgUrl = window.__starwear_active_marker_image;
+        }
 
         // 1. Target Marker Image Plane (in XY plane, matching MindAR anchor orientation)
         const planeGeo = new THREE_LIB.PlaneGeometry(width, height);
         let planeMat;
 
         if (imgUrl) {
-          const loader = new THREE_LIB.TextureLoader();
-          this.texture = loader.load(
-            imgUrl,
-            (tex) => {
-              if (tex) {
-                tex.colorSpace = THREE_LIB.SRGBColorSpace || THREE_LIB.sRGBEncoding;
-                tex.needsUpdate = true;
-              }
-            },
-            undefined,
-            (err) => console.warn('[ar-marker-reference] Texture load error:', err)
-          );
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => {
+            if (this.texture) this.texture.dispose();
+            const tex = new THREE_LIB.Texture(img);
+            tex.colorSpace = THREE_LIB.SRGBColorSpace || THREE_LIB.sRGBEncoding;
+            tex.minFilter = THREE_LIB.LinearFilter;
+            tex.magFilter = THREE_LIB.LinearFilter;
+            tex.generateMipmaps = false;
+            tex.needsUpdate = true;
+            this.texture = tex;
+            if (this.planeMesh && this.planeMesh.material) {
+              this.planeMesh.material.map = tex;
+              this.planeMesh.material.color.set(0xffffff);
+              this.planeMesh.material.needsUpdate = true;
+            }
+          };
+          img.onerror = (err) => console.warn('[ar-marker-reference] Texture Image load error:', err);
+          img.src = imgUrl;
 
           planeMat = new THREE_LIB.MeshBasicMaterial({
-            map: this.texture,
+            color: new THREE_LIB.Color('#ffffff'),
             transparent: true,
             opacity: opacity,
             side: THREE_LIB.DoubleSide,
@@ -4524,9 +4542,10 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
 
         this.planeMesh = new THREE_LIB.Mesh(planeGeo, planeMat);
         this.planeMesh.name = 'ar-marker-plane';
+        this.planeMesh.renderOrder = -1; // Render before 3D elements for clean transparency sorting
         this.rootGroup.add(this.planeMesh);
 
-        // 2. High-Tech Calibration Frame (Border & Corner Brackets)
+        // 2. High-Tech Calibration Frame (Border, Ticks & Corner Brackets)
         const showFrame = this.data.showFrame !== false && this.data.showBorder !== false;
         if (showFrame) {
           this.frameGroup = new THREE_LIB.Group();
@@ -4576,6 +4595,16 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
           bracketPoints.push(new THREE_LIB.Vector3(-crossSize, 0, 0.002), new THREE_LIB.Vector3(crossSize, 0, 0.002));
           bracketPoints.push(new THREE_LIB.Vector3(0, -crossSize, 0.002), new THREE_LIB.Vector3(0, crossSize, 0.002));
 
+          // Metric edge ticks (quarter and midpoint marks along top and left)
+          const tickLen = Math.min(width, height) * 0.03;
+          bracketPoints.push(new THREE_LIB.Vector3(0, halfH - tickLen, 0.002), new THREE_LIB.Vector3(0, halfH + tickLen, 0.002));
+          bracketPoints.push(new THREE_LIB.Vector3(-halfW / 2, halfH - (tickLen * 0.6), 0.002), new THREE_LIB.Vector3(-halfW / 2, halfH + (tickLen * 0.6), 0.002));
+          bracketPoints.push(new THREE_LIB.Vector3(halfW / 2, halfH - (tickLen * 0.6), 0.002), new THREE_LIB.Vector3(halfW / 2, halfH + (tickLen * 0.6), 0.002));
+
+          bracketPoints.push(new THREE_LIB.Vector3(-halfW - tickLen, 0, 0.002), new THREE_LIB.Vector3(-halfW + tickLen, 0, 0.002));
+          bracketPoints.push(new THREE_LIB.Vector3(-halfW - (tickLen * 0.6), -halfH / 2, 0.002), new THREE_LIB.Vector3(-halfW + (tickLen * 0.6), -halfH / 2, 0.002));
+          bracketPoints.push(new THREE_LIB.Vector3(-halfW - (tickLen * 0.6), halfH / 2, 0.002), new THREE_LIB.Vector3(-halfW + (tickLen * 0.6), halfH / 2, 0.002));
+
           const bracketsGeo = new THREE_LIB.BufferGeometry().setFromPoints(bracketPoints);
           const bracketsSegments = new THREE_LIB.LineSegments(bracketsGeo, lineMat);
           this.frameGroup.add(bracketsSegments);
@@ -4586,6 +4615,42 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
           const ringMesh = new THREE_LIB.Mesh(ringGeo, ringMat);
           ringMesh.position.z = 0.002;
           this.frameGroup.add(ringMesh);
+
+          // 3D Dimension Badge sprite below bottom border
+          if (typeof document !== 'undefined') {
+            try {
+              const labelCanvas = document.createElement('canvas');
+              labelCanvas.width = 512;
+              labelCanvas.height = 64;
+              const lCtx = labelCanvas.getContext('2d');
+              lCtx.fillStyle = 'rgba(6, 9, 19, 0.88)';
+              if (typeof lCtx.roundRect === 'function') {
+                lCtx.roundRect(4, 4, 504, 56, 12);
+              } else {
+                lCtx.rect(4, 4, 504, 56);
+              }
+              lCtx.fill();
+              lCtx.strokeStyle = this.data.frameColor || '#10b981';
+              lCtx.lineWidth = 3;
+              lCtx.stroke();
+              lCtx.fillStyle = this.data.frameColor || '#10b981';
+              lCtx.font = 'bold 22px monospace';
+              lCtx.textAlign = 'center';
+              lCtx.textBaseline = 'middle';
+              const wCm = (width * 100).toFixed(1);
+              const hCm = (height * 100).toFixed(1);
+              lCtx.fillText(`MARKER: ${wCm}cm × ${hCm}cm (${width.toFixed(2)}m × ${height.toFixed(2)}m)`, 256, 32);
+              const labelTex = new THREE_LIB.CanvasTexture(labelCanvas);
+              const labelMat = new THREE_LIB.SpriteMaterial({ map: labelTex, transparent: true, opacity: 0.95 });
+              const labelSprite = new THREE_LIB.Sprite(labelMat);
+              const labelW = Math.min(width * 0.85, 0.7);
+              labelSprite.scale.set(labelW, labelW * (64 / 512), 1);
+              labelSprite.position.set(0, -halfH - (labelSprite.scale.y / 2) - 0.02, 0.005);
+              this.frameGroup.add(labelSprite);
+            } catch (errBadge) {
+              console.warn('[ar-marker-reference] Could not create 3D dimension badge:', errBadge);
+            }
+          }
 
           this.rootGroup.add(this.frameGroup);
         }
@@ -5135,6 +5200,350 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
 
       remove: function () {
         this.cleanUp();
+      }
+    });
+  }
+
+  // =========================================================================
+  // 13. AR-3D-TEXTS COMPONENT
+  // Renders extruded 3D typography using TextGeometry in AR/3D space with
+  // custom fonts, bevels, PBR materials, glowing emissives, and motion.
+  // =========================================================================
+  if (!AFRAME.components['ar-3d-texts']) {
+    AFRAME.registerComponent('ar-3d-texts', {
+      schema: {
+        texts: { type: 'string', default: '[]' }
+      },
+
+      init: function () {
+        const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE)
+          ? window.AFRAME.THREE
+          : THREE;
+
+        this.rootGroup = new THREE_LIB.Group();
+        this.rootGroup.name = 'ar_3d_texts_group';
+        this.el.setObject3D('texts3DRoot', this.rootGroup);
+
+        this.onTargetFound = () => {
+          if (this.rootGroup && this.el && this.el.object3D) {
+            this.el.object3D.visible = true;
+            this.rootGroup.visible = true;
+            this.rootGroup.children.forEach((mesh) => {
+              mesh.visible = mesh.userData?.visible !== false;
+            });
+            this.rootGroup.updateMatrixWorld(true);
+          }
+        };
+
+        const sceneEl = this.el.sceneEl;
+        if (sceneEl) {
+          sceneEl.addEventListener('targetFound', this.onTargetFound);
+        }
+        if (this.el.parentEl) {
+          this.el.parentEl.addEventListener('targetFound', this.onTargetFound);
+        }
+
+        this.rebuildTexts();
+      },
+
+      rebuildTexts: async function () {
+        const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE)
+          ? window.AFRAME.THREE
+          : THREE;
+
+        if (!this.rootGroup) return;
+
+        // Clean up previous meshes
+        while (this.rootGroup.children.length > 0) {
+          const child = this.rootGroup.children[0];
+          this.rootGroup.remove(child);
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+        }
+
+        let items = [];
+        try {
+          let raw = this.data.texts;
+          if (typeof raw === 'string') {
+            if (raw.startsWith('%5B') || raw.startsWith('%7B') || raw.includes('%22')) {
+              raw = decodeURIComponent(raw);
+            }
+            items = JSON.parse(raw);
+          } else if (Array.isArray(raw)) {
+            items = raw;
+          }
+        } catch (err) {
+          console.warn('[ar-3d-texts] Failed to parse texts JSON:', err);
+          items = [];
+        }
+
+        if (!Array.isArray(items)) items = [];
+
+        for (const item of items) {
+          if (!item) continue;
+          try {
+            const font = await loadTypefaceFont(item.fontFamily || 'helvetiker_bold');
+            const mesh = create3DTextMesh(item, THREE_LIB, font);
+            if (mesh) {
+              mesh.visible = item.visible !== false;
+              this.rootGroup.add(mesh);
+            }
+          } catch (err) {
+            console.warn('[ar-3d-texts] Could not load font or build mesh for text item:', item, err);
+          }
+        }
+
+        this.rootGroup.updateMatrixWorld(true);
+      },
+
+      update: function (oldData) {
+        if (oldData && oldData.texts !== this.data.texts) {
+          this.rebuildTexts();
+        }
+      },
+
+      tick: function (time, timeDelta) {
+        if (!this.rootGroup || !this.rootGroup.visible) return;
+        const deltaSec = (timeDelta || 16) / 1000;
+        const timeSec = (time || 0) / 1000;
+
+        for (let i = 0; i < this.rootGroup.children.length; i++) {
+          const mesh = this.rootGroup.children[i];
+          if (!mesh || !mesh.userData) continue;
+
+          // Rotation animation
+          if (Number(mesh.userData.rotationSpeed)) {
+            mesh.rotation.y += Number(mesh.userData.rotationSpeed) * deltaSec;
+          }
+
+          // Floating / bobbing animation
+          if (Number(mesh.userData.bobbingSpeed) > 0 && Number(mesh.userData.bobbingHeight) > 0) {
+            const basePosY = mesh.userData.initialY ?? mesh.userData.posY ?? 0.6;
+            const bSpeed = Number(mesh.userData.bobbingSpeed);
+            const bHeight = Number(mesh.userData.bobbingHeight);
+            mesh.position.y = basePosY + Math.sin(timeSec * bSpeed * 3) * bHeight;
+          }
+        }
+      },
+
+      remove: function () {
+        if (this.rootGroup) {
+          while (this.rootGroup.children.length > 0) {
+            const child = this.rootGroup.children[0];
+            this.rootGroup.remove(child);
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+              if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+              else child.material.dispose();
+            }
+          }
+          if (this.el && typeof this.el.removeObject3D === 'function') {
+            this.el.removeObject3D('texts3DRoot');
+          }
+          this.rootGroup = null;
+        }
+      }
+    });
+  }
+
+  // =========================================================================
+  // 14. AR-CUSTOM-LIGHTS COMPONENT
+  // Renders dynamic custom multi-source lighting (Point, Spot, Directional,
+  // Hemisphere) in AR/3D space with visual helpers and clickable 3D anchors.
+  // =========================================================================
+  if (!AFRAME.components['ar-custom-lights']) {
+    AFRAME.registerComponent('ar-custom-lights', {
+      schema: {
+        lights: { type: 'string', default: '[]' },
+        showHelpers: { type: 'boolean', default: true }
+      },
+
+      init: function () {
+        const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE)
+          ? window.AFRAME.THREE
+          : THREE;
+
+        this.rootGroup = new THREE_LIB.Group();
+        this.rootGroup.name = 'ar_custom_lights_group';
+        this.el.setObject3D('lightsRoot', this.rootGroup);
+        this.helpers = [];
+
+        this.rebuildLights();
+      },
+
+      rebuildLights: function () {
+        const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE)
+          ? window.AFRAME.THREE
+          : THREE;
+
+        if (!this.rootGroup) return;
+
+        // Clean up previous lights and helpers
+        while (this.rootGroup.children.length > 0) {
+          const child = this.rootGroup.children[0];
+          this.rootGroup.remove(child);
+          if (child.dispose) child.dispose();
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+        }
+        this.helpers = [];
+
+        let items = [];
+        try {
+          let raw = this.data.lights;
+          if (typeof raw === 'string') {
+            if (raw.startsWith('%5B') || raw.startsWith('%7B') || raw.includes('%22')) {
+              raw = decodeURIComponent(raw);
+            }
+            items = JSON.parse(raw);
+          } else if (Array.isArray(raw)) {
+            items = raw;
+          }
+        } catch (err) {
+          console.warn('[ar-custom-lights] Failed to parse lights JSON:', err);
+          items = [];
+        }
+
+        if (!Array.isArray(items)) items = [];
+
+        items.forEach((item) => {
+          if (!item) return;
+
+          const color = new THREE_LIB.Color(item.color || '#ffffff');
+          const intensity = item.intensity !== undefined ? Number(item.intensity) : 2.0;
+          let light = null;
+          let helper = null;
+
+          switch (item.type) {
+            case 'point': {
+              const distance = item.distance !== undefined ? Number(item.distance) : 20;
+              const decay = item.decay !== undefined ? Number(item.decay) : 2;
+              light = new THREE_LIB.PointLight(color, intensity, distance, decay);
+              light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 2), Number(item.posZ ?? 2));
+              if (this.data.showHelpers && item.showHelper !== false) {
+                helper = new THREE_LIB.PointLightHelper(light, 0.25, color);
+              }
+              break;
+            }
+            case 'spot': {
+              const distance = item.distance !== undefined ? Number(item.distance) : 25;
+              const angleRad = ((Number(item.angle || 45)) * Math.PI) / 180;
+              const penumbra = item.penumbra !== undefined ? Number(item.penumbra) : 0.3;
+              const decay = item.decay !== undefined ? Number(item.decay) : 2;
+              light = new THREE_LIB.SpotLight(color, intensity, distance, angleRad, penumbra, decay);
+              light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 2.5), Number(item.posZ ?? 2));
+              light.target.position.set(Number(item.targetX ?? 0), Number(item.targetY ?? 0), Number(item.targetZ ?? 0));
+              this.rootGroup.add(light.target);
+              if (this.data.showHelpers && item.showHelper !== false) {
+                helper = new THREE_LIB.SpotLightHelper(light, color);
+              }
+              break;
+            }
+            case 'directional': {
+              light = new THREE_LIB.DirectionalLight(color, intensity);
+              light.position.set(Number(item.posX ?? 1.5), Number(item.posY ?? 3), Number(item.posZ ?? 2));
+              light.target.position.set(Number(item.targetX ?? 0), Number(item.targetY ?? 0), Number(item.targetZ ?? 0));
+              this.rootGroup.add(light.target);
+              if (this.data.showHelpers && item.showHelper !== false) {
+                helper = new THREE_LIB.DirectionalLightHelper(light, 0.4, color);
+              }
+              break;
+            }
+            case 'hemisphere': {
+              const groundColor = new THREE_LIB.Color(item.groundColor || '#334155');
+              light = new THREE_LIB.HemisphereLight(color, groundColor, intensity);
+              light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 3), Number(item.posZ ?? 0));
+              if (this.data.showHelpers && item.showHelper !== false) {
+                helper = new THREE_LIB.HemisphereLightHelper(light, 0.4);
+              }
+              break;
+            }
+            default:
+              break;
+          }
+
+          if (light) {
+            light.name = item.name || `Light - ${item.type || 'Custom'}`;
+            light.visible = item.visible !== false;
+            light.castShadow = Boolean(item.castShadow);
+            light.userData = {
+              ...(item || {}),
+              isCustomLight: true,
+              lightId: item.id
+            };
+
+            this.rootGroup.add(light);
+
+            // Add Clickable 3D Anchor Mesh for raycasting and visual selection
+            if (this.data.showHelpers && item.showHelper !== false) {
+              const anchorGeo = new THREE_LIB.SphereGeometry(0.12, 16, 16);
+              const anchorMat = new THREE_LIB.MeshBasicMaterial({
+                color: color,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.9
+              });
+              const anchorMesh = new THREE_LIB.Mesh(anchorGeo, anchorMat);
+              anchorMesh.name = `Anchor_${item.id}`;
+              anchorMesh.position.copy(light.position);
+              anchorMesh.userData = {
+                ...(item || {}),
+                isCustomLight: true,
+                lightId: item.id,
+                lightRef: light
+              };
+              this.rootGroup.add(anchorMesh);
+            }
+
+            if (helper) {
+              this.rootGroup.add(helper);
+              this.helpers.push(helper);
+            }
+          }
+        });
+
+        this.rootGroup.updateMatrixWorld(true);
+      },
+
+      update: function (oldData) {
+        if (oldData && (oldData.lights !== this.data.lights || oldData.showHelpers !== this.data.showHelpers)) {
+          this.rebuildLights();
+        }
+      },
+
+      tick: function () {
+        if (!this.rootGroup) return;
+        for (let i = 0; i < this.helpers.length; i++) {
+          if (this.helpers[i] && typeof this.helpers[i].update === 'function') {
+            this.helpers[i].update();
+          }
+        }
+      },
+
+      remove: function () {
+        if (this.rootGroup) {
+          while (this.rootGroup.children.length > 0) {
+            const child = this.rootGroup.children[0];
+            this.rootGroup.remove(child);
+            if (child.dispose) child.dispose();
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+              if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+              else child.material.dispose();
+            }
+          }
+          if (this.el && typeof this.el.removeObject3D === 'function') {
+            this.el.removeObject3D('lightsRoot');
+          }
+          this.rootGroup = null;
+          this.helpers = [];
+        }
       }
     });
   }

@@ -294,6 +294,8 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           if (docData.portalConfig && typeof docData.portalConfig === 'object') cfg.portalConfig = docData.portalConfig;
           if (docData.particleConfig && typeof docData.particleConfig === 'object') cfg.particleConfig = docData.particleConfig;
           if (Array.isArray(docData.additionalGeometries)) cfg.additionalGeometries = docData.additionalGeometries;
+          if (Array.isArray(docData.custom3DTexts)) cfg.custom3DTexts = docData.custom3DTexts;
+          if (Array.isArray(docData.customLights)) cfg.customLights = docData.customLights;
 
           const directLightingKeys = [
             'ambientColor', 'ambientIntensity',
@@ -320,7 +322,11 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           ...(batchDocData?.portalConfig ? { portalConfig: batchDocData.portalConfig } : {}),
           ...(batchDocData?.particleConfig ? { particleConfig: batchDocData.particleConfig } : {}),
           ...(Array.isArray(assetDocData?.additionalGeometries) ? { additionalGeometries: assetDocData.additionalGeometries } : {}),
-          ...(Array.isArray(batchDocData?.additionalGeometries) ? { additionalGeometries: batchDocData.additionalGeometries } : {})
+          ...(Array.isArray(batchDocData?.additionalGeometries) ? { additionalGeometries: batchDocData.additionalGeometries } : {}),
+          ...(Array.isArray(assetDocData?.custom3DTexts) ? { custom3DTexts: assetDocData.custom3DTexts } : {}),
+          ...(Array.isArray(batchDocData?.custom3DTexts) ? { custom3DTexts: batchDocData.custom3DTexts } : {}),
+          ...(Array.isArray(assetDocData?.customLights) ? { customLights: assetDocData.customLights } : {}),
+          ...(Array.isArray(batchDocData?.customLights) ? { customLights: batchDocData.customLights } : {})
         };
         const hasFsConfig = Object.keys(mergedFsConfig).length > 0;
         if (hasFsConfig) {
@@ -423,6 +429,14 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           ...(Array.isArray(assetDocData?.additionalGeometries) ? { additionalGeometries: assetDocData.additionalGeometries } : {}),
           ...(Array.isArray(batchDocData?.additionalGeometries) ? { additionalGeometries: batchDocData.additionalGeometries } : {}),
           ...(Array.isArray(localPreviewConfig?.additionalGeometries) ? { additionalGeometries: localPreviewConfig.additionalGeometries } : {}),
+          ...(Array.isArray(data?.custom3DTexts) ? { custom3DTexts: data.custom3DTexts } : {}),
+          ...(Array.isArray(assetDocData?.custom3DTexts) ? { custom3DTexts: assetDocData.custom3DTexts } : {}),
+          ...(Array.isArray(batchDocData?.custom3DTexts) ? { custom3DTexts: batchDocData.custom3DTexts } : {}),
+          ...(Array.isArray(localPreviewConfig?.custom3DTexts) ? { custom3DTexts: localPreviewConfig.custom3DTexts } : {}),
+          ...(Array.isArray(data?.customLights) ? { customLights: data.customLights } : {}),
+          ...(Array.isArray(assetDocData?.customLights) ? { customLights: assetDocData.customLights } : {}),
+          ...(Array.isArray(batchDocData?.customLights) ? { customLights: batchDocData.customLights } : {}),
+          ...(Array.isArray(localPreviewConfig?.customLights) ? { customLights: localPreviewConfig.customLights } : {}),
           ...(urlPortalOverride ? { portalConfig: { ...(liveConfig?.portalConfig || {}), ...(localPreviewConfig?.portalConfig || {}), ...urlPortalOverride } } : {}),
           ...(urlParticlesOverride ? { particleConfig: { ...(liveConfig?.particleConfig || {}), ...(localPreviewConfig?.particleConfig || {}), ...urlParticlesOverride } } : {}),
           videoFlipX: isFlipX,
@@ -1306,6 +1320,24 @@ useEffect(() => {
     ? `geometries: ${encodeURIComponent(JSON.stringify(additionalGeometries))};`
     : '';
 
+  const custom3DTexts = Array.isArray(cfg?.custom3DTexts)
+    ? cfg.custom3DTexts
+    : Array.isArray(arData?.custom3DTexts)
+    ? arData.custom3DTexts
+    : [];
+  const custom3DTextsAttr = custom3DTexts && custom3DTexts.length > 0
+    ? `texts: ${encodeURIComponent(JSON.stringify(custom3DTexts))};`
+    : '';
+
+  const customLights = Array.isArray(cfg?.customLights)
+    ? cfg.customLights
+    : Array.isArray(arData?.customLights)
+    ? arData.customLights
+    : [];
+  const customLightsAttr = customLights && customLights.length > 0
+    ? `lights: ${encodeURIComponent(JSON.stringify(customLights))}; showHelpers: false;`
+    : '';
+
   const webCfg = cfg?.websiteLayer || cfg?.webLayer || arData?.websiteLayer || null;
   const websiteLayerEnabled = Boolean(webCfg && (webCfg.enabled !== false) && webCfg.url);
   const websiteLayerAttr = websiteLayerEnabled
@@ -1534,6 +1566,20 @@ useEffect(() => {
             ></a-entity>
           )}
 
+          {cameraEnabled && custom3DTexts && custom3DTexts.length > 0 && (
+            <a-entity
+              id="ar-3d-texts-anchor"
+              ar-3d-texts={custom3DTextsAttr}
+            ></a-entity>
+          )}
+
+          {cameraEnabled && customLights && customLights.length > 0 && (
+            <a-entity
+              id="ar-custom-lights-anchor"
+              ar-custom-lights={customLightsAttr}
+            ></a-entity>
+          )}
+
           {cameraEnabled && websiteLayerEnabled && (
             <a-entity
               id="ar-website-layer-anchor"
@@ -1606,6 +1652,20 @@ useEffect(() => {
               ></a-entity>
             )}
 
+            {custom3DTexts && custom3DTexts.length > 0 && (
+              <a-entity
+                id="ar-3d-texts-anchor-preview"
+                ar-3d-texts={custom3DTextsAttr}
+              ></a-entity>
+            )}
+
+            {customLights && customLights.length > 0 && (
+              <a-entity
+                id="ar-custom-lights-anchor-preview"
+                ar-custom-lights={customLightsAttr}
+              ></a-entity>
+            )}
+
             {websiteLayerEnabled && (
               <a-entity
                 id="ar-website-layer-anchor-preview"
@@ -1674,6 +1734,20 @@ useEffect(() => {
               <a-entity
                 id="ar-additional-geometries-anchor-forced"
                 ar-additional-geometries={additionalGeometriesAttr}
+              ></a-entity>
+            )}
+
+            {custom3DTexts && custom3DTexts.length > 0 && (
+              <a-entity
+                id="ar-3d-texts-anchor-forced"
+                ar-3d-texts={custom3DTextsAttr}
+              ></a-entity>
+            )}
+
+            {customLights && customLights.length > 0 && (
+              <a-entity
+                id="ar-custom-lights-anchor-forced"
+                ar-custom-lights={customLightsAttr}
               ></a-entity>
             )}
 

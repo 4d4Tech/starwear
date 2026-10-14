@@ -189,8 +189,27 @@ export const extractMarkerFromMindBuffer = (arrayBuffer) => {
 
     ctx.putImageData(imgData, 0, 0);
 
+    const dataUrl = canvas.toDataURL('image/png');
+    let blobUrl = '';
+    if (typeof window !== 'undefined' && typeof window.btoa !== 'undefined') {
+      try {
+        const base64Data = dataUrl.split(',')[1];
+        const byteCharacters = atob(base64Data);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'image/png' });
+        blobUrl = URL.createObjectURL(blob);
+      } catch (err) {
+        console.warn('[MarkerHelper] Could not create blobUrl for extracted marker:', err);
+      }
+    }
+
     return {
-      dataUrl: canvas.toDataURL('image/png'),
+      dataUrl,
+      blobUrl: blobUrl || dataUrl,
       width: targetW,
       height: targetH,
       previewWidth: previewW,
@@ -211,7 +230,7 @@ export const extractMarkerFromMindBuffer = (arrayBuffer) => {
  * and falls back to a procedural target canvas.
  *
  * @param {Object} options
- * @returns {Promise<{ dataUrl: string, width: number, height: number, aspectRatio: number, hasExtractedImage: boolean, source: string }>}
+ * @returns {Promise<{ dataUrl: string, blobUrl?: string, width: number, height: number, aspectRatio: number, hasExtractedImage: boolean, source: string, mindFilePath?: string }>}
  */
 export const loadMarkerForBatch = async (options = {}) => {
   if (!options || typeof options !== 'object') {
@@ -252,18 +271,22 @@ export const loadMarkerForBatch = async (options = {}) => {
 
   const cacheKey = candidateImageUrl || options.mindUrl || options.mindFilePath || options.mind_file_path || batchId;
   if (cacheKey && markerCache.has(cacheKey)) {
-    return markerCache.get(cacheKey);
+    const cached = markerCache.get(cacheKey);
+    if (cached && cached.hasExtractedImage) {
+      return cached;
+    }
   }
 
   // If candidate image URL is valid and accessible
-  if (candidateImageUrl && typeof candidateImageUrl === 'string' && (candidateImageUrl.startsWith('http') || candidateImageUrl.startsWith('data:'))) {
+  if (candidateImageUrl && typeof candidateImageUrl === 'string' && (candidateImageUrl.startsWith('http') || candidateImageUrl.startsWith('data:') || candidateImageUrl.startsWith('blob:'))) {
     try {
       const dimensions = await getImageDimensions(candidateImageUrl);
       const res = {
         dataUrl: candidateImageUrl,
+        blobUrl: candidateImageUrl,
         width: dimensions.width,
         height: dimensions.height,
-        aspectRatio: dimensions.height / dimensions.width,
+        aspectRatio: dimensions.aspectRatio || (dimensions.height / dimensions.width),
         hasExtractedImage: true,
         source: 'batch_marker_image'
       };
@@ -275,51 +298,62 @@ export const loadMarkerForBatch = async (options = {}) => {
   }
 
   // 2. Check Candidate Firebase Storage Image Paths
-  const candidateImagePath =
-    options.markerFilePath ||
-    options.marker_file_path ||
-    options.targetImageStoragePath ||
-    options.target_image_path ||
-    options.tempImageStoragePath ||
-    options.batchData?.marker_file_path ||
-    options.assetData?.marker_file_path ||
-    options.assetData?.target_image_path ||
-    '';
+  const candidateImagePaths = [];
+  if (options.markerFilePath) candidateImagePaths.push(options.markerFilePath);
+  if (options.marker_file_path) candidateImagePaths.push(options.marker_file_path);
+  if (options.targetImageStoragePath) candidateImagePaths.push(options.targetImageStoragePath);
+  if (options.target_image_path) candidateImagePaths.push(options.target_image_path);
+  if (options.tempImageStoragePath) candidateImagePaths.push(options.tempImageStoragePath);
+  if (options.batchData?.marker_file_path) candidateImagePaths.push(options.batchData.marker_file_path);
+  if (options.assetData?.marker_file_path) candidateImagePaths.push(options.assetData.marker_file_path);
+  if (options.assetData?.target_image_path) candidateImagePaths.push(options.assetData.target_image_path);
+  if (batchId) {
+    candidateImagePaths.push(`assets/${batchId}/marker.png`);
+    candidateImagePaths.push(`assets/${batchId}/marker.jpg`);
+    candidateImagePaths.push(`assets/${batchId}/marker.jpeg`);
+    candidateImagePaths.push(`assets/${batchId}/target.png`);
+    candidateImagePaths.push(`assets/${batchId}/target.jpg`);
+    candidateImagePaths.push(`anchors/default/${batchId}.png`);
+    candidateImagePaths.push(`anchors/default/${batchId}.jpg`);
+  }
 
-  if (candidateImagePath && typeof candidateImagePath === 'string' && !candidateImagePath.startsWith('http')) {
+  for (const imgPath of candidateImagePaths) {
+    if (!imgPath || typeof imgPath !== 'string' || imgPath.startsWith('http')) continue;
     try {
-      const imgStorageRef = ref(storage, candidateImagePath);
+      const imgStorageRef = ref(storage, imgPath);
       const dlUrl = await getDownloadURL(imgStorageRef);
       if (dlUrl) {
         const dimensions = await getImageDimensions(dlUrl);
         const res = {
           dataUrl: dlUrl,
+          blobUrl: dlUrl,
           width: dimensions.width,
           height: dimensions.height,
-          aspectRatio: dimensions.height / dimensions.width,
+          aspectRatio: dimensions.aspectRatio || (dimensions.height / dimensions.width),
           hasExtractedImage: true,
-          source: 'storage_marker_image'
+          source: 'storage_marker_image',
+          storagePath: imgPath
         };
         if (cacheKey) markerCache.set(cacheKey, res);
         return res;
       }
     } catch (e) {
-      console.warn('[MarkerHelper] Failed to load candidate image from Firebase Storage:', e);
+      // Path not found, proceed
     }
   }
 
   // 3. Resolve Candidate .mind File URL
-  const candidateMindUrl =
-    options.mindUrl ||
-    options.mind_url ||
-    options.trackingConfig?.mindUrl ||
-    options.data?.trackingConfig?.mindUrl ||
-    options.data?.arExperience?.mindUrl ||
-    '';
+  const candidateMindUrls = [];
+  if (options.mindUrl) candidateMindUrls.push(options.mindUrl);
+  if (options.mind_url) candidateMindUrls.push(options.mind_url);
+  if (options.trackingConfig?.mindUrl) candidateMindUrls.push(options.trackingConfig.mindUrl);
+  if (options.data?.trackingConfig?.mindUrl) candidateMindUrls.push(options.data.trackingConfig.mindUrl);
+  if (options.data?.arExperience?.mindUrl) candidateMindUrls.push(options.data.arExperience.mindUrl);
 
-  if (candidateMindUrl && typeof candidateMindUrl === 'string' && candidateMindUrl.startsWith('http')) {
+  for (const mindUrl of candidateMindUrls) {
+    if (!mindUrl || typeof mindUrl !== 'string' || !mindUrl.startsWith('http')) continue;
     try {
-      const resp = await fetch(candidateMindUrl);
+      const resp = await fetch(mindUrl);
       if (resp.ok) {
         const buf = await resp.arrayBuffer();
         const extracted = extractMarkerFromMindBuffer(buf);
@@ -335,40 +369,49 @@ export const loadMarkerForBatch = async (options = {}) => {
   }
 
   // 4. Resolve Candidate Firebase Storage .mind File Path
-  const candidateMindFilePath =
-    options.mindFilePath ||
-    options.mind_file_path ||
-    options.batchData?.mind_file_path ||
-    options.assetData?.mind_file_path ||
-    options.data?.mind_file_path ||
-    '';
+  const candidateMindPaths = [];
+  if (options.mindFilePath) candidateMindPaths.push(options.mindFilePath);
+  if (options.mind_file_path) candidateMindPaths.push(options.mind_file_path);
+  if (options.batchData?.mind_file_path) candidateMindPaths.push(options.batchData.mind_file_path);
+  if (options.assetData?.mind_file_path) candidateMindPaths.push(options.assetData.mind_file_path);
+  if (options.data?.mind_file_path) candidateMindPaths.push(options.data.mind_file_path);
+  if (batchId) {
+    candidateMindPaths.push(`anchors/default/${batchId}.mind`);
+    candidateMindPaths.push(`anchors/merch_4d4/${batchId}.mind`);
+    candidateMindPaths.push(`anchors/${options.merchantId || options.batchData?.merchant_id || 'default'}/${batchId}.mind`);
+    candidateMindPaths.push(`assets/${batchId}/${batchId}.mind`);
+    candidateMindPaths.push(`assets/${batchId}/target.mind`);
+  }
 
-  if (candidateMindFilePath && typeof candidateMindFilePath === 'string') {
+  for (const mindFilePath of candidateMindPaths) {
+    if (!mindFilePath || typeof mindFilePath !== 'string') continue;
     try {
-      const fileRef = ref(storage, candidateMindFilePath);
-      const bytes = await getBytes(fileRef);
-      const extracted = extractMarkerFromMindBuffer(bytes);
-      if (extracted) {
-        const res = { ...extracted, source: 'storage_mind_file' };
-        if (cacheKey) markerCache.set(cacheKey, res);
-        return res;
+      const fileRef = ref(storage, mindFilePath);
+      let buf = null;
+      try {
+        const bytes = await getBytes(fileRef);
+        buf = bytes;
+      } catch (errBytes) {
+        // Fallback: try download URL fetch
+        try {
+          const downloadUrl = await getDownloadURL(fileRef);
+          const resp = await fetch(downloadUrl);
+          if (resp.ok) {
+            buf = await resp.arrayBuffer();
+          }
+        } catch {}
+      }
+
+      if (buf) {
+        const extracted = extractMarkerFromMindBuffer(buf);
+        if (extracted) {
+          const res = { ...extracted, source: 'storage_mind_file', mindFilePath };
+          if (cacheKey) markerCache.set(cacheKey, res);
+          return res;
+        }
       }
     } catch (err) {
-      // Fallback: try getting download URL first
-      try {
-        const fileRef = ref(storage, candidateMindFilePath);
-        const downloadUrl = await getDownloadURL(fileRef);
-        const resp = await fetch(downloadUrl);
-        if (resp.ok) {
-          const buf = await resp.arrayBuffer();
-          const extracted = extractMarkerFromMindBuffer(buf);
-          if (extracted) {
-            const res = { ...extracted, source: 'storage_download_url' };
-            if (cacheKey) markerCache.set(cacheKey, res);
-            return res;
-          }
-        }
-      } catch {}
+      // Mind file path not found, proceed to next
     }
   }
 
@@ -377,23 +420,27 @@ export const loadMarkerForBatch = async (options = {}) => {
     ...createDefaultMarkerDataUrl(batchId || 'STAR weAR'),
     source: 'procedural_default'
   };
-  if (cacheKey) markerCache.set(cacheKey, fallback);
   return fallback;
 };
 
 /**
  * Loads an image by URL to measure natural dimensions and aspect ratio.
  * @param {string} url
- * @returns {Promise<{ width: number, height: number }>}
+ * @returns {Promise<{ width: number, height: number, aspectRatio: number }>}
  */
 export const getImageDimensions = (url) => {
   return new Promise((resolve, reject) => {
     if (typeof Image === 'undefined') {
-      return resolve({ width: 512, height: 512 });
+      return resolve({ width: 512, height: 512, aspectRatio: 1.0 });
     }
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.onload = () => resolve({ width: img.naturalWidth || 512, height: img.naturalHeight || 512 });
+    img.onload = () => {
+      const width = img.naturalWidth || 512;
+      const height = img.naturalHeight || 512;
+      const aspectRatio = height / width;
+      resolve({ width, height, aspectRatio });
+    };
     img.onerror = (e) => reject(e);
     img.src = url;
   });

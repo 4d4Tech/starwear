@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import 'aframe';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import BuyNowButton from '../components/BuyNowButton';
 import { db, storage, functions, analytics } from '../firebase';
 import { doc, getDoc, getDocFromServer, setDoc, collection, getDocs } from 'firebase/firestore';
@@ -15,6 +16,8 @@ import { httpsCallable } from 'firebase/functions';
 import { logEvent } from 'firebase/analytics';
 import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfaceFrame, purgeAllSceneVideoLayers, PORTAL_PRESETS, PARTICLE_PRESETS } from '../utils/aframe-components';
 import AddGeometryModal from '../components/AddGeometryModal';
+import Add3DTextModal from '../components/Add3DTextModal';
+import { AVAILABLE_FONTS, TEXT_MATERIAL_PRESETS } from '../utils/text3DHelper';
 import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES } from '../utils/geometryHelper';
 import { loadMarkerForBatch, createDefaultMarkerDataUrl, getImageDimensions } from '../utils/markerHelper';
 import {
@@ -618,6 +621,11 @@ const ARTest = () => {
   const [rimIntensity, setRimIntensity] = useState(1.0);
   const [rimPosition, setRimPosition] = useState('0 3 -3');
 
+  // Custom Multi-Source Lighting State
+  const [customLights, setCustomLights] = useState([]);
+  const [selectedLightId, setSelectedLightId] = useState(null);
+  const [showLightHelpers, setShowLightHelpers] = useState(true);
+
   // Material Properties (-1 means preserve GLTF asset PBR settings)
   const [useNativePBR, setUseNativePBR] = useState(true);
   const [matMetalness, setMatMetalness] = useState(-1);
@@ -655,7 +663,9 @@ const ARTest = () => {
   const [markerOpacity, setMarkerOpacity] = useState(0.85);
   const [markerLoading, setMarkerLoading] = useState(false);
   const [markerInfo, setMarkerInfo] = useState(null); // { width, height, source }
+  const [markerLockAspect, setMarkerLockAspect] = useState(true);
   const markerFileInputRef = useRef(null);
+  const stagedMarkerFileRef = useRef(null);
 
   // Initialize procedural default marker on mount if none loaded
   useEffect(() => {
@@ -664,8 +674,32 @@ const ARTest = () => {
       setMarkerImageUrl(fb.dataUrl);
       setMarkerAspectRatio(fb.aspectRatio);
       setMarkerInfo({ width: fb.width, height: fb.height, source: 'default' });
+      if (typeof window !== 'undefined') {
+        window.__starwear_active_marker_image = fb.dataUrl;
+      }
     }
   }, []);
+
+  // Synchronize marker attributes to A-Frame entity without string parser truncation
+  useEffect(() => {
+    if (typeof window !== 'undefined' && markerImageUrl) {
+      window.__starwear_active_marker_image = markerImageUrl;
+    }
+    const markerEl = document.getElementById('ar-marker-reference-anchor');
+    if (markerEl && typeof markerEl.setAttribute === 'function') {
+      markerEl.setAttribute('ar-marker-reference', {
+        enabled: Boolean(markerVisible),
+        imageUrl: markerImageUrl || '',
+        src: markerImageUrl || '',
+        width: Number(markerWidth) || 1.0,
+        height: Number((Number(markerWidth || 1.0) * (Number(markerAspectRatio) || 0.5926)).toFixed(4)),
+        aspectRatio: Number(markerAspectRatio) || 0.5926,
+        opacity: Number(markerOpacity) || 0.85,
+        showAxes: true,
+        showFrame: true
+      });
+    }
+  }, [markerImageUrl, markerVisible, markerWidth, markerAspectRatio, markerOpacity]);
 
   // OrbitControls & Camera References (Controlled like ProductViewer)
   const controlsRef = useRef(null);
@@ -1131,6 +1165,504 @@ const ARTest = () => {
     });
   };
 
+  // =========================================================================
+  // 3D TYPOGRAPHY TEXT STATES & HANDLERS
+  // =========================================================================
+  const [custom3DTexts, setCustom3DTexts] = useState([]);
+  const [selectedText3DId, setSelectedText3DId] = useState(null);
+  const [isAddTextModalOpen, setIsAddTextModalOpen] = useState(false);
+
+  const handleAdd3DText = (payload) => {
+    const count = custom3DTexts.length;
+    const newId = payload.id || `text_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    const newText = {
+      id: newId,
+      name: payload.name || payload.text || `3D Text ${count + 1}`,
+      text: payload.text || 'STAR weAR',
+      fontFamily: payload.fontFamily || 'helvetiker_bold',
+      size: payload.size !== undefined ? Number(payload.size) : 0.35,
+      depth: payload.depth !== undefined ? Number(payload.depth) : 0.08,
+      curveSegments: payload.curveSegments || 12,
+      bevelEnabled: payload.bevelEnabled !== false,
+      bevelThickness: payload.bevelThickness !== undefined ? Number(payload.bevelThickness) : 0.015,
+      bevelSize: payload.bevelSize !== undefined ? Number(payload.bevelSize) : 0.01,
+      align: payload.align || 'center',
+      color: payload.color || '#38bdf8',
+      emissive: payload.emissive || '#0284c7',
+      emissiveIntensity: payload.emissiveIntensity !== undefined ? Number(payload.emissiveIntensity) : 0.4,
+      metalness: payload.metalness !== undefined ? Number(payload.metalness) : 0.75,
+      roughness: payload.roughness !== undefined ? Number(payload.roughness) : 0.25,
+      wireframe: Boolean(payload.wireframe),
+      posX: payload.posX !== undefined ? Number(payload.posX) : 0,
+      posY: payload.posY !== undefined ? Number(payload.posY) : 0.6,
+      posZ: payload.posZ !== undefined ? Number(payload.posZ) : 0.05,
+      rotX: payload.rotX !== undefined ? Number(payload.rotX) : 0,
+      rotY: payload.rotY !== undefined ? Number(payload.rotY) : 0,
+      rotZ: payload.rotZ !== undefined ? Number(payload.rotZ) : 0,
+      scale: payload.scale !== undefined ? Number(payload.scale) : 1.0,
+      scaleX: 1.0,
+      scaleY: 1.0,
+      scaleZ: 1.0,
+      rotationSpeed: payload.rotationSpeed || 0,
+      bobbingSpeed: payload.bobbingSpeed || 0,
+      bobbingHeight: payload.bobbingHeight || 0,
+      visible: true
+    };
+    setCustom3DTexts((prev) => [...prev, newText]);
+    setSelectedText3DId(newId);
+    setSelectedMeshUuid(null);
+    setSelectedGeometryId(null);
+    setSelectedLightId(null);
+    setSelectedTargetType('text3d');
+    setActiveTab('text3d');
+    setIsAddTextModalOpen(false);
+    setSaveSuccessMsg(`Added 3D Text "${newText.text}" to scene.`);
+    setTimeout(() => setSaveSuccessMsg(''), 4000);
+  };
+
+  const handleUpdate3DText = (id, updates) => {
+    setCustom3DTexts((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
+    );
+  };
+
+  const handleDelete3DText = (id) => {
+    setCustom3DTexts((prev) => prev.filter((t) => t.id !== id));
+    if (selectedText3DId === id) {
+      setSelectedText3DId(null);
+      if (transformControlsRef.current) transformControlsRef.current.detach();
+    }
+  };
+
+  const handleDuplicate3DText = (id) => {
+    const target = custom3DTexts.find((t) => t.id === id);
+    if (!target) return;
+    const newId = `text_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    const dup = {
+      ...target,
+      id: newId,
+      name: `${target.name} (Copy)`,
+      posX: Number((target.posX + 0.2).toFixed(2)),
+      posY: Number((target.posY + 0.15).toFixed(2))
+    };
+    setCustom3DTexts((prev) => [...prev, dup]);
+    setSelectedText3DId(newId);
+    setSelectedMeshUuid(null);
+    setSelectedGeometryId(null);
+    setSelectedLightId(null);
+    setSelectedTargetType('text3d');
+  };
+
+  const handleToggle3DTextVisibility = (id) => {
+    setCustom3DTexts((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, visible: t.visible === false ? true : false } : t))
+    );
+  };
+
+  const snapTextToMarkerAnchor = (id, anchorId) => {
+    const halfW = markerWidth / 2;
+    const markerH = markerWidth * (markerAspectRatio || 0.5926);
+    const halfH = markerH / 2;
+    let targetX = 0;
+    let targetY = 0;
+
+    switch (anchorId) {
+      case 'TL': targetX = -halfW * 0.75; targetY = halfH * 0.8; break;
+      case 'TC': targetX = 0; targetY = halfH * 0.85; break;
+      case 'TR': targetX = halfW * 0.75; targetY = halfH * 0.8; break;
+      case 'CL': targetX = -halfW * 0.75; targetY = 0; break;
+      case 'CC': targetX = 0; targetY = 0; break;
+      case 'CR': targetX = halfW * 0.75; targetY = 0; break;
+      case 'BL': targetX = -halfW * 0.75; targetY = -halfH * 0.8; break;
+      case 'BC': targetX = 0; targetY = -halfH * 0.85; break;
+      case 'BR': targetX = halfW * 0.75; targetY = -halfH * 0.8; break;
+      default: break;
+    }
+    handleUpdate3DText(id, {
+      posX: Number(targetX.toFixed(3)),
+      posY: Number(targetY.toFixed(3)),
+      posZ: 0.04
+    });
+  };
+
+  // =========================================================================
+  // CUSTOM MULTI-SOURCE LIGHTING HANDLERS & PRESETS
+  // =========================================================================
+  const handleAddLight = (type = 'point') => {
+    const count = customLights.length;
+    const newId = `light_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    const cleanType = type.charAt(0).toUpperCase() + type.slice(1);
+    const newLight = {
+      id: newId,
+      name: `${cleanType} Light ${count + 1}`,
+      type: type, // 'point' | 'spot' | 'directional' | 'hemisphere'
+      color: type === 'spot' ? '#ffffff' : (count % 2 === 0 ? '#38bdf8' : '#f59e0b'),
+      groundColor: '#1e293b',
+      intensity: type === 'spot' ? 3.5 : 2.5,
+      distance: 25,
+      decay: 2,
+      angle: 45,
+      penumbra: 0.35,
+      posX: Number(((count % 2 === 0 ? 1 : -1) * 1.5).toFixed(2)),
+      posY: 2.2,
+      posZ: 1.8,
+      targetX: 0,
+      targetY: 0,
+      targetZ: 0,
+      visible: true,
+      showHelper: true,
+      castShadow: false
+    };
+    setCustomLights((prev) => [...prev, newLight]);
+    setSelectedLightId(newId);
+    setSelectedMeshUuid(null);
+    setSelectedGeometryId(null);
+    setSelectedText3DId(null);
+    setSelectedTargetType('light');
+    setActiveTab('lighting');
+    setSaveSuccessMsg(`Added ${cleanType} light source to scene.`);
+    setTimeout(() => setSaveSuccessMsg(''), 4000);
+  };
+
+  const handleUpdateLight = (id, updates) => {
+    setCustomLights((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, ...updates } : l))
+    );
+  };
+
+  const handleDeleteLight = (id) => {
+    setCustomLights((prev) => prev.filter((l) => l.id !== id));
+    if (selectedLightId === id) {
+      setSelectedLightId(null);
+      if (transformControlsRef.current) transformControlsRef.current.detach();
+    }
+  };
+
+  const handleDuplicateLight = (id) => {
+    const target = customLights.find((l) => l.id === id);
+    if (!target) return;
+    const newId = `light_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    const dup = {
+      ...target,
+      id: newId,
+      name: `${target.name} (Copy)`,
+      posX: Number((target.posX + 0.4).toFixed(2)),
+      posZ: Number((target.posZ + 0.4).toFixed(2))
+    };
+    setCustomLights((prev) => [...prev, dup]);
+    setSelectedLightId(newId);
+    setSelectedMeshUuid(null);
+    setSelectedGeometryId(null);
+    setSelectedText3DId(null);
+    setSelectedTargetType('light');
+  };
+
+  const handleToggleLightVisibility = (id) => {
+    setCustomLights((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, visible: l.visible === false ? true : false } : l))
+    );
+  };
+
+  const applyLightingRigPreset = (presetName) => {
+    if (presetName === 'cyberpunk_dual') {
+      const l1 = {
+        id: `light_cyber_cyan_${Date.now()}`,
+        name: 'Neon Cyber Cyan (Left)',
+        type: 'point',
+        color: '#06b6d4',
+        intensity: 3.5,
+        distance: 20,
+        decay: 1.8,
+        posX: -1.8,
+        posY: 1.5,
+        posZ: 1.2,
+        visible: true,
+        showHelper: true
+      };
+      const l2 = {
+        id: `light_cyber_magenta_${Date.now() + 1}`,
+        name: 'Neon Cyber Magenta (Right)',
+        type: 'point',
+        color: '#ec4899',
+        intensity: 3.5,
+        distance: 20,
+        decay: 1.8,
+        posX: 1.8,
+        posY: 1.5,
+        posZ: 1.2,
+        visible: true,
+        showHelper: true
+      };
+      setCustomLights((prev) => [...prev, l1, l2]);
+      setSelectedLightId(l1.id);
+      setActiveTab('lighting');
+    } else if (presetName === 'stage_spotlight') {
+      const spot = {
+        id: `light_stage_spot_${Date.now()}`,
+        name: 'Dramatic Center Spotlight',
+        type: 'spot',
+        color: '#ffffff',
+        intensity: 5.0,
+        distance: 30,
+        decay: 1.5,
+        angle: 35,
+        penumbra: 0.4,
+        posX: 0,
+        posY: 3.5,
+        posZ: 1.5,
+        targetX: 0,
+        targetY: 0,
+        targetZ: 0,
+        visible: true,
+        showHelper: true
+      };
+      setCustomLights((prev) => [...prev, spot]);
+      setSelectedLightId(spot.id);
+      setActiveTab('lighting');
+    } else if (presetName === 'warm_golden') {
+      const sun = {
+        id: `light_golden_${Date.now()}`,
+        name: 'Warm Sunset Key',
+        type: 'directional',
+        color: '#f59e0b',
+        intensity: 3.0,
+        posX: 2.5,
+        posY: 3.0,
+        posZ: 2.0,
+        targetX: 0,
+        targetY: 0,
+        targetZ: 0,
+        visible: true,
+        showHelper: true
+      };
+      setCustomLights((prev) => [...prev, sun]);
+      setSelectedLightId(sun.id);
+      setActiveTab('lighting');
+    }
+  };
+
+  const snapLightToMarker = (id) => {
+    handleUpdateLight(id, {
+      posX: 0,
+      posY: Number((markerWidth * (markerAspectRatio || 0.5926) * 0.6).toFixed(2)),
+      posZ: 1.5
+    });
+  };
+
+  // =========================================================================
+  // TRANSFORM CONTROLS GIZMO STATE & MANAGER
+  // =========================================================================
+  const [gizmoMode, setGizmoMode] = useState('translate'); // 'translate' | 'rotate' | 'scale'
+  const [gizmoSpace, setGizmoSpace] = useState('world'); // 'world' | 'local'
+  const [gizmoSnap, setGizmoSnap] = useState(null); // null | 0.1 | 0.5
+  const [isGizmoDragging, setIsGizmoDragging] = useState(false);
+  const [selectedTargetType, setSelectedTargetType] = useState('model'); // 'model' | 'text3d' | 'light' | 'geometry' | 'mesh' | null
+  const transformControlsRef = useRef(null);
+
+  const clearSelectionAndDetachGizmo = useCallback(() => {
+    setSelectedMeshUuid(null);
+    setSelectedGeometryId(null);
+    setSelectedText3DId(null);
+    setSelectedLightId(null);
+    setSelectedTargetType(null);
+    if (transformControlsRef.current) {
+      transformControlsRef.current.detach();
+      const helper = transformControlsRef.current.getHelper ? transformControlsRef.current.getHelper() : transformControlsRef.current;
+      if (helper) helper.visible = false;
+    }
+  }, []);
+
+  const handleGizmoObjectChange = useCallback((obj) => {
+    if (!obj) return;
+
+    // A) 3D Typography Text
+    if (obj.userData?.is3DText || obj.userData?.textId) {
+      const textId = obj.userData.textId;
+      setCustom3DTexts((prev) =>
+        prev.map((t) => {
+          if (t.id === textId) {
+            return {
+              ...t,
+              posX: Number(obj.position.x.toFixed(3)),
+              posY: Number(obj.position.y.toFixed(3)),
+              posZ: Number(obj.position.z.toFixed(3)),
+              rotX: Number(THREE.MathUtils.radToDeg(obj.rotation.x).toFixed(1)),
+              rotY: Number(THREE.MathUtils.radToDeg(obj.rotation.y).toFixed(1)),
+              rotZ: Number(THREE.MathUtils.radToDeg(obj.rotation.z).toFixed(1)),
+              scale: Number(obj.scale.x.toFixed(3)),
+              scaleX: Number(obj.scale.x.toFixed(3)),
+              scaleY: Number(obj.scale.y.toFixed(3)),
+              scaleZ: Number(obj.scale.z.toFixed(3))
+            };
+          }
+          return t;
+        })
+      );
+      return;
+    }
+
+    // B) Custom Light Source
+    if (obj.userData?.isCustomLight || obj.userData?.lightId) {
+      const lightId = obj.userData.lightId;
+      setCustomLights((prev) =>
+        prev.map((l) => {
+          if (l.id === lightId) {
+            return {
+              ...l,
+              posX: Number(obj.position.x.toFixed(3)),
+              posY: Number(obj.position.y.toFixed(3)),
+              posZ: Number(obj.position.z.toFixed(3))
+            };
+          }
+          return l;
+        })
+      );
+      return;
+    }
+
+    // C) Additional 3D Geometry
+    if (obj.userData?.isAdditionalGeometry || obj.userData?.geometryId) {
+      const geomId = obj.userData.geometryId;
+      setAdditionalGeometries((prev) =>
+        prev.map((g) => {
+          if (g.id === geomId) {
+            return {
+              ...g,
+              posX: Number(obj.position.x.toFixed(3)),
+              posY: Number(obj.position.y.toFixed(3)),
+              posZ: Number(obj.position.z.toFixed(3)),
+              rotX: Number(THREE.MathUtils.radToDeg(obj.rotation.x).toFixed(1)),
+              rotY: Number(THREE.MathUtils.radToDeg(obj.rotation.y).toFixed(1)),
+              rotZ: Number(THREE.MathUtils.radToDeg(obj.rotation.z).toFixed(1)),
+              scale: Number(obj.scale.x.toFixed(3)),
+              scaleX: Number(obj.scale.x.toFixed(3)),
+              scaleY: Number(obj.scale.y.toFixed(3)),
+              scaleZ: Number(obj.scale.z.toFixed(3))
+            };
+          }
+          return g;
+        })
+      );
+      return;
+    }
+
+    // D) Root 3D Model
+    const modelEl = document.getElementById('ar-model');
+    if (obj === modelEl?.object3D || obj === modelEl?.getObject3D('mesh')) {
+      setModelPosX(Number(obj.position.x.toFixed(3)));
+      setModelPosY(Number(obj.position.y.toFixed(3)));
+      setModelPosZ(Number(obj.position.z.toFixed(3)));
+      setModelRotX(Number(THREE.MathUtils.radToDeg(obj.rotation.x).toFixed(1)));
+      setModelRotY(Number(THREE.MathUtils.radToDeg(obj.rotation.y).toFixed(1)));
+      setModelRotZ(Number(THREE.MathUtils.radToDeg(obj.rotation.z).toFixed(1)));
+      setModelScale(Number(obj.scale.x.toFixed(3)));
+      return;
+    }
+
+    // E) Submesh inside model
+    if (obj.isMesh && obj.uuid) {
+      setMeshList((prev) =>
+        prev.map((m) => {
+          if (m.uuid === obj.uuid) {
+            return {
+              ...m,
+              position: {
+                x: Number(obj.position.x.toFixed(3)),
+                y: Number(obj.position.y.toFixed(3)),
+                z: Number(obj.position.z.toFixed(3))
+              },
+              rotation: {
+                x: Number(THREE.MathUtils.radToDeg(obj.rotation.x).toFixed(1)),
+                y: Number(THREE.MathUtils.radToDeg(obj.rotation.y).toFixed(1)),
+                z: Number(THREE.MathUtils.radToDeg(obj.rotation.z).toFixed(1))
+              },
+              scale: {
+                x: Number(obj.scale.x.toFixed(3)),
+                y: Number(obj.scale.y.toFixed(3)),
+                z: Number(obj.scale.z.toFixed(3))
+              }
+            };
+          }
+          return m;
+        })
+      );
+    }
+  }, []);
+
+  const focusCameraOnSelectedObject = useCallback(() => {
+    const tc = transformControlsRef.current;
+    if (!tc || !tc.object) {
+      transitionCamera(new THREE.Vector3(0, 1.2, 3.5), new THREE.Vector3(0, 0, 0), 350);
+      return;
+    }
+    const targetObj = tc.object;
+    targetObj.updateWorldMatrix(true, false);
+    const box = new THREE.Box3().setFromObject(targetObj);
+    if (box.isEmpty()) {
+      const p = targetObj.getWorldPosition(new THREE.Vector3());
+      transitionCamera(new THREE.Vector3(p.x, p.y + 0.8, p.z + 2.0), p, 350);
+      return;
+    }
+    const center = new THREE.Vector3();
+    const size = new THREE.Vector3();
+    box.getCenter(center);
+    box.getSize(size);
+    const maxDim = Math.max(size.x, size.y, size.z, 0.2);
+    const fov = 45 * (Math.PI / 180);
+    let dist = (maxDim / 2) / Math.tan(fov / 2) * 1.6;
+    dist = Math.max(0.4, Math.min(dist, 8.0));
+    const camPos = new THREE.Vector3(center.x, center.y + (maxDim * 0.25), center.z + dist);
+    transitionCamera(camPos, center, 350);
+  }, [transitionCamera]);
+
+  const currentSelectedObjectInfo = useMemo(() => {
+    if (selectedText3DId) {
+      const textItem = custom3DTexts.find((t) => t.id === selectedText3DId);
+      return {
+        type: 'text3d',
+        id: selectedText3DId,
+        name: textItem ? `3D Text: "${textItem.text}"` : '3D Text',
+        icon: 'title'
+      };
+    }
+    if (selectedLightId) {
+      const lightItem = customLights.find((l) => l.id === selectedLightId);
+      return {
+        type: 'light',
+        id: selectedLightId,
+        name: lightItem ? lightItem.name || `${lightItem.type} Light` : 'Custom Light',
+        icon: 'lightbulb'
+      };
+    }
+    if (selectedGeometryId) {
+      const geomItem = additionalGeometries.find((g) => g.id === selectedGeometryId);
+      return {
+        type: 'geometry',
+        id: selectedGeometryId,
+        name: geomItem ? geomItem.name || geomItem.type : '3D Shape',
+        icon: 'deployed_code'
+      };
+    }
+    if (selectedMeshUuid) {
+      const meshItem = meshList.find((m) => m.uuid === selectedMeshUuid);
+      return {
+        type: 'mesh',
+        id: selectedMeshUuid,
+        name: meshItem ? meshItem.name : 'Mesh Part',
+        icon: 'interests'
+      };
+    }
+    if (selectedTargetType === 'model') {
+      return {
+        type: 'model',
+        id: 'root-model',
+        name: '3D Model (Root)',
+        icon: 'view_in_ar'
+      };
+    }
+    return null;
+  }, [selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, selectedTargetType, custom3DTexts, customLights, additionalGeometries, meshList]);
+
   // Staged Local Files for Portal
   const [selectedPortalSkyboxFile, setSelectedPortalSkyboxFile] = useState(null);
   const [selectedPortalGlbFile, setSelectedPortalGlbFile] = useState(null);
@@ -1566,6 +2098,8 @@ const ARTest = () => {
 
       if (dist > 6) return; // Drag/orbit gesture
 
+      if (isGizmoDragging) return; // Prevent raycasting right after dragging gizmo
+
       const sceneEl = document.querySelector('a-scene');
       if (!sceneEl || !sceneEl.camera) return;
       const canvas = sceneEl.canvas;
@@ -1585,7 +2119,47 @@ const ARTest = () => {
       const raycaster = new THREE.Raycaster();
       raycaster.setFromCamera(mouse, sceneEl.camera);
 
-      // Check additional geometries first
+      // 1. Check 3D Extruded Text Objects
+      const textEl = document.getElementById('ar-3d-texts-anchor');
+      const textGroup = textEl?.getObject3D('texts3DRoot') || textEl?.object3D;
+      if (textGroup) {
+        const textIntersects = raycaster.intersectObject(textGroup, true);
+        if (textIntersects.length > 0) {
+          const hitText = textIntersects[0].object;
+          const textId = hitText?.userData?.textId;
+          if (textId) {
+            setSelectedText3DId(textId);
+            setSelectedMeshUuid(null);
+            setSelectedGeometryId(null);
+            setSelectedLightId(null);
+            setSelectedTargetType('text3d');
+            setActiveTab('text3d');
+            return;
+          }
+        }
+      }
+
+      // 2. Check Custom Lighting Anchors & Helpers
+      const lightsEl = document.getElementById('ar-custom-lights-anchor');
+      const lightsGroup = lightsEl?.getObject3D('lightsRoot') || lightsEl?.object3D;
+      if (lightsGroup) {
+        const lightIntersects = raycaster.intersectObject(lightsGroup, true);
+        if (lightIntersects.length > 0) {
+          const hitLight = lightIntersects[0].object;
+          const lightId = hitLight?.userData?.lightId;
+          if (lightId) {
+            setSelectedLightId(lightId);
+            setSelectedMeshUuid(null);
+            setSelectedGeometryId(null);
+            setSelectedText3DId(null);
+            setSelectedTargetType('light');
+            setActiveTab('lighting');
+            return;
+          }
+        }
+      }
+
+      // 3. Check Additional 3D Primitive Geometries
       const geomEl = document.getElementById('ar-additional-geometries-anchor');
       const geomGroup = geomEl?.getObject3D('additionalGeometriesRoot') || geomEl?.object3D;
       if (geomGroup) {
@@ -1596,27 +2170,37 @@ const ARTest = () => {
           if (geomId) {
             setSelectedGeometryId(geomId);
             setSelectedMeshUuid(null);
+            setSelectedText3DId(null);
+            setSelectedLightId(null);
+            setSelectedTargetType('geometry');
             setActiveTab('shapes');
             return;
           }
         }
       }
 
+      // 4. Check Center 3D Model
       const modelEl = document.getElementById('ar-model');
-      if (!modelEl) return;
-      const model3D = modelEl.getObject3D('mesh');
-      if (!model3D) return;
-
-      const intersects = raycaster.intersectObject(model3D, true);
-      if (intersects.length > 0) {
-        const hit = intersects[0].object;
-        if (hit && hit.isMesh) {
-          setSelectedMeshUuid(hit.uuid);
-          setSelectedGeometryId(null);
+      if (modelEl) {
+        const model3D = modelEl.getObject3D('mesh');
+        if (model3D) {
+          const intersects = raycaster.intersectObject(model3D, true);
+          if (intersects.length > 0) {
+            const hit = intersects[0].object;
+            if (hit && hit.isMesh) {
+              setSelectedMeshUuid(hit.uuid);
+              setSelectedGeometryId(null);
+              setSelectedText3DId(null);
+              setSelectedLightId(null);
+              setSelectedTargetType('mesh');
+              return;
+            }
+          }
         }
-      } else {
-        setSelectedMeshUuid(null);
       }
+
+      // 5. Empty space clicked: Clear selection and detach gizmo
+      clearSelectionAndDetachGizmo();
     };
 
     const sceneContainer = document.getElementById('ar-scene-container');
@@ -1631,7 +2215,148 @@ const ARTest = () => {
         sceneContainer.removeEventListener('pointerup', handlePointerUp);
       }
     };
-  }, [meshList]);
+  }, [meshList, isGizmoDragging, clearSelectionAndDetachGizmo]);
+
+  // =========================================================================
+  // TRANSFORM CONTROLS GIZMO LIFECYCLE IN AFRAME/THREE.JS
+  // =========================================================================
+  useEffect(() => {
+    let checkInterval = null;
+    const sceneContainer = document.getElementById('ar-scene-container');
+    const sceneEl = sceneContainer?.querySelector('a-scene');
+    if (!sceneEl) return;
+
+    const setupGizmo = () => {
+      const camera = sceneEl.camera;
+      const canvas = sceneEl.canvas;
+      const threeScene = sceneEl.object3D;
+      if (!camera || !canvas || !threeScene) return;
+
+      if (transformControlsRef.current) return;
+
+      try {
+        const tc = new TransformControls(camera, canvas);
+        tc.size = 0.85;
+        tc.setMode(gizmoMode);
+        tc.setSpace(gizmoSpace);
+
+        tc.addEventListener('dragging-changed', (event) => {
+          setIsGizmoDragging(Boolean(event.value));
+          const orbit = window.__arOrbitControls;
+          if (orbit) {
+            orbit.enabled = !event.value;
+          }
+        });
+
+        tc.addEventListener('objectChange', () => {
+          if (tc.object) {
+            handleGizmoObjectChange(tc.object);
+          }
+        });
+
+        const helper = tc.getHelper ? tc.getHelper() : tc;
+        helper.name = 'starwear-transform-gizmo-helper';
+        threeScene.add(helper);
+        transformControlsRef.current = tc;
+        if (checkInterval) clearInterval(checkInterval);
+      } catch (err) {
+        console.warn('[ARTest] Could not initialize TransformControls:', err);
+      }
+    };
+
+    if (sceneEl.hasLoaded && sceneEl.canvas && sceneEl.camera) {
+      setupGizmo();
+    } else {
+      checkInterval = setInterval(setupGizmo, 100);
+      sceneEl.addEventListener('loaded', setupGizmo, { once: true });
+    }
+
+    return () => {
+      if (checkInterval) clearInterval(checkInterval);
+      if (transformControlsRef.current) {
+        try {
+          const helper = transformControlsRef.current.getHelper ? transformControlsRef.current.getHelper() : transformControlsRef.current;
+          if (helper && sceneEl.object3D) sceneEl.object3D.remove(helper);
+          transformControlsRef.current.dispose();
+        } catch {}
+        transformControlsRef.current = null;
+      }
+    };
+  }, [handleGizmoObjectChange]);
+
+  // Update TransformControls Mode, Coordinate Space & Snap
+  useEffect(() => {
+    const tc = transformControlsRef.current;
+    if (!tc) return;
+    try {
+      tc.setMode(gizmoMode);
+      tc.setSpace(gizmoSpace);
+      if (gizmoMode === 'translate') {
+        tc.setTranslationSnap(gizmoSnap);
+      } else if (gizmoMode === 'rotate') {
+        tc.setRotationSnap(gizmoSnap ? (15 * Math.PI) / 180 : null);
+      } else if (gizmoMode === 'scale') {
+        tc.setScaleSnap(gizmoSnap ? 0.1 : null);
+      }
+    } catch {}
+  }, [gizmoMode, gizmoSpace, gizmoSnap]);
+
+  // Dynamically Attach/Detach TransformControls to Active Target Object
+  useEffect(() => {
+    const tc = transformControlsRef.current;
+    if (!tc) return;
+
+    let targetObj = null;
+
+    if (selectedText3DId) {
+      const textAnchor = document.getElementById('ar-3d-texts-anchor');
+      const root = textAnchor?.getObject3D('texts3DRoot') || textAnchor?.object3D;
+      if (root) {
+        root.traverse((node) => {
+          if (node.userData?.textId === selectedText3DId) targetObj = node;
+        });
+      }
+    } else if (selectedLightId) {
+      const lightsAnchor = document.getElementById('ar-custom-lights-anchor');
+      const root = lightsAnchor?.getObject3D('lightsRoot') || lightsAnchor?.object3D;
+      if (root) {
+        root.traverse((node) => {
+          if (node.userData?.lightId === selectedLightId) {
+            targetObj = node.userData.lightRef || node;
+          }
+        });
+      }
+    } else if (selectedGeometryId) {
+      const geomAnchor = document.getElementById('ar-additional-geometries-anchor');
+      const root = geomAnchor?.getObject3D('additionalGeometriesRoot') || geomAnchor?.object3D;
+      if (root) {
+        root.traverse((node) => {
+          if (node.userData?.geometryId === selectedGeometryId) targetObj = node;
+        });
+      }
+    } else if (selectedMeshUuid) {
+      const modelEl = document.getElementById('ar-model');
+      const model3D = modelEl?.getObject3D('mesh');
+      if (model3D) {
+        model3D.traverse((node) => {
+          if (node.uuid === selectedMeshUuid && node.isMesh) targetObj = node;
+        });
+      }
+    } else if (selectedTargetType === 'model') {
+      const modelEl = document.getElementById('ar-model');
+      targetObj = modelEl?.object3D;
+    }
+
+    if (targetObj) {
+      tc.attach(targetObj);
+      const helper = tc.getHelper ? tc.getHelper() : tc;
+      if (helper) helper.visible = true;
+    } else {
+      tc.detach();
+      const helper = tc.getHelper ? tc.getHelper() : tc;
+      if (helper) helper.visible = false;
+    }
+  }, [selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, selectedTargetType, custom3DTexts, customLights, additionalGeometries]);
 
   // Visual 3D Selection Box Helper on the selected mesh
   useEffect(() => {
@@ -2071,25 +2796,55 @@ const ARTest = () => {
     setSelectedMeshUuid(uuid);
   }, [transitionCamera]);
 
-  // Studio4D4 Keyboard Shortcut: 'F' key to Frame / Focus Selected Mesh (or Reset View), 'M' key to Toggle Marker Reference
+  // Studio4D4 & AR Keyboard Shortcuts:
+  // W: Translate mode, E: Rotate mode, R: Scale mode, Q: Cycle mode, Esc: Deselect, F: Frame, M: Toggle Marker
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
-      if (e.key.toLowerCase() === 'f') {
+      const k = e.key.toLowerCase();
+      if (k === 'w') {
+        setGizmoMode('translate');
+      } else if (k === 'e') {
+        setGizmoMode('rotate');
+      } else if (k === 'r') {
+        setGizmoMode('scale');
+      } else if (k === 'q') {
+        setGizmoMode((prev) => (prev === 'translate' ? 'rotate' : prev === 'rotate' ? 'scale' : 'translate'));
+      } else if (e.key === 'Escape') {
+        clearSelectionAndDetachGizmo();
+      } else if (k === 'f') {
         if (selectedMeshUuid) {
           focusCameraOnMesh(selectedMeshUuid);
         } else {
-          setCameraView('reset');
+          focusCameraOnSelectedObject();
         }
-      } else if (e.key.toLowerCase() === 'm') {
+      } else if (k === 'm') {
         setMarkerVisible((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedMeshUuid, focusCameraOnMesh, setCameraView]);
+  }, [selectedMeshUuid, focusCameraOnMesh, focusCameraOnSelectedObject, clearSelectionAndDetachGizmo]);
 
   // Target Marker Alignment & Calibration Actions
+  const MARKER_PRESETS = [
+    { label: 'MindAR Standard Target (1.0m × 0.59m)', width: 1.0, aspect: 0.5926 },
+    { label: 'Square 1:1 Target (1.0m × 1.0m)', width: 1.0, aspect: 1.0 },
+    { label: 'T-Shirt Graphic Print (30cm × 40cm)', width: 0.30, aspect: 40 / 30 },
+    { label: 'Hoodie Center Print (35cm × 35cm)', width: 0.35, aspect: 1.0 },
+    { label: 'A4 Sheet (21.0cm × 29.7cm)', width: 0.21, aspect: 29.7 / 21.0 },
+    { label: 'US Letter (21.6cm × 27.9cm)', width: 0.216, aspect: 27.9 / 21.6 },
+    { label: 'Collector Card (6.3cm × 8.8cm)', width: 0.063, aspect: 8.8 / 6.3 },
+    { label: 'Compact Emblem / Patch (10cm × 10cm)', width: 0.10, aspect: 1.0 },
+    { label: 'Large Poster (0.61m × 0.91m)', width: 0.61, aspect: 0.91 / 0.61 },
+  ];
+
+  const applyMarkerPreset = (preset) => {
+    if (!preset) return;
+    setMarkerWidth(Number(preset.width.toFixed(3)));
+    setMarkerAspectRatio(Number(preset.aspect.toFixed(4)));
+  };
+
   const frameCameraToMarker = useCallback(() => {
     const markerH = markerWidth * (markerAspectRatio || 1);
     const maxDim = Math.max(markerWidth, markerH, 0.5);
@@ -2099,33 +2854,91 @@ const ARTest = () => {
     transitionCamera(new THREE.Vector3(0, 0, dist), new THREE.Vector3(0, 0, 0), 400);
   }, [markerWidth, markerAspectRatio, transitionCamera]);
 
+  const snapModelToMarkerAnchor = (anchor) => {
+    const halfW = markerWidth / 2;
+    const halfH = (markerWidth * (markerAspectRatio || 0.5926)) / 2;
+
+    let targetX = 0;
+    let targetY = 0;
+
+    switch (anchor) {
+      case 'TL': targetX = -halfW; targetY = halfH; break;
+      case 'TC': targetX = 0; targetY = halfH; break;
+      case 'TR': targetX = halfW; targetY = halfH; break;
+      case 'CL': targetX = -halfW; targetY = 0; break;
+      case 'CC': targetX = 0; targetY = 0; break;
+      case 'CR': targetX = halfW; targetY = 0; break;
+      case 'BL': targetX = -halfW; targetY = -halfH; break;
+      case 'BC': targetX = 0; targetY = -halfH; break;
+      case 'BR': targetX = halfW; targetY = -halfH; break;
+      default: break;
+    }
+
+    handlePositionChange('x', Number(targetX.toFixed(3)));
+    handlePositionChange('y', Number(targetY.toFixed(3)));
+  };
+
   const snapModelToMarkerOrigin = () => {
-    setModelPosX(0);
-    setModelPosY(0);
-    setModelPosZ(0);
+    handlePositionChange('x', 0);
+    handlePositionChange('y', 0);
+    handlePositionChange('z', 0);
   };
 
   const snapModelToMarkerSurface = () => {
-    setModelPosZ(0);
+    handlePositionChange('z', 0);
+  };
+
+  const snapModelDepth = (depthMeters = 0) => {
+    handlePositionChange('z', Number(depthMeters.toFixed(3)));
   };
 
   const snapModelToMarkerBottom = () => {
     const markerH = markerWidth * (markerAspectRatio || 1);
-    setModelPosY(Number((-markerH / 2).toFixed(3)));
+    handlePositionChange('y', Number((-markerH / 2).toFixed(3)));
+  };
+
+  const fitModelToMarkerBounds = () => {
+    const modelEl = document.getElementById('ar-model');
+    const model3D = modelEl?.getObject3D('mesh');
+    if (!model3D) return;
+
+    const box = new THREE.Box3().setFromObject(model3D);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+
+    const maxModelDim = Math.max(size.x, size.y);
+    const targetDim = Math.min(markerWidth, markerWidth * (markerAspectRatio || 1)) * 0.85;
+
+    if (maxModelDim > 0.001) {
+      const currentScaleVal = selectedMeshUuid ? (meshList.find(m => m.uuid === selectedMeshUuid)?.scale?.x || 1.0) : modelScale;
+      const ratio = targetDim / maxModelDim;
+      const newScale = Number((currentScaleVal * ratio).toFixed(2));
+      handleScaleChange(Math.max(0.05, Math.min(3.0, newScale)));
+    }
   };
 
   const handleCustomMarkerUpload = async (file) => {
     if (!file) return;
     try {
       setMarkerLoading(true);
+      stagedMarkerFileRef.current = file;
       const reader = new FileReader();
       reader.onload = async (e) => {
         const dataUrl = e.target.result;
         try {
           const dims = await getImageDimensions(dataUrl);
+          const computedAspect = dims.aspectRatio || (dims.height / dims.width) || 1.0;
+          if (typeof window !== 'undefined') {
+            window.__starwear_active_marker_image = dataUrl;
+          }
           setMarkerImageUrl(dataUrl);
-          setMarkerAspectRatio(dims.aspectRatio);
-          setMarkerInfo({ width: dims.width, height: dims.height, source: 'custom', name: file.name });
+          setMarkerAspectRatio(computedAspect);
+          setMarkerInfo({
+            width: dims.width,
+            height: dims.height,
+            source: 'custom',
+            name: file.name
+          });
           setMarkerVisible(true);
         } catch (err) {
           console.error("Failed to read marker image dimensions:", err);
@@ -2145,6 +2958,10 @@ const ARTest = () => {
 
   const handleResetMarkerToDefault = () => {
     const fb = createDefaultMarkerDataUrl('STAR weAR');
+    stagedMarkerFileRef.current = null;
+    if (typeof window !== 'undefined') {
+      window.__starwear_active_marker_image = fb.dataUrl;
+    }
     setMarkerImageUrl(fb.dataUrl);
     setMarkerAspectRatio(fb.aspectRatio);
     setMarkerInfo({ width: fb.width, height: fb.height, source: 'default' });
@@ -3315,6 +4132,22 @@ const ARTest = () => {
         setAdditionalGeometries([]);
       }
 
+      // Populate Custom 3D Typography Texts if configured on batch
+      const loadedTexts = cfg.custom3DTexts || data.custom3DTexts || data.arExperience?.custom3DTexts || null;
+      if (Array.isArray(loadedTexts)) {
+        setCustom3DTexts(loadedTexts);
+      } else {
+        setCustom3DTexts([]);
+      }
+
+      // Populate Custom Multi-Source Lighting if configured on batch
+      const loadedLights = cfg.customLights || data.customLights || data.arExperience?.customLights || null;
+      if (Array.isArray(loadedLights)) {
+        setCustomLights(loadedLights);
+      } else {
+        setCustomLights([]);
+      }
+
       if (cfg && cfg.meshOverrides) {
         const loadedDeleted = Object.entries(cfg.meshOverrides)
           .filter(([_, ovr]) => ovr && ovr.deleted)
@@ -3348,14 +4181,20 @@ const ARTest = () => {
       };
       setMarkerLoading(true);
       loadMarkerForBatch(batchMarkerPayload).then((res) => {
-        if (res && res.dataUrl) {
-          setMarkerImageUrl(res.dataUrl);
+        if (res && (res.blobUrl || res.dataUrl)) {
+          const activeUrl = res.blobUrl || res.dataUrl;
+          if (typeof window !== 'undefined') {
+            window.__starwear_active_marker_image = activeUrl;
+          }
+          setMarkerImageUrl(activeUrl);
           setMarkerAspectRatio(res.aspectRatio || 0.5926);
           setMarkerInfo({
             width: res.width,
             height: res.height,
             source: res.source,
-            confidence: res.confidence
+            previewWidth: res.previewWidth,
+            previewHeight: res.previewHeight,
+            mindFilePath: res.mindFilePath
           });
           setMarkerVisible(true);
         }
@@ -3563,6 +4402,8 @@ const ARTest = () => {
         twinkle: Boolean(particleTwinkle)
       },
       additionalGeometries: additionalGeometries || [],
+      custom3DTexts: custom3DTexts || [],
+      customLights: customLights || [],
       updatedAt: new Date().toISOString()
     };
   };
@@ -3698,6 +4539,22 @@ const ARTest = () => {
           }
         }
         pendingTextureFilesRef.current.clear();
+      }
+
+      // 2d. Upload staged custom target marker image to Storage bucket if present
+      let finalMarkerImageUrl = markerImageUrl;
+      if (stagedMarkerFileRef.current) {
+        setUploadProgress('Uploading target marker image to Storage...');
+        const cleanMarkerName = stagedMarkerFileRef.current.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const markerStoragePath = `assets/${batchId.trim()}/marker_${Date.now()}_${cleanMarkerName}`;
+        const markerRef = ref(storage, markerStoragePath);
+        await uploadBytes(markerRef, stagedMarkerFileRef.current);
+        finalMarkerImageUrl = await getDownloadURL(markerRef);
+        setMarkerImageUrl(finalMarkerImageUrl);
+        if (typeof window !== 'undefined') {
+          window.__starwear_active_marker_image = finalMarkerImageUrl;
+        }
+        stagedMarkerFileRef.current = null;
       }
 
 
@@ -3906,7 +4763,20 @@ const ARTest = () => {
           scale: Number(websiteScale),
           showAddressBar: Boolean(websiteShowAddressBar)
         },
+        markerConfig: {
+          visible: Boolean(markerVisible),
+          opacity: Number(markerOpacity),
+          width: Number(markerWidth),
+          aspectRatio: Number(markerAspectRatio),
+          imageUrl: (finalMarkerImageUrl && !finalMarkerImageUrl.startsWith('data:')) ? finalMarkerImageUrl : (markerInfo?.source === 'custom' ? finalMarkerImageUrl : ''),
+          widthPx: markerInfo?.width,
+          heightPx: markerInfo?.height,
+          source: markerInfo?.source,
+          mindFilePath: markerInfo?.mindFilePath || ''
+        },
         additionalGeometries: additionalGeometries || [],
+        custom3DTexts: custom3DTexts || [],
+        customLights: customLights || [],
         updatedAt: new Date().toISOString()
       };
 
@@ -3969,7 +4839,9 @@ const ARTest = () => {
         portalConfig: arConfigPayload.portalConfig,
         particleConfig: arConfigPayload.particleConfig,
         websiteLayer: arConfigPayload.websiteLayer,
-        additionalGeometries: additionalGeometries || []
+        additionalGeometries: additionalGeometries || [],
+        custom3DTexts: custom3DTexts || [],
+        customLights: customLights || []
       };
 
       // Save to both batches and assets collections with merge: true to guarantee persistence
@@ -4502,14 +5374,35 @@ const ARTest = () => {
           </button>
           <button
             type="button"
+            onClick={() => setActiveTab('text3d')}
+            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'text3d'
+              ? 'bg-neutral-800 text-pink-300 font-bold shadow border border-pink-500/50'
+              : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
+              }`}
+          >
+            <span className="material-symbols-outlined text-sm text-pink-400">title</span>
+            <span>3D Text</span>
+            {custom3DTexts.length > 0 && (
+              <span className="text-[10px] bg-pink-500/20 text-pink-300 px-1 py-0.2 rounded-full font-mono ml-0.5">
+                {custom3DTexts.length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('lighting')}
             className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'lighting'
-              ? 'bg-neutral-800 text-white font-bold shadow border border-neutral-700'
+              ? 'bg-neutral-800 text-amber-300 font-bold shadow border border-amber-500/50'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
             <span className="material-symbols-outlined text-sm text-amber-400">lightbulb</span>
             <span>Lighting</span>
+            {customLights.length > 0 && (
+              <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1 py-0.2 rounded-full font-mono ml-0.5">
+                {customLights.length}
+              </span>
+            )}
           </button>
           <button
             type="button"
@@ -4717,52 +5610,96 @@ const ARTest = () => {
                   }}
                 />
 
-                {/* Target Marker Snapping & Alignment */}
-                <div className="p-2.5 rounded-lg bg-neutral-900/90 border border-emerald-500/30 space-y-2">
+                {/* Target Marker Snapping & 9-Point Placement Matrix */}
+                <div className="p-3 rounded-xl bg-neutral-900/90 border border-emerald-500/30 space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1">
-                      <span className="material-symbols-outlined text-xs">qr_code_2</span>
-                      Marker Alignment
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setMarkerVisible((v) => !v)}
-                      className={`text-[10px] font-mono px-2 py-0.5 rounded border transition-colors ${
-                        markerVisible
-                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                          : 'bg-neutral-800 text-neutral-400 border-neutral-700'
-                      }`}
-                    >
-                      {markerVisible ? 'Marker: Visible' : 'Marker: Hidden'}
-                    </button>
+                    <div className="flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-sm text-emerald-400">qr_code_2</span>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400">
+                        Marker Placement Matrix
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-mono text-neutral-400">
+                        {(markerWidth * 100).toFixed(0)}×{(markerWidth * (markerAspectRatio || 0.5926) * 100).toFixed(0)}cm
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setMarkerVisible((v) => !v)}
+                        className={`text-[9px] font-mono px-1.5 py-0.5 rounded border transition-colors ${
+                          markerVisible
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                            : 'bg-neutral-800 text-neutral-400 border-neutral-700'
+                        }`}
+                      >
+                        {markerVisible ? 'ON' : 'OFF'}
+                      </button>
+                    </div>
                   </div>
+
+                  {/* 3x3 Marker Graphic Anchor Matrix */}
+                  <div className="bg-black/60 p-2 rounded-lg border border-neutral-800/80 space-y-1.5">
+                    <div className="flex items-center justify-between text-[9px] text-neutral-400 font-mono">
+                      <span>Snap to Marker Anchor:</span>
+                      <span className="text-emerald-400 font-bold">XY Plane</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1">
+                      {[
+                        { id: 'TL', label: '↖ Top-L', title: 'Top-Left Corner' },
+                        { id: 'TC', label: '↑ Top-C', title: 'Top-Center Edge' },
+                        { id: 'TR', label: '↗ Top-R', title: 'Top-Right Corner' },
+                        { id: 'CL', label: '← Mid-L', title: 'Left Center Edge' },
+                        { id: 'CC', label: '• Center', title: 'Exact Marker Center (0, 0)' },
+                        { id: 'CR', label: '→ Mid-R', title: 'Right Center Edge' },
+                        { id: 'BL', label: '↙ Btm-L', title: 'Bottom-Left Corner' },
+                        { id: 'BC', label: '↓ Btm-C', title: 'Bottom-Center Edge' },
+                        { id: 'BR', label: '↘ Btm-R', title: 'Bottom-Right Corner' }
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => snapModelToMarkerAnchor(item.id)}
+                          className={`py-1.5 px-1 rounded text-[10px] font-mono font-semibold border transition-all text-center flex items-center justify-center ${
+                            item.id === 'CC'
+                              ? 'bg-emerald-950/80 hover:bg-emerald-900 border-emerald-500/50 text-emerald-300 shadow-sm'
+                              : 'bg-neutral-800/90 hover:bg-neutral-700 border-neutral-700 hover:border-neutral-500 text-neutral-300'
+                          }`}
+                          title={item.title}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Depth Snapping & Fitting Tools */}
                   <div className="grid grid-cols-3 gap-1.5 pt-1">
                     <button
                       type="button"
-                      onClick={snapModelToMarkerOrigin}
-                      className="px-2 py-1.5 rounded bg-neutral-800 hover:bg-emerald-950/60 hover:border-emerald-500/50 border border-neutral-700 text-neutral-300 hover:text-emerald-200 text-[10px] font-semibold flex flex-col items-center gap-1 transition-all"
-                      title="Snap object to exact marker center (0, 0, 0)"
-                    >
-                      <span className="material-symbols-outlined text-xs text-emerald-400">filter_center_focus</span>
-                      Center (0,0,0)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={snapModelToMarkerSurface}
-                      className="px-2 py-1.5 rounded bg-neutral-800 hover:bg-emerald-950/60 hover:border-emerald-500/50 border border-neutral-700 text-neutral-300 hover:text-emerald-200 text-[10px] font-semibold flex flex-col items-center gap-1 transition-all"
-                      title="Align object flush to marker face (Z = 0)"
+                      onClick={() => snapModelDepth(0)}
+                      className="px-1.5 py-1.5 rounded bg-neutral-800 hover:bg-cyan-950/60 hover:border-cyan-500/50 border border-neutral-700 text-neutral-300 hover:text-cyan-200 text-[10px] font-semibold flex items-center justify-center gap-1 transition-all"
+                      title="Snap flush to marker face (Z = 0)"
                     >
                       <span className="material-symbols-outlined text-xs text-cyan-400">vertical_align_center</span>
                       Flush (Z=0)
                     </button>
                     <button
                       type="button"
-                      onClick={snapModelToMarkerBottom}
-                      className="px-2 py-1.5 rounded bg-neutral-800 hover:bg-emerald-950/60 hover:border-emerald-500/50 border border-neutral-700 text-neutral-300 hover:text-emerald-200 text-[10px] font-semibold flex flex-col items-center gap-1 transition-all"
-                      title="Ground object along bottom edge of marker"
+                      onClick={() => snapModelDepth(0.02)}
+                      className="px-1.5 py-1.5 rounded bg-neutral-800 hover:bg-cyan-950/60 hover:border-cyan-500/50 border border-neutral-700 text-neutral-300 hover:text-cyan-200 text-[10px] font-semibold flex items-center justify-center gap-1 transition-all"
+                      title="Float 2cm above marker face (Z = 0.02m)"
                     >
-                      <span className="material-symbols-outlined text-xs text-amber-400">vertical_align_bottom</span>
-                      Bottom Edge
+                      <span className="material-symbols-outlined text-xs text-sky-400">arrow_upward</span>
+                      Float +2cm
+                    </button>
+                    <button
+                      type="button"
+                      onClick={fitModelToMarkerBounds}
+                      className="px-1.5 py-1.5 rounded bg-neutral-800 hover:bg-purple-950/60 hover:border-purple-500/50 border border-neutral-700 text-neutral-300 hover:text-purple-200 text-[10px] font-semibold flex items-center justify-center gap-1 transition-all"
+                      title="Auto-scale model to fit within marker width"
+                    >
+                      <span className="material-symbols-outlined text-xs text-purple-400">fit_screen</span>
+                      Fit Bounds
                     </button>
                   </div>
                 </div>
@@ -5682,10 +6619,901 @@ const ARTest = () => {
           )}
 
           {/* ========================================================================= */}
+          {/* TAB: 3D EXTRUDED TYPOGRAPHY TEXT                                          */}
+          {/* ========================================================================= */}
+          {activeTab === 'text3d' && (
+            <div className="space-y-4">
+              {/* Header & Add Button */}
+              <div className="flex items-center justify-between pb-1 border-b border-neutral-800">
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-pink-400 text-base">title</span>
+                  <div>
+                    <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-200">
+                      3D Typography ({custom3DTexts.length})
+                    </h2>
+                    <p className="text-[10px] text-neutral-400">
+                      Extruded 3D WebGL text with custom fonts, bevels, & lighting shaders.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAddTextModalOpen(true)}
+                  className="px-2.5 py-1.5 rounded-lg bg-pink-600 hover:bg-pink-500 text-white text-xs font-bold flex items-center gap-1 shadow-sm transition-all"
+                >
+                  <span className="material-symbols-outlined text-xs">add</span>
+                  Add 3D Text
+                </button>
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div className="grid grid-cols-3 gap-1.5 bg-neutral-950/60 p-1.5 rounded-xl border border-neutral-800/80">
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleAdd3DText({
+                      text: 'STAR weAR',
+                      fontFamily: 'helvetiker_bold',
+                      color: '#38bdf8',
+                      emissive: '#0284c7',
+                      emissiveIntensity: 0.6,
+                      metalness: 0.8,
+                      roughness: 0.2
+                    })
+                  }
+                  className="p-1.5 rounded bg-neutral-900 hover:bg-pink-950/50 border border-neutral-800 hover:border-pink-500/50 text-[11px] font-semibold text-neutral-300 hover:text-pink-300 text-center transition-all truncate"
+                >
+                  + Cyber Neon
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleAdd3DText({
+                      text: '24K GOLD',
+                      fontFamily: 'optimer_bold',
+                      color: '#f59e0b',
+                      emissive: '#78350f',
+                      emissiveIntensity: 0.3,
+                      metalness: 0.95,
+                      roughness: 0.15
+                    })
+                  }
+                  className="p-1.5 rounded bg-neutral-900 hover:bg-amber-950/50 border border-neutral-800 hover:border-amber-500/50 text-[11px] font-semibold text-neutral-300 hover:text-amber-300 text-center transition-all truncate"
+                >
+                  + 24K Gold Title
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleAdd3DText({
+                      text: 'LIMITED EDITION',
+                      fontFamily: 'gentilis_bold',
+                      color: '#f8fafc',
+                      emissive: '#000000',
+                      emissiveIntensity: 0.0,
+                      metalness: 0.3,
+                      roughness: 0.3,
+                      size: 0.25,
+                      depth: 0.05
+                    })
+                  }
+                  className="p-1.5 rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-600 text-[11px] font-semibold text-neutral-300 hover:text-white text-center transition-all truncate"
+                >
+                  + Clean Label
+                </button>
+              </div>
+
+              {/* 3D Texts List */}
+              {custom3DTexts.length === 0 ? (
+                <div className="p-6 text-center rounded-xl bg-neutral-950/50 border border-neutral-800/80 space-y-2">
+                  <span className="material-symbols-outlined text-2xl text-pink-400">text_fields</span>
+                  <p className="text-xs font-semibold text-neutral-300">No 3D text in this scene yet</p>
+                  <p className="text-[11px] text-neutral-500 max-w-xs mx-auto">
+                    Click '+ Add 3D Text' to insert extruded 3D typography into your scene or directly on your target marker.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 px-0.5">
+                    Scene 3D Text Layers ({custom3DTexts.length})
+                  </span>
+                  <div className="space-y-1 max-h-48 overflow-y-auto pr-0.5">
+                    {custom3DTexts.map((textItem) => {
+                      const isSelected = selectedText3DId === textItem.id;
+                      return (
+                        <div
+                          key={textItem.id}
+                          onClick={() => {
+                            setSelectedText3DId(textItem.id);
+                            setSelectedMeshUuid(null);
+                            setSelectedGeometryId(null);
+                            setSelectedLightId(null);
+                            setSelectedTargetType('text3d');
+                          }}
+                          className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer transition-all ${
+                            isSelected
+                              ? 'bg-pink-950/40 border-pink-500/60 text-white shadow-sm'
+                              : 'bg-neutral-900/70 border-neutral-800/80 hover:border-neutral-700 text-neutral-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className="w-3 h-3 rounded-full shrink-0 border border-black/40"
+                              style={{ backgroundColor: textItem.color || '#38bdf8' }}
+                            ></span>
+                            <span className="font-semibold truncate max-w-[140px]">
+                              {textItem.text || '3D Text'}
+                            </span>
+                            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-black/50 text-neutral-400 border border-neutral-800 shrink-0">
+                              {(textItem.fontFamily || 'helvetiker').split('_')[0]}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => handleToggle3DTextVisibility(textItem.id)}
+                              className={`p-1 rounded hover:bg-neutral-800 transition-colors ${
+                                textItem.visible !== false ? 'text-neutral-300' : 'text-neutral-600'
+                              }`}
+                              title={textItem.visible !== false ? 'Hide 3D Text' : 'Show 3D Text'}
+                            >
+                              <span className="material-symbols-outlined text-sm">
+                                {textItem.visible !== false ? 'visibility' : 'visibility_off'}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDuplicate3DText(textItem.id)}
+                              className="p-1 rounded text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 transition-colors"
+                              title="Duplicate 3D Text"
+                            >
+                              <span className="material-symbols-outlined text-sm">content_copy</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete3DText(textItem.id)}
+                              className="p-1 rounded text-neutral-400 hover:text-red-400 hover:bg-red-950/40 transition-colors"
+                              title="Delete 3D Text"
+                            >
+                              <span className="material-symbols-outlined text-sm">delete</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Selected 3D Text Properties Editor */}
+              {(() => {
+                const selectedText = custom3DTexts.find((t) => t.id === selectedText3DId);
+                if (!selectedText) return null;
+
+                return (
+                  <div className="space-y-4 pt-3 border-t border-neutral-800/80">
+                    <div className="flex items-center justify-between pb-1 border-b border-pink-500/30">
+                      <div className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-pink-400 text-sm">edit_note</span>
+                        <span className="text-xs font-bold uppercase tracking-wider text-pink-200">
+                          Edit 3D Text: "{selectedText.text}"
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={focusCameraOnSelectedObject}
+                          className="px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-[10px] font-mono font-semibold flex items-center gap-1"
+                          title="Focus Preview Camera on this Text (F)"
+                        >
+                          <span className="material-symbols-outlined text-xs">filter_center_focus</span>
+                          Frame (F)
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Text String Input */}
+                    <div className="space-y-1">
+                      <label className="text-xs font-semibold text-neutral-300">Text String</label>
+                      <input
+                        type="text"
+                        value={selectedText.text || ''}
+                        onChange={(e) => handleUpdate3DText(selectedText.id, { text: e.target.value })}
+                        className="w-full px-2.5 py-1.5 bg-black border border-neutral-700 rounded text-xs font-semibold text-white focus:outline-none focus:border-pink-500"
+                      />
+                    </div>
+
+                    {/* Typography Font & Alignment */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-xs font-semibold text-neutral-300">Font</label>
+                        <select
+                          value={selectedText.fontFamily || 'helvetiker_bold'}
+                          onChange={(e) => handleUpdate3DText(selectedText.id, { fontFamily: e.target.value })}
+                          className="w-full px-2 py-1.5 bg-neutral-900 border border-neutral-700 rounded text-xs text-neutral-200 focus:outline-none focus:border-pink-500"
+                        >
+                          {AVAILABLE_FONTS.map((f) => (
+                            <option key={f.id} value={f.id}>{f.name}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-xs font-semibold text-neutral-300">Alignment</label>
+                        <div className="grid grid-cols-3 gap-0.5 bg-black p-0.5 rounded border border-neutral-800">
+                          {['left', 'center', 'right'].map((al) => (
+                            <button
+                              key={al}
+                              type="button"
+                              onClick={() => handleUpdate3DText(selectedText.id, { align: al })}
+                              className={`py-1 rounded text-[10px] font-semibold capitalize transition-all ${
+                                (selectedText.align || 'center') === al
+                                  ? 'bg-pink-600 text-white shadow'
+                                  : 'text-neutral-400 hover:text-white'
+                              }`}
+                            >
+                              {al}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Dimensions: Size & Depth */}
+                    <div className="space-y-2">
+                      <NumberSliderInput
+                        label="Font Size"
+                        value={selectedText.size !== undefined ? selectedText.size : 0.35}
+                        onChange={(val) => handleUpdate3DText(selectedText.id, { size: val })}
+                        min={0.05}
+                        max={1.5}
+                        step={0.02}
+                        unit="m"
+                        color="pink"
+                        precision={2}
+                      />
+                      <NumberSliderInput
+                        label="Extrusion Thickness (Depth)"
+                        value={selectedText.depth !== undefined ? selectedText.depth : 0.08}
+                        onChange={(val) => handleUpdate3DText(selectedText.id, { depth: val })}
+                        min={0.01}
+                        max={0.5}
+                        step={0.01}
+                        unit="m"
+                        color="pink"
+                        precision={2}
+                      />
+                    </div>
+
+                    {/* Bevel Chamfer Controls */}
+                    <div className="p-2.5 rounded-lg bg-neutral-950/60 border border-neutral-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selectedText.bevelEnabled !== false}
+                            onChange={(e) => handleUpdate3DText(selectedText.id, { bevelEnabled: e.target.checked })}
+                            className="rounded accent-pink-500 cursor-pointer"
+                          />
+                          Chamfered Bevel Edges
+                        </label>
+                        <span className="text-[10px] text-neutral-400 font-mono">Specular highlights</span>
+                      </div>
+                      {selectedText.bevelEnabled !== false && (
+                        <div className="grid grid-cols-2 gap-2 pt-1">
+                          <NumberSliderInput
+                            label="Bevel Depth"
+                            value={selectedText.bevelThickness !== undefined ? selectedText.bevelThickness : 0.015}
+                            onChange={(val) => handleUpdate3DText(selectedText.id, { bevelThickness: val })}
+                            min={0.002}
+                            max={0.04}
+                            step={0.002}
+                            unit="m"
+                            color="pink"
+                            precision={3}
+                          />
+                          <NumberSliderInput
+                            label="Bevel Size"
+                            value={selectedText.bevelSize !== undefined ? selectedText.bevelSize : 0.01}
+                            onChange={(val) => handleUpdate3DText(selectedText.id, { bevelSize: val })}
+                            min={0.002}
+                            max={0.03}
+                            step={0.002}
+                            unit="m"
+                            color="pink"
+                            precision={3}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Colors & Glowing Emissive */}
+                    <div className="space-y-2 pt-2 border-t border-neutral-800/80">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 block">
+                        Surface Colors & Glow
+                      </span>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-950/70 border border-neutral-800">
+                          <span className="text-xs font-semibold text-neutral-300">Color</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] font-mono text-neutral-400">{selectedText.color || '#38bdf8'}</span>
+                            <input
+                              type="color"
+                              value={selectedText.color || '#38bdf8'}
+                              onChange={(e) => handleUpdate3DText(selectedText.id, { color: e.target.value })}
+                              className="w-7 h-6 bg-transparent cursor-pointer rounded border border-neutral-700"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-950/70 border border-neutral-800">
+                          <span className="text-xs font-semibold text-neutral-300">Emissive</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] font-mono text-neutral-400">{selectedText.emissive || '#000000'}</span>
+                            <input
+                              type="color"
+                              value={selectedText.emissive || '#000000'}
+                              onChange={(e) => handleUpdate3DText(selectedText.id, { emissive: e.target.value })}
+                              className="w-7 h-6 bg-transparent cursor-pointer rounded border border-neutral-700"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <NumberSliderInput
+                        label="Glow Emissive Intensity"
+                        value={selectedText.emissiveIntensity !== undefined ? selectedText.emissiveIntensity : 0.0}
+                        onChange={(val) => handleUpdate3DText(selectedText.id, { emissiveIntensity: val })}
+                        min={0.0}
+                        max={3.0}
+                        step={0.1}
+                        unit="x"
+                        color="pink"
+                        precision={1}
+                      />
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumberSliderInput
+                          label="Metalness"
+                          value={selectedText.metalness !== undefined ? selectedText.metalness : 0.75}
+                          onChange={(val) => handleUpdate3DText(selectedText.id, { metalness: val })}
+                          min={0.0}
+                          max={1.0}
+                          step={0.05}
+                          color="indigo"
+                          precision={2}
+                        />
+                        <NumberSliderInput
+                          label="Roughness"
+                          value={selectedText.roughness !== undefined ? selectedText.roughness : 0.25}
+                          onChange={(val) => handleUpdate3DText(selectedText.id, { roughness: val })}
+                          min={0.0}
+                          max={1.0}
+                          step={0.05}
+                          color="indigo"
+                          precision={2}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Transform Coordinates */}
+                    <div className="space-y-2 pt-2 border-t border-neutral-800/80">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                          3D Spatial Position (X, Y, Z)
+                        </span>
+                        <span className="text-[9px] font-mono text-pink-400">Drag with Gizmo (W)</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {['posX', 'posY', 'posZ'].map((axis, i) => (
+                          <div key={axis} className="flex flex-col gap-0.5 bg-neutral-950 p-1.5 rounded border border-neutral-800">
+                            <span className="text-[9px] font-mono text-neutral-400 uppercase font-semibold">
+                              {axis === 'posX' ? 'X (Left/Right)' : axis === 'posY' ? 'Y (Up/Down)' : 'Z (Forward)'}
+                            </span>
+                            <input
+                              type="number"
+                              step="0.05"
+                              value={selectedText[axis] !== undefined ? selectedText[axis] : (i === 1 ? 0.6 : 0)}
+                              onChange={(e) => handleUpdate3DText(selectedText.id, { [axis]: parseFloat(e.target.value) || 0 })}
+                              className="px-1.5 py-1 bg-black border border-neutral-700 rounded text-xs font-mono text-white text-right focus:outline-none focus:border-pink-500"
+                            />
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {['rotX', 'rotY', 'rotZ'].map((rotAxis) => (
+                          <div key={rotAxis} className="flex flex-col gap-0.5 bg-neutral-950 p-1.5 rounded border border-neutral-800">
+                            <span className="text-[9px] font-mono text-neutral-400 uppercase font-semibold">
+                              {rotAxis.toUpperCase()} (Deg)
+                            </span>
+                            <input
+                              type="number"
+                              step="5"
+                              value={selectedText[rotAxis] !== undefined ? selectedText[rotAxis] : 0}
+                              onChange={(e) => handleUpdate3DText(selectedText.id, { [rotAxis]: parseFloat(e.target.value) || 0 })}
+                              className="px-1.5 py-1 bg-black border border-neutral-700 rounded text-xs font-mono text-white text-right focus:outline-none focus:border-pink-500"
+                            />
+                          </div>
+                        ))}
+                      </div>
+
+                      <NumberSliderInput
+                        label="Uniform Scale"
+                        value={selectedText.scale !== undefined ? selectedText.scale : 1.0}
+                        onChange={(val) => handleUpdate3DText(selectedText.id, { scale: val, scaleX: val, scaleY: val, scaleZ: val })}
+                        min={0.1}
+                        max={4.0}
+                        step={0.05}
+                        unit="x"
+                        color="pink"
+                        precision={2}
+                      />
+                    </div>
+
+                    {/* Motion & Floating Effects */}
+                    <div className="space-y-2 pt-2 border-t border-neutral-800/80">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 block">
+                        Motion & Floating Effects
+                      </span>
+                      <NumberSliderInput
+                        label="Auto-Rotation Speed"
+                        value={selectedText.rotationSpeed || 0}
+                        onChange={(val) => handleUpdate3DText(selectedText.id, { rotationSpeed: val })}
+                        min={-180}
+                        max={180}
+                        step={5}
+                        unit="°/s"
+                        color="pink"
+                        precision={0}
+                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumberSliderInput
+                          label="Bobbing Speed"
+                          value={selectedText.bobbingSpeed || 0}
+                          onChange={(val) => handleUpdate3DText(selectedText.id, { bobbingSpeed: val })}
+                          min={0}
+                          max={5}
+                          step={0.2}
+                          color="pink"
+                          precision={1}
+                        />
+                        <NumberSliderInput
+                          label="Bobbing Height"
+                          value={selectedText.bobbingHeight || 0}
+                          onChange={(val) => handleUpdate3DText(selectedText.id, { bobbingHeight: val })}
+                          min={0}
+                          max={0.3}
+                          step={0.02}
+                          unit="m"
+                          color="pink"
+                          precision={2}
+                        />
+                      </div>
+                    </div>
+
+                    {/* 9-Point Marker Placement Matrix */}
+                    <div className="space-y-1.5 pt-2 border-t border-neutral-800/80">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1">
+                          <span className="material-symbols-outlined text-xs text-pink-400">grid_view</span>
+                          Snap Text to Target Marker
+                        </span>
+                        <span className="text-[9px] font-mono text-neutral-400">9-Point Grid</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-1 bg-black/60 p-2 rounded-lg border border-neutral-800">
+                        {[
+                          { id: 'TL', label: '↖ Top-L' },
+                          { id: 'TC', label: '↑ Top-C' },
+                          { id: 'TR', label: '↗ Top-R' },
+                          { id: 'CL', label: '← Mid-L' },
+                          { id: 'CC', label: '• Center' },
+                          { id: 'CR', label: '→ Mid-R' },
+                          { id: 'BL', label: '↙ Btm-L' },
+                          { id: 'BC', label: '↓ Btm-C' },
+                          { id: 'BR', label: '↘ Btm-R' }
+                        ].map((btn) => (
+                          <button
+                            key={btn.id}
+                            type="button"
+                            onClick={() => snapTextToMarkerAnchor(selectedText.id, btn.id)}
+                            className="py-1.5 rounded text-[10px] font-mono font-semibold bg-neutral-800 hover:bg-pink-950/80 border border-neutral-700 hover:border-pink-500/50 text-neutral-300 hover:text-pink-300 text-center transition-all"
+                          >
+                            {btn.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Save to Batch */}
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        onClick={handleSaveConfig}
+                        disabled={savingConfig}
+                        className="w-full py-2.5 px-3 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-pink-900/30 transition-all disabled:opacity-50"
+                      >
+                        <span className="material-symbols-outlined text-sm">save</span>
+                        <span>
+                          {savingConfig ? 'Saving 3D Text Configuration...' : `Save 3D Text to Batch (${batchId || 'Active'})`}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* ========================================================================= */}
           {/* TAB 3: LIGHTING CONTROLS                                                  */}
           {/* ========================================================================= */}
           {activeTab === 'lighting' && (
             <div className="space-y-5">
+              {/* Custom Multi-Source Lighting Section */}
+              <div className="space-y-3 pb-4 border-b border-neutral-800">
+                <div className="flex items-center justify-between pb-1 border-b border-neutral-800">
+                  <div className="flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-amber-400">light</span>
+                    <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-200">
+                      Dynamic Light Sources ({customLights.length})
+                    </h2>
+                  </div>
+                  <label className="text-[10px] font-mono text-neutral-400 flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showLightHelpers}
+                      onChange={(e) => setShowLightHelpers(e.target.checked)}
+                      className="rounded accent-amber-500 cursor-pointer"
+                    />
+                    Show 3D Bulbs/Gizmos
+                  </label>
+                </div>
+
+                {/* Add Light Buttons */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleAddLight('point')}
+                    className="p-1.5 rounded-lg bg-neutral-900 hover:bg-amber-950/60 border border-neutral-800 hover:border-amber-500/50 text-[11px] font-semibold text-neutral-300 hover:text-amber-300 flex items-center justify-center gap-1 transition-all"
+                  >
+                    <span className="material-symbols-outlined text-xs text-amber-400">wb_incandescent</span>
+                    + Point Light
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddLight('spot')}
+                    className="p-1.5 rounded-lg bg-neutral-900 hover:bg-sky-950/60 border border-neutral-800 hover:border-sky-500/50 text-[11px] font-semibold text-neutral-300 hover:text-sky-300 flex items-center justify-center gap-1 transition-all"
+                  >
+                    <span className="material-symbols-outlined text-xs text-sky-400">highlight</span>
+                    + Spotlight
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddLight('directional')}
+                    className="p-1.5 rounded-lg bg-neutral-900 hover:bg-emerald-950/60 border border-neutral-800 hover:border-emerald-500/50 text-[11px] font-semibold text-neutral-300 hover:text-emerald-300 flex items-center justify-center gap-1 transition-all"
+                  >
+                    <span className="material-symbols-outlined text-xs text-emerald-400">wb_sunny</span>
+                    + Directional
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddLight('hemisphere')}
+                    className="p-1.5 rounded-lg bg-neutral-900 hover:bg-purple-950/60 border border-neutral-800 hover:border-purple-500/50 text-[11px] font-semibold text-neutral-300 hover:text-purple-300 flex items-center justify-center gap-1 transition-all"
+                  >
+                    <span className="material-symbols-outlined text-xs text-purple-400">gradient</span>
+                    + Hemisphere
+                  </button>
+                </div>
+
+                {/* Lighting Presets */}
+                <div className="grid grid-cols-3 gap-1 bg-black/60 p-1.5 rounded-xl border border-neutral-800">
+                  <button
+                    type="button"
+                    onClick={() => applyLightingRigPreset('stage_spotlight')}
+                    className="py-1 px-1.5 rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-[10px] font-semibold text-neutral-300 text-center transition-all truncate"
+                  >
+                    🎯 Stage Spotlight
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyLightingRigPreset('cyberpunk_dual')}
+                    className="py-1 px-1.5 rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-[10px] font-semibold text-neutral-300 text-center transition-all truncate"
+                  >
+                    ⚡ Cyberpunk Dual
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyLightingRigPreset('warm_golden')}
+                    className="py-1 px-1.5 rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-[10px] font-semibold text-neutral-300 text-center transition-all truncate"
+                  >
+                    🌅 Golden Hour
+                  </button>
+                </div>
+
+                {/* Custom Lights List */}
+                {customLights.length > 0 && (
+                  <div className="space-y-1 max-h-40 overflow-y-auto pr-0.5">
+                    {customLights.map((l) => {
+                      const isSelected = selectedLightId === l.id;
+                      const icon =
+                        l.type === 'spot'
+                          ? 'highlight'
+                          : l.type === 'directional'
+                          ? 'wb_sunny'
+                          : l.type === 'hemisphere'
+                          ? 'gradient'
+                          : 'wb_incandescent';
+                      return (
+                        <div
+                          key={l.id}
+                          onClick={() => {
+                            setSelectedLightId(l.id);
+                            setSelectedMeshUuid(null);
+                            setSelectedGeometryId(null);
+                            setSelectedText3DId(null);
+                            setSelectedTargetType('light');
+                          }}
+                          className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer transition-all ${
+                            isSelected
+                              ? 'bg-amber-950/40 border-amber-500/60 text-white shadow-sm'
+                              : 'bg-neutral-900/70 border-neutral-800/80 hover:border-neutral-700 text-neutral-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span
+                              className="w-3 h-3 rounded-full shrink-0 border border-black/40"
+                              style={{ backgroundColor: l.color || '#ffffff' }}
+                            ></span>
+                            <span className="material-symbols-outlined text-xs text-amber-400 shrink-0">
+                              {icon}
+                            </span>
+                            <span className="font-semibold truncate max-w-[130px]">{l.name}</span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleLightVisibility(l.id)}
+                              className={`p-1 rounded hover:bg-neutral-800 transition-colors ${
+                                l.visible !== false ? 'text-neutral-300' : 'text-neutral-600'
+                              }`}
+                              title={l.visible !== false ? 'Turn Off Light' : 'Turn On Light'}
+                            >
+                              <span className="material-symbols-outlined text-sm">
+                                {l.visible !== false ? 'visibility' : 'visibility_off'}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDuplicateLight(l.id)}
+                              className="p-1 rounded text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 transition-colors"
+                              title="Duplicate Light"
+                            >
+                              <span className="material-symbols-outlined text-sm">content_copy</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteLight(l.id)}
+                              className="p-1 rounded text-neutral-400 hover:text-red-400 hover:bg-red-950/40 transition-colors"
+                              title="Delete Light"
+                            >
+                              <span className="material-symbols-outlined text-sm">delete</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Selected Custom Light Properties */}
+                {(() => {
+                  const selectedLight = customLights.find((l) => l.id === selectedLightId);
+                  if (!selectedLight) return null;
+
+                  return (
+                    <div className="space-y-3 p-3 rounded-xl bg-neutral-950/70 border border-amber-500/40 space-y-3">
+                      <div className="flex items-center justify-between pb-1 border-b border-neutral-800">
+                        <span className="text-xs font-bold uppercase tracking-wider text-amber-300 flex items-center gap-1">
+                          <span className="material-symbols-outlined text-xs">tune</span>
+                          {selectedLight.name}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={focusCameraOnSelectedObject}
+                          className="px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-[10px] font-mono font-semibold flex items-center gap-1"
+                          title="Focus Camera on this Light (F)"
+                        >
+                          <span className="material-symbols-outlined text-xs">filter_center_focus</span>
+                          Frame (F)
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold text-neutral-300">Light Name</label>
+                          <input
+                            type="text"
+                            value={selectedLight.name || ''}
+                            onChange={(e) => handleUpdateLight(selectedLight.id, { name: e.target.value })}
+                            className="w-full px-2 py-1 bg-black border border-neutral-700 rounded text-xs font-semibold text-white focus:outline-none focus:border-amber-500"
+                          />
+                        </div>
+
+                        <div className="space-y-1">
+                          <label className="text-[11px] font-semibold text-neutral-300">Light Type</label>
+                          <select
+                            value={selectedLight.type || 'point'}
+                            onChange={(e) => handleUpdateLight(selectedLight.id, { type: e.target.value })}
+                            className="w-full px-2 py-1 bg-neutral-900 border border-neutral-700 rounded text-xs text-neutral-200 focus:outline-none focus:border-amber-500 capitalize"
+                          >
+                            <option value="point">Point Light</option>
+                            <option value="spot">Spotlight</option>
+                            <option value="directional">Directional</option>
+                            <option value="hemisphere">Hemisphere</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Color Pickers */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/80 border border-neutral-800">
+                          <span className="text-xs font-semibold text-neutral-300">
+                            {selectedLight.type === 'hemisphere' ? 'Sky Color' : 'Color'}
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[11px] font-mono text-neutral-400">{selectedLight.color || '#ffffff'}</span>
+                            <input
+                              type="color"
+                              value={selectedLight.color || '#ffffff'}
+                              onChange={(e) => handleUpdateLight(selectedLight.id, { color: e.target.value })}
+                              className="w-7 h-6 bg-transparent cursor-pointer rounded border border-neutral-700"
+                            />
+                          </div>
+                        </div>
+
+                        {selectedLight.type === 'hemisphere' ? (
+                          <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/80 border border-neutral-800">
+                            <span className="text-xs font-semibold text-neutral-300">Ground Color</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[11px] font-mono text-neutral-400">{selectedLight.groundColor || '#1e293b'}</span>
+                              <input
+                                type="color"
+                                value={selectedLight.groundColor || '#1e293b'}
+                                onChange={(e) => handleUpdateLight(selectedLight.id, { groundColor: e.target.value })}
+                                className="w-7 h-6 bg-transparent cursor-pointer rounded border border-neutral-700"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/80 border border-neutral-800">
+                            <span className="text-xs font-semibold text-neutral-300">Cast Shadows</span>
+                            <input
+                              type="checkbox"
+                              checked={Boolean(selectedLight.castShadow)}
+                              onChange={(e) => handleUpdateLight(selectedLight.id, { castShadow: e.target.checked })}
+                              className="rounded accent-amber-500 cursor-pointer"
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Intensity */}
+                      <NumberSliderInput
+                        label="Intensity"
+                        value={selectedLight.intensity !== undefined ? selectedLight.intensity : 2.5}
+                        onChange={(val) => handleUpdateLight(selectedLight.id, { intensity: val })}
+                        min={0.1}
+                        max={15.0}
+                        step={0.1}
+                        unit="x"
+                        color="amber"
+                        precision={1}
+                      />
+
+                      {/* Point/Spot: Distance & Decay */}
+                      {(selectedLight.type === 'point' || selectedLight.type === 'spot') && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumberSliderInput
+                            label="Distance Range"
+                            value={selectedLight.distance !== undefined ? selectedLight.distance : 25}
+                            onChange={(val) => handleUpdateLight(selectedLight.id, { distance: val })}
+                            min={1}
+                            max={100}
+                            step={1}
+                            unit="m"
+                            color="amber"
+                            precision={0}
+                          />
+                          <NumberSliderInput
+                            label="Physical Decay"
+                            value={selectedLight.decay !== undefined ? selectedLight.decay : 2}
+                            onChange={(val) => handleUpdateLight(selectedLight.id, { decay: val })}
+                            min={0}
+                            max={3}
+                            step={0.1}
+                            color="amber"
+                            precision={1}
+                          />
+                        </div>
+                      )}
+
+                      {/* Spotlight: Angle & Penumbra */}
+                      {selectedLight.type === 'spot' && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <NumberSliderInput
+                            label="Cone Angle"
+                            value={selectedLight.angle !== undefined ? selectedLight.angle : 45}
+                            onChange={(val) => handleUpdateLight(selectedLight.id, { angle: val })}
+                            min={10}
+                            max={90}
+                            step={1}
+                            unit="°"
+                            color="sky"
+                            precision={0}
+                          />
+                          <NumberSliderInput
+                            label="Penumbra Softness"
+                            value={selectedLight.penumbra !== undefined ? selectedLight.penumbra : 0.35}
+                            onChange={(val) => handleUpdateLight(selectedLight.id, { penumbra: val })}
+                            min={0}
+                            max={1.0}
+                            step={0.05}
+                            color="sky"
+                            precision={2}
+                          />
+                        </div>
+                      )}
+
+                      {/* Position 3D Coordinates */}
+                      <div className="space-y-1.5 pt-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                            Light Position (X, Y, Z)
+                          </span>
+                          <span className="text-[9px] font-mono text-amber-400">Drag with Gizmo (W)</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {['posX', 'posY', 'posZ'].map((axis, idx) => (
+                            <div key={axis} className="flex flex-col gap-0.5 bg-neutral-900 p-1.5 rounded border border-neutral-800">
+                              <span className="text-[9px] font-mono text-neutral-400 uppercase font-semibold">
+                                {axis === 'posX' ? 'X (Side)' : axis === 'posY' ? 'Y (Height)' : 'Z (Depth)'}
+                              </span>
+                              <input
+                                type="number"
+                                step="0.1"
+                                value={selectedLight[axis] !== undefined ? selectedLight[axis] : (idx === 1 ? 2.2 : 0)}
+                                onChange={(e) => handleUpdateLight(selectedLight.id, { [axis]: parseFloat(e.target.value) || 0 })}
+                                className="px-1.5 py-1 bg-black border border-neutral-700 rounded text-xs font-mono text-white text-right focus:outline-none focus:border-amber-500"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Quick Snap Actions */}
+                      <div className="flex items-center gap-1.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => snapLightToMarker(selectedLight.id)}
+                          className="flex-1 py-1 px-2 rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-[10px] font-semibold text-neutral-300 hover:text-amber-300 text-center transition-all"
+                        >
+                          Snap to Marker Top
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateLight(selectedLight.id, { posX: 0, posY: 2.8, posZ: 0 })}
+                          className="flex-1 py-1 px-2 rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-[10px] font-semibold text-neutral-300 hover:text-amber-300 text-center transition-all"
+                        >
+                          Hover Over Model Center
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Ambient Environment Light */}
               <div className="space-y-3">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
                   <span className="material-symbols-outlined text-sm text-amber-400">wb_sunny</span>
@@ -6962,7 +8790,7 @@ const ARTest = () => {
                           {markerVisible ? 'Active in Viewport' : 'Hidden'}
                         </span>
                       </h2>
-                      <p className="text-[10px] text-neutral-400">Physical image anchor tracked by MindAR (0, 0, 0)</p>
+                      <p className="text-[10px] text-neutral-400">Physical image anchor tracked by MindAR (XY Plane at 0, 0, 0)</p>
                     </div>
                   </div>
                   <button
@@ -6978,9 +8806,9 @@ const ARTest = () => {
                   </button>
                 </div>
 
-                {/* Marker Image Thumbnail & Meta Details */}
-                <div className="flex items-start gap-3 p-2.5 rounded-lg bg-black/60 border border-neutral-800">
-                  <div className="relative w-24 h-24 shrink-0 rounded-lg overflow-hidden border border-emerald-500/30 bg-neutral-950 flex items-center justify-center group">
+                {/* Marker Image Thumbnail & Real-World Dimensions */}
+                <div className="flex items-start gap-3 p-3 rounded-lg bg-black/60 border border-neutral-800">
+                  <div className="relative w-28 h-28 shrink-0 rounded-lg overflow-hidden border border-emerald-500/40 bg-neutral-950 flex items-center justify-center group shadow-inner">
                     {markerImageUrl ? (
                       <img
                         src={markerImageUrl}
@@ -6993,48 +8821,123 @@ const ARTest = () => {
                       </div>
                     )}
                     {markerLoading && (
-                      <div className="absolute inset-0 bg-black/70 flex items-center justify-center">
-                        <span className="w-4 h-4 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></span>
+                      <div className="absolute inset-0 bg-black/75 flex items-center justify-center">
+                        <span className="w-5 h-5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin"></span>
                       </div>
                     )}
+                    <span className="absolute bottom-1 right-1 text-[8px] font-mono px-1 py-0.2 bg-black/80 rounded border border-neutral-700 text-neutral-300">
+                      {markerInfo?.source === 'storage_mind_file' ? '.MIND' :
+                       markerInfo?.source === 'mind_url' ? '.MIND' :
+                       markerInfo?.source === 'batch_marker_image' ? 'IMAGE' :
+                       markerInfo?.source === 'storage_marker_image' ? 'IMAGE' :
+                       markerInfo?.source === 'custom' ? 'CUSTOM' : 'DEFAULT'}
+                    </span>
                   </div>
 
                   <div className="flex-1 min-w-0 space-y-1.5 text-[11px]">
                     <div className="flex items-center justify-between">
-                      <span className="text-neutral-400">Resolution:</span>
+                      <span className="text-neutral-400">Physical Size:</span>
                       <span className="font-mono text-emerald-300 font-bold">
-                        {markerInfo?.width ? `${markerInfo.width} × ${markerInfo.height} px` : '1024 × 607 px (Procedural)'}
+                        {(markerWidth * 100).toFixed(1)} × {(markerWidth * (markerAspectRatio || 0.5926) * 100).toFixed(1)} cm
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-neutral-400">Scene Units:</span>
+                      <span className="font-mono text-cyan-300">
+                        {markerWidth.toFixed(2)}m × {(markerWidth * (markerAspectRatio || 0.5926)).toFixed(3)}m
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-neutral-400">Resolution:</span>
+                      <span className="font-mono text-neutral-200">
+                        {markerInfo?.width ? `${markerInfo.width} × ${markerInfo.height} px` : 'Compiled 432 × 256 px'}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-neutral-400">Aspect Ratio:</span>
-                      <span className="font-mono text-cyan-300 font-bold">
+                      <span className="font-mono text-amber-300 font-semibold">
                         {(markerAspectRatio || 0.5926).toFixed(4)}
+                        {markerInfo?.height && markerInfo?.width ? (
+                          <button
+                            type="button"
+                            onClick={() => setMarkerAspectRatio(Number((markerInfo.height / markerInfo.width).toFixed(4)))}
+                            className="ml-1 text-[9px] text-neutral-400 hover:text-emerald-300 underline"
+                            title="Reset to natural aspect ratio of source marker"
+                          >
+                            [Reset]
+                          </button>
+                        ) : null}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-neutral-400">Anchor Origin:</span>
-                      <span className="font-mono text-purple-300">(0.00, 0.00, 0.00)</span>
-                    </div>
-                    <div className="flex items-center justify-between">
                       <span className="text-neutral-400">Source:</span>
-                      <span className="font-mono text-xs px-1 py-0.2 rounded bg-neutral-800 text-neutral-300 border border-neutral-700">
-                        {markerInfo?.source === 'mind_extracted' ? 'Extracted from .MIND' :
-                         markerInfo?.source === 'batch_marker_image' ? 'Batch Target Image' :
-                         markerInfo?.source === 'storage_image_path' ? 'Storage Target Image' :
-                         markerInfo?.source === 'custom' ? 'Custom Upload' : 'Default Calibration'}
+                      <span className="font-mono text-[10px] px-1 py-0.2 rounded bg-neutral-800 text-neutral-300 border border-neutral-700 truncate max-w-[140px]" title={markerInfo?.mindFilePath || markerInfo?.name || markerInfo?.source}>
+                        {markerInfo?.source === 'storage_mind_file' ? 'Compiled .MIND Buffer' :
+                         markerInfo?.source === 'mind_url' ? 'Network .MIND Target' :
+                         markerInfo?.source === 'batch_marker_image' ? 'Batch Artwork Image' :
+                         markerInfo?.source === 'storage_marker_image' ? 'Storage Target Image' :
+                         markerInfo?.source === 'custom' ? 'Custom Uploaded Marker' : 'Procedural Alignment'}
                       </span>
                     </div>
                   </div>
                 </div>
 
+                {/* Preset Physical Target Dimensions Dropdown */}
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1">
+                      <span className="material-symbols-outlined text-xs text-cyan-400">straighten</span>
+                      Physical Target Preset
+                    </span>
+                    <span className="text-[9px] font-mono text-neutral-400">
+                      Standard Dimensions
+                    </span>
+                  </div>
+                  <select
+                    onChange={(e) => {
+                      const idx = Number(e.target.value);
+                      if (MARKER_PRESETS[idx]) {
+                        applyMarkerPreset(MARKER_PRESETS[idx]);
+                      }
+                    }}
+                    defaultValue=""
+                    className="w-full bg-neutral-950 border border-neutral-700 hover:border-emerald-500/60 rounded px-2.5 py-1.5 text-xs text-neutral-200 font-mono focus:outline-none focus:border-emerald-400 transition-colors"
+                  >
+                    <option value="" disabled>-- Select a Real-World Marker Size Preset --</option>
+                    {MARKER_PRESETS.map((p, idx) => (
+                      <option key={idx} value={idx}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 {/* Sliders: Opacity & Physical Width */}
                 <div className="space-y-2 pt-1">
+                  <NumberSliderInput
+                    label="Physical Marker Width"
+                    value={markerWidth}
+                    onChange={(val) => setMarkerWidth(val)}
+                    min={0.05}
+                    max={3.0}
+                    step={0.01}
+                    unit="m"
+                    color="cyan"
+                    precision={2}
+                    resetValue={1.0}
+                    description={`Width in meters: ${markerWidth.toFixed(2)}m (${(markerWidth * 100).toFixed(1)} cm)`}
+                  />
+                  <div className="flex items-center justify-between text-xs px-1 font-mono text-neutral-400 bg-neutral-950/60 p-1.5 rounded border border-neutral-800">
+                    <span>Computed Physical Height:</span>
+                    <span className="text-emerald-400 font-bold">
+                      {(markerWidth * (markerAspectRatio || 0.5926)).toFixed(3)}m ({(markerWidth * (markerAspectRatio || 0.5926) * 100).toFixed(1)} cm)
+                    </span>
+                  </div>
                   <NumberSliderInput
                     label="Marker Opacity in Viewport"
                     value={markerOpacity}
                     onChange={setMarkerOpacity}
-                    min={0.1}
+                    min={0.05}
                     max={1.0}
                     step={0.05}
                     color="emerald"
@@ -7042,65 +8945,90 @@ const ARTest = () => {
                     resetValue={0.85}
                     description="Adjust visual transparency of reference marker in 3D scene"
                   />
-                  <NumberSliderInput
-                    label="Physical Marker Width"
-                    value={markerWidth}
-                    onChange={setMarkerWidth}
-                    min={0.2}
-                    max={3.0}
-                    step={0.05}
-                    unit="m"
-                    color="cyan"
-                    precision={2}
-                    resetValue={1.0}
-                    description="MindAR default is normalized to 1.0 meter width in scene space"
-                  />
                 </div>
 
-                {/* Alignment & Actions Grid */}
+                {/* 9-Point Marker Placement Matrix */}
                 <div className="pt-2 border-t border-neutral-800 space-y-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">Quick Alignment Actions</span>
-                  <div className="grid grid-cols-2 gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1">
+                      <span className="material-symbols-outlined text-xs">grid_view</span>
+                      9-Point Marker Placement Matrix
+                    </span>
+                    <span className="text-[9px] font-mono text-neutral-400">Click to Snap Object</span>
+                  </div>
+
+                  <div className="bg-black/60 p-2.5 rounded-lg border border-neutral-800 space-y-1.5">
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {[
+                        { id: 'TL', label: '↖ Top-Left', title: 'Top-Left Corner of Marker' },
+                        { id: 'TC', label: '↑ Top-Center', title: 'Top-Center Edge of Marker' },
+                        { id: 'TR', label: '↗ Top-Right', title: 'Top-Right Corner of Marker' },
+                        { id: 'CL', label: '← Mid-Left', title: 'Middle Left Edge of Marker' },
+                        { id: 'CC', label: '• Center (0,0)', title: 'Exact Marker Center Origin (0, 0)' },
+                        { id: 'CR', label: '→ Mid-Right', title: 'Middle Right Edge of Marker' },
+                        { id: 'BL', label: '↙ Btm-Left', title: 'Bottom-Left Corner of Marker' },
+                        { id: 'BC', label: '↓ Btm-Center', title: 'Bottom-Center Edge of Marker' },
+                        { id: 'BR', label: '↘ Btm-Right', title: 'Bottom-Right Corner of Marker' }
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => snapModelToMarkerAnchor(item.id)}
+                          className={`py-2 px-1 rounded text-[10px] font-mono font-semibold border transition-all text-center flex items-center justify-center ${
+                            item.id === 'CC'
+                              ? 'bg-emerald-950/80 hover:bg-emerald-900 border-emerald-500/50 text-emerald-300 shadow-sm'
+                              : 'bg-neutral-800/90 hover:bg-neutral-700 border-neutral-700 hover:border-neutral-500 text-neutral-300'
+                          }`}
+                          title={item.title}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Surface Snapping & Framing Actions */}
+                  <div className="grid grid-cols-4 gap-1.5 pt-1">
                     <button
                       type="button"
-                      onClick={snapModelToMarkerOrigin}
-                      className="p-1.5 rounded bg-neutral-800 hover:bg-emerald-950/70 border border-neutral-700 hover:border-emerald-500/50 text-neutral-300 hover:text-emerald-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
-                      title="Set model position to (0, 0, 0)"
-                    >
-                      <span className="material-symbols-outlined text-xs text-emerald-400">filter_center_focus</span>
-                      Center on Marker
-                    </button>
-                    <button
-                      type="button"
-                      onClick={snapModelToMarkerSurface}
-                      className="p-1.5 rounded bg-neutral-800 hover:bg-emerald-950/70 border border-neutral-700 hover:border-emerald-500/50 text-neutral-300 hover:text-emerald-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
-                      title="Set model Z depth to 0 (flush to surface)"
+                      onClick={() => snapModelDepth(0)}
+                      className="p-1.5 rounded bg-neutral-800 hover:bg-cyan-950/70 border border-neutral-700 hover:border-cyan-500/50 text-neutral-300 hover:text-cyan-200 text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                      title="Set model Z depth to 0 (flush to marker face)"
                     >
                       <span className="material-symbols-outlined text-xs text-cyan-400">vertical_align_center</span>
-                      Flush to Surface
+                      Flush (Z=0)
                     </button>
                     <button
                       type="button"
-                      onClick={snapModelToMarkerBottom}
-                      className="p-1.5 rounded bg-neutral-800 hover:bg-emerald-950/70 border border-neutral-700 hover:border-emerald-500/50 text-neutral-300 hover:text-emerald-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
-                      title="Ground model on bottom edge of marker"
+                      onClick={() => snapModelDepth(0.02)}
+                      className="p-1.5 rounded bg-neutral-800 hover:bg-sky-950/70 border border-neutral-700 hover:border-sky-500/50 text-neutral-300 hover:text-sky-200 text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                      title="Set model Z depth to +2cm forward of marker face"
                     >
-                      <span className="material-symbols-outlined text-xs text-amber-400">vertical_align_bottom</span>
-                      Ground to Bottom
+                      <span className="material-symbols-outlined text-xs text-sky-400">arrow_upward</span>
+                      Float +2cm
+                    </button>
+                    <button
+                      type="button"
+                      onClick={fitModelToMarkerBounds}
+                      className="p-1.5 rounded bg-neutral-800 hover:bg-purple-950/70 border border-neutral-700 hover:border-purple-500/50 text-neutral-300 hover:text-purple-200 text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                      title="Scale model proportionally to fit inside marker bounds"
+                    >
+                      <span className="material-symbols-outlined text-xs text-purple-400">fit_screen</span>
+                      Fit Bounds
                     </button>
                     <button
                       type="button"
                       onClick={frameCameraToMarker}
-                      className="p-1.5 rounded bg-neutral-800 hover:bg-indigo-950/70 border border-neutral-700 hover:border-indigo-500/50 text-neutral-300 hover:text-indigo-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+                      className="p-1.5 rounded bg-neutral-800 hover:bg-indigo-950/70 border border-neutral-700 hover:border-indigo-500/50 text-neutral-300 hover:text-indigo-200 text-xs font-semibold flex items-center justify-center gap-1 transition-all"
                       title="Align camera directly perpendicular to marker face"
                     >
                       <span className="material-symbols-outlined text-xs text-indigo-400">crop_free</span>
-                      Frame Marker Face
+                      Frame Face
                     </button>
                   </div>
 
                   {/* Marker Image Upload & Reset */}
-                  <div className="flex items-center gap-2 pt-1">
+                  <div className="flex items-center gap-2 pt-2 border-t border-neutral-800/80">
                     <input
                       type="file"
                       ref={markerFileInputRef}
@@ -7118,7 +9046,7 @@ const ARTest = () => {
                       className="flex-1 py-1.5 px-2 bg-neutral-800 hover:bg-emerald-900/60 text-neutral-200 hover:text-emerald-200 border border-neutral-700 hover:border-emerald-500/50 rounded text-xs font-semibold flex items-center justify-center gap-1 transition-all"
                     >
                       <span className="material-symbols-outlined text-xs">file_upload</span>
-                      Upload Custom Marker
+                      Upload Custom Marker Artwork
                     </button>
                     <button
                       type="button"
@@ -9645,9 +11573,110 @@ const ARTest = () => {
         style={{ touchAction: 'none' }}
         onContextMenu={(e) => e.preventDefault()}
       >
-        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0 || (markerVisible && markerImageUrl) || (websiteEnabled && websiteUrl)) ? (
+        {/* Viewport Floating 3D Transform Gizmo Toolbar */}
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 p-1.5 bg-neutral-900/90 backdrop-blur-md border border-neutral-700/80 rounded-xl shadow-2xl select-none pointer-events-auto">
+          {/* Gizmo Mode Toggle Buttons */}
+          <div className="flex items-center gap-0.5 bg-black/60 p-0.5 rounded-lg border border-neutral-800">
+            <button
+              type="button"
+              onClick={() => setGizmoMode('translate')}
+              title="Translate / Move (W)"
+              className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${
+                gizmoMode === 'translate'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">open_with</span>
+              <span className="hidden sm:inline">Move</span>
+              <span className="text-[10px] font-mono opacity-60">W</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setGizmoMode('rotate')}
+              title="Rotate / Turn (E)"
+              className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${
+                gizmoMode === 'rotate'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">rotate_right</span>
+              <span className="hidden sm:inline">Rotate</span>
+              <span className="text-[10px] font-mono opacity-60">E</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setGizmoMode('scale')}
+              title="Scale / Resize (R)"
+              className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${
+                gizmoMode === 'scale'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">aspect_ratio</span>
+              <span className="hidden sm:inline">Scale</span>
+              <span className="text-[10px] font-mono opacity-60">R</span>
+            </button>
+          </div>
+
+          {/* Coordinate Space Toggle */}
+          <button
+            type="button"
+            onClick={() => setGizmoSpace((prev) => (prev === 'world' ? 'local' : 'world'))}
+            title={`Transform Coordinate Space (${gizmoSpace.toUpperCase()})`}
+            className="px-2 py-1 bg-black/60 hover:bg-neutral-800 border border-neutral-800 rounded-lg text-xs font-mono font-semibold text-neutral-300 transition-all uppercase"
+          >
+            {gizmoSpace}
+          </button>
+
+          {/* Snapping Toggle */}
+          <button
+            type="button"
+            onClick={() => setGizmoSnap((prev) => (prev === null ? 0.1 : prev === 0.1 ? 0.5 : null))}
+            title="Toggle Transform Snapping"
+            className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold border transition-all ${
+              gizmoSnap
+                ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
+                : 'bg-black/60 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+            }`}
+          >
+            {gizmoSnap ? `Snap: ${gizmoSnap}m` : 'Snap: Off'}
+          </button>
+
+          {/* Selection Info Badge */}
+          {currentSelectedObjectInfo && (
+            <div className="flex items-center gap-1.5 pl-1.5 border-l border-neutral-800">
+              <div className="flex items-center gap-1 px-2 py-1 bg-neutral-800/90 border border-neutral-700/80 rounded-lg text-xs text-neutral-200 max-w-[160px] truncate">
+                <span className="material-symbols-outlined text-xs text-indigo-400">
+                  {currentSelectedObjectInfo.icon}
+                </span>
+                <span className="truncate font-semibold">{currentSelectedObjectInfo.name}</span>
+              </div>
+              <button
+                type="button"
+                onClick={focusCameraOnSelectedObject}
+                title="Focus Camera on Selected Object (F)"
+                className="p-1 rounded-lg bg-black/60 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-indigo-300 transition-colors"
+              >
+                <span className="material-symbols-outlined text-sm">filter_center_focus</span>
+              </button>
+              <button
+                type="button"
+                onClick={clearSelectionAndDetachGizmo}
+                title="Deselect Object (Esc)"
+                className="p-1 rounded-lg bg-black/60 hover:bg-red-950/60 border border-neutral-800 hover:border-red-500/40 text-neutral-400 hover:text-red-400 transition-colors"
+              >
+                <span className="material-symbols-outlined text-sm">close</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0 || custom3DTexts.length > 0 || customLights.length > 0 || (markerVisible && markerImageUrl) || (websiteEnabled && websiteUrl)) ? (
           <a-scene
-            key={batchId || localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || (portalEnabled ? 'portal-active' : '') || (particleSystemEnabled ? 'particles-active' : '') || (additionalGeometries.length > 0 ? 'geoms-active' : '') || (markerImageUrl ? 'marker-active' : '') || (websiteEnabled ? 'website-active' : '') || 'ar-portal-scene'}
+            key={batchId || localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || (portalEnabled ? 'portal-active' : '') || (particleSystemEnabled ? 'particles-active' : '') || (additionalGeometries.length > 0 ? 'geoms-active' : '') || (custom3DTexts.length > 0 ? 'text-active' : '') || (customLights.length > 0 ? 'lights-active' : '') || (markerImageUrl ? 'marker-active' : '') || (websiteEnabled ? 'website-active' : '') || 'ar-portal-scene'}
             embedded
             color-space="sRGB"
             renderer="colorManagement: true; antialias: true; stencil: true; preserveDrawingBuffer: true;"
@@ -9690,6 +11719,14 @@ const ARTest = () => {
               light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false;`}
               position={rimPosition}
             ></a-entity>
+
+            {/* Custom Multi-Source Lighting Rig Anchor */}
+            {customLights.length > 0 && (
+              <a-entity
+                id="ar-custom-lights-anchor"
+                ar-custom-lights={`lights: ${encodeURIComponent(JSON.stringify(customLights))}; showHelpers: ${showLightHelpers};`}
+              ></a-entity>
+            )}
 
             {/* MindAR Target Marker Reference Plane Anchor (XY plane at 0, 0, 0) */}
             {markerVisible && markerImageUrl && (
@@ -9746,6 +11783,14 @@ const ARTest = () => {
               <a-entity
                 id="ar-additional-geometries-anchor"
                 ar-additional-geometries={`geometries: ${encodeURIComponent(JSON.stringify(additionalGeometries))};`}
+              ></a-entity>
+            )}
+
+            {/* Custom Extruded 3D Typography Texts Anchor */}
+            {custom3DTexts.length > 0 && (
+              <a-entity
+                id="ar-3d-texts-anchor"
+                ar-3d-texts={`texts: ${encodeURIComponent(JSON.stringify(custom3DTexts))};`}
               ></a-entity>
             )}
 
@@ -10066,6 +12111,15 @@ const ARTest = () => {
           isOpen={geometryModalOpen}
           onClose={() => setGeometryModalOpen(false)}
           onAddGeometry={handleAddGeometry}
+        />
+      )}
+
+      {/* 3D Extruded Typography Text Modal */}
+      {isAddTextModalOpen && (
+        <Add3DTextModal
+          isOpen={isAddTextModalOpen}
+          onClose={() => setIsAddTextModalOpen(false)}
+          onAddText={handleAdd3DText}
         />
       )}
     </div>
