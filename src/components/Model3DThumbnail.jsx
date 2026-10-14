@@ -7,6 +7,8 @@ import {
 } from '../utils/modelThumbnailRenderer';
 
 export default function Model3DThumbnail({
+  thumbnailUrl = '',
+  thumbnail_url = '',
   modelUrl,
   lightingConfig = null,
   fallbackImageUrl,
@@ -25,8 +27,13 @@ export default function Model3DThumbnail({
   const procedural = getCategoryProcedural3D(category, subcategory);
   const displayName = cleanName || alt || procedural.label;
 
-  // 1. Synchronous initial resolution: check if pre-rendered or cached (only when no custom lighting is configured)
-  const initialThumb = !lightingConfig
+  // Dedicated thumbnail URL takes top precedence if provided
+  const explicitThumb = thumbnailUrl || thumbnail_url || fallbackImageUrl;
+
+  // Synchronous initial resolution: check if explicit thumbnail, pre-rendered, or cached
+  const initialThumb = explicitThumb
+    ? explicitThumb
+    : !lightingConfig
     ? (getPreRenderedThumbnail(modelUrl) ||
        getPreRenderedThumbnail(cleanName) ||
        getPreRenderedThumbnail(displayName))
@@ -37,11 +44,53 @@ export default function Model3DThumbnail({
   const [loadFailed, setLoadFailed] = useState(false);
   const [imgLoaded, setImgLoaded] = useState(false);
 
-  // 2. Resolve or dynamically render 3D model thumbnail
+  // Listen for global thumbnail update events (e.g. after editing in AR-Test or batch update)
+  useEffect(() => {
+    const handleThumbnailUpdated = (e) => {
+      const { key, url } = e.detail || {};
+      const matches =
+        !key ||
+        key === '*' ||
+        key === cleanName ||
+        key === alt ||
+        (typeof modelUrl === 'string' && modelUrl.includes(key)) ||
+        (typeof explicitThumb === 'string' && explicitThumb.includes(key));
+
+      if (matches) {
+        if (url) {
+          setThumbnailSrc(url);
+          setLoadFailed(false);
+          setIsLoading(false);
+        } else if (modelUrl) {
+          setIsLoading(true);
+          captureModelThumbnail(modelUrl, lightingConfig).then((dataUrl) => {
+            if (dataUrl) {
+              setThumbnailSrc(dataUrl);
+              setLoadFailed(false);
+            }
+            setIsLoading(false);
+          });
+        }
+      }
+    };
+
+    window.addEventListener('starwear:thumbnail-updated', handleThumbnailUpdated);
+    return () => window.removeEventListener('starwear:thumbnail-updated', handleThumbnailUpdated);
+  }, [cleanName, alt, modelUrl, explicitThumb, lightingConfig]);
+
+  // Resolve or dynamically render 3D model thumbnail
   useEffect(() => {
     let isMounted = true;
 
-    // Check pre-rendered static catalog again if props changed (only if no custom lighting)
+    // 1. Explicit thumbnail (from Firestore or props) takes precedence
+    if (explicitThumb) {
+      setThumbnailSrc(explicitThumb);
+      setIsLoading(false);
+      setLoadFailed(false);
+      return;
+    }
+
+    // 2. Check pre-rendered static catalog (only if no custom lighting)
     if (!lightingConfig) {
       const staticMatch =
         getPreRenderedThumbnail(modelUrl) ||
@@ -57,12 +106,7 @@ export default function Model3DThumbnail({
     }
 
     if (!modelUrl) {
-      // If no 3D model, fallback to image if provided
-      if (fallbackImageUrl) {
-        setThumbnailSrc(fallbackImageUrl);
-      } else {
-        setThumbnailSrc(null);
-      }
+      setThumbnailSrc(null);
       setIsLoading(false);
       return;
     }
@@ -76,9 +120,6 @@ export default function Model3DThumbnail({
         if (dataUrl) {
           setThumbnailSrc(dataUrl);
           setIsLoading(false);
-        } else if (fallbackImageUrl) {
-          setThumbnailSrc(fallbackImageUrl);
-          setIsLoading(false);
         } else {
           setLoadFailed(true);
           setIsLoading(false);
@@ -87,18 +128,14 @@ export default function Model3DThumbnail({
       .catch((err) => {
         if (!isMounted) return;
         console.warn('3D thumbnail resolution error:', err);
-        if (fallbackImageUrl) {
-          setThumbnailSrc(fallbackImageUrl);
-        } else {
-          setLoadFailed(true);
-        }
+        setLoadFailed(true);
         setIsLoading(false);
       });
 
     return () => {
       isMounted = false;
     };
-  }, [modelUrl, fallbackImageUrl, cleanName, displayName, JSON.stringify(lightingConfig)]);
+  }, [modelUrl, explicitThumb, cleanName, displayName, JSON.stringify(lightingConfig)]);
 
   const activeBadgeText =
     typeof badge === 'string'

@@ -615,8 +615,10 @@ function ProductDetails() {
                       >
                         <div className="w-full aspect-square rounded bg-black/40 mb-2 flex items-center justify-center border border-white/5 overflow-hidden">
                           <Model3DThumbnail
+                            thumbnailUrl={item.thumbnailUrl || item.thumbnail_url}
                             modelUrl={item.gltf_url || item.modelUrl || item.gltf_file_path}
-                            fallbackImageUrl={item.imageUrl || item.image}
+                            fallbackImageUrl={item.thumbnailUrl || item.thumbnail_url || item.imageUrl || item.image}
+                            lightingConfig={item.ar_config || item.config}
                             category={item.category}
                             cleanName={item.name || item.id}
                             className="w-full h-full"

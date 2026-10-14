@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { ref, getDownloadURL } from 'firebase/storage';
-import { storage } from '../firebase';
+import { ref, getDownloadURL, uploadBytes } from 'firebase/storage';
+import { doc, setDoc, getDocs, collection } from 'firebase/firestore';
+import { storage, db } from '../firebase';
 import { createPortalObject3D, createParticleSystemObject3D } from './portalThreeHelper';
 
 // Static mapping of pre-rendered 3D model snapshots
@@ -84,6 +85,52 @@ function setSessionCache(key, dataUrl) {
     }
   } catch {
     // Quota reached or private mode, silently ignore
+  }
+}
+
+/**
+ * Invalidate thumbnail caches (in-memory and sessionStorage) and broadcast update event
+ */
+export function invalidateThumbnailCache(keyOrUrl = null) {
+  if (!keyOrUrl || keyOrUrl === '*') {
+    inMemoryCache.clear();
+    pendingRenders.clear();
+    if (typeof window !== 'undefined') {
+      try {
+        const keys = Object.keys(sessionStorage);
+        keys.forEach(k => {
+          if (k.startsWith('starwear_thumb_')) sessionStorage.removeItem(k);
+        });
+      } catch {}
+    }
+  } else {
+    const keyStr = String(keyOrUrl).trim();
+    for (const [k] of inMemoryCache.entries()) {
+      if (k.includes(keyStr)) {
+        inMemoryCache.delete(k);
+      }
+    }
+    for (const [k] of pendingRenders.entries()) {
+      if (k.includes(keyStr)) {
+        pendingRenders.delete(k);
+      }
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        const keys = Object.keys(sessionStorage);
+        keys.forEach(k => {
+          if (k.startsWith('starwear_thumb_') && k.includes(keyStr)) {
+            sessionStorage.removeItem(k);
+          }
+        });
+      } catch {}
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('starwear:thumbnail-updated', {
+      detail: { key: keyOrUrl, timestamp: Date.now() }
+    }));
   }
 }
 
@@ -285,28 +332,92 @@ export async function captureModelThumbnail(modelUrlOrFile, customConfig = null)
 
       const model = gltf.scene;
 
-      // Apply material overrides if present in customConfig
+      // Apply material and mesh overrides if present in customConfig
       if (customConfig) {
+        const meshOverrides = customConfig.meshOverrides || customConfig.ar_config?.meshOverrides || {};
+
         model.traverse((node) => {
-          if (node.isMesh && node.material) {
-            const mats = Array.isArray(node.material) ? node.material : [node.material];
-            mats.forEach((m) => {
-              if (customConfig.matMetalness !== undefined || customConfig.metalness !== undefined) {
-                m.metalness = Number(customConfig.matMetalness ?? customConfig.metalness);
+          if (node.isMesh) {
+            const override = meshOverrides[node.name] || meshOverrides[node.uuid];
+            if (override) {
+              if (override.deleted || override.visible === false) {
+                node.visible = false;
+              } else {
+                if (override.visible !== undefined) node.visible = Boolean(override.visible);
+                if (override.scale) {
+                  const s = parseVec3(override.scale, [1, 1, 1]);
+                  node.scale.set(s[0], s[1], s[2]);
+                }
+                if (override.position) {
+                  const p = parseVec3(override.position, [0, 0, 0]);
+                  node.position.set(p[0], p[1], p[2]);
+                }
+                if (override.rotation) {
+                  const r = parseVec3(override.rotation, [0, 0, 0]);
+                  node.rotation.set(
+                    THREE.MathUtils.degToRad(r[0]),
+                    THREE.MathUtils.degToRad(r[1]),
+                    THREE.MathUtils.degToRad(r[2])
+                  );
+                }
+                if (override.material && node.material) {
+                  const mats = Array.isArray(node.material) ? node.material : [node.material];
+                  mats.forEach((m) => {
+                    if (override.material.color) m.color.set(override.material.color);
+                    if (override.material.metalness !== undefined) m.metalness = Number(override.material.metalness);
+                    if (override.material.roughness !== undefined) m.roughness = Number(override.material.roughness);
+                    if (override.material.wireframe !== undefined) m.wireframe = Boolean(override.material.wireframe);
+                    if (override.material.opacity !== undefined) {
+                      m.opacity = Number(override.material.opacity);
+                      m.transparent = m.opacity < 1;
+                    }
+                    if (override.material.emissive) m.emissive.set(override.material.emissive);
+                    if (override.material.emissiveIntensity !== undefined) {
+                      m.emissiveIntensity = Number(override.material.emissiveIntensity);
+                    }
+                    m.needsUpdate = true;
+                  });
+                }
               }
-              if (customConfig.matRoughness !== undefined || customConfig.roughness !== undefined) {
-                m.roughness = Number(customConfig.matRoughness ?? customConfig.roughness);
-              }
-              if (customConfig.matEmissive || customConfig.emissive) {
-                m.emissive.set(customConfig.matEmissive || customConfig.emissive);
-              }
-              if (customConfig.matEmissiveIntensity !== undefined || customConfig.emissiveIntensity !== undefined) {
-                m.emissiveIntensity = Number(customConfig.matEmissiveIntensity ?? customConfig.emissiveIntensity);
-              }
-              m.needsUpdate = true;
-            });
+            } else if (node.material) {
+              const mats = Array.isArray(node.material) ? node.material : [node.material];
+              mats.forEach((m) => {
+                if (customConfig.matMetalness !== undefined || customConfig.metalness !== undefined) {
+                  m.metalness = Number(customConfig.matMetalness ?? customConfig.metalness);
+                }
+                if (customConfig.matRoughness !== undefined || customConfig.roughness !== undefined) {
+                  m.roughness = Number(customConfig.matRoughness ?? customConfig.roughness);
+                }
+                if (customConfig.matEmissive || customConfig.emissive) {
+                  m.emissive.set(customConfig.matEmissive || customConfig.emissive);
+                }
+                if (customConfig.matEmissiveIntensity !== undefined || customConfig.emissiveIntensity !== undefined) {
+                  m.emissiveIntensity = Number(customConfig.matEmissiveIntensity ?? customConfig.emissiveIntensity);
+                }
+                m.needsUpdate = true;
+              });
+            }
           }
         });
+
+        // Apply custom model rotation if specified
+        const rotX = customConfig.modelRotX ?? customConfig.rotX;
+        const rotY = customConfig.modelRotY ?? customConfig.rotY;
+        const rotZ = customConfig.modelRotZ ?? customConfig.rotZ;
+        if (rotX !== undefined || rotY !== undefined || rotZ !== undefined) {
+          model.rotation.set(
+            THREE.MathUtils.degToRad(Number(rotX || 0)),
+            THREE.MathUtils.degToRad(Number(rotY || 0)),
+            THREE.MathUtils.degToRad(Number(rotZ || 0))
+          );
+        } else if (customConfig.modelRotation) {
+          const r = parseVec3(customConfig.modelRotation, [0, 0, 0]);
+          model.rotation.set(
+            THREE.MathUtils.degToRad(r[0]),
+            THREE.MathUtils.degToRad(r[1]),
+            THREE.MathUtils.degToRad(r[2])
+          );
+        }
       }
 
       // Calculate Bounding Box and scale normalization
@@ -462,4 +573,210 @@ export function getCategoryProcedural3D(category = 'Apparel', subcategory = '') 
     label: '3D MESH ASSET',
     icon: 'deployed_code'
   };
+}
+
+/**
+ * Captures a crisp, square snapshot directly from an active A-Frame scene element
+ * @param {HTMLElement} sceneEl - The <a-scene> element
+ * @param {Object} options - { width, height, hideMarkers, format, quality }
+ * @returns {Promise<{ blob: Blob, dataUrl: string, canvas: HTMLCanvasElement } | null>}
+ */
+export async function captureSceneCanvasThumbnail(sceneEl, options = {}) {
+  if (!sceneEl) return null;
+  const {
+    width = 512,
+    height = 512,
+    hideMarkers = true,
+    format = 'image/png',
+    quality = 0.92
+  } = options;
+
+  try {
+    // 1. Temporarily hide marker reference anchor so the asset itself is highlighted cleanly
+    const markerAnchor = sceneEl.querySelector('#ar-marker-reference-anchor');
+    let origMarkerVisible = null;
+    if (markerAnchor && hideMarkers) {
+      origMarkerVisible = markerAnchor.getAttribute('visible');
+      markerAnchor.setAttribute('visible', 'false');
+    }
+
+    // 2. Force an active render pass
+    if (sceneEl.renderer && sceneEl.object3D && sceneEl.camera) {
+      sceneEl.renderer.render(sceneEl.object3D, sceneEl.camera);
+    }
+
+    // 3. Obtain canvas source (A-Frame screenshot component or renderer DOM element)
+    let srcCanvas = null;
+    if (sceneEl.components?.screenshot?.getCanvas) {
+      try {
+        srcCanvas = sceneEl.components.screenshot.getCanvas('perspective');
+      } catch (e) {
+        console.warn('Screenshot component getCanvas fallback:', e);
+      }
+    }
+    if (!srcCanvas && sceneEl.renderer?.domElement) {
+      srcCanvas = sceneEl.renderer.domElement;
+    }
+
+    // Restore marker visibility immediately
+    if (markerAnchor && origMarkerVisible !== null) {
+      markerAnchor.setAttribute('visible', origMarkerVisible);
+    }
+
+    if (!srcCanvas || !srcCanvas.width || !srcCanvas.height) {
+      return null;
+    }
+
+    // 4. Square crop and scale onto target thumbnail canvas
+    const targetCanvas = document.createElement('canvas');
+    targetCanvas.width = width;
+    targetCanvas.height = height;
+    const ctx = targetCanvas.getContext('2d');
+
+    const sw = srcCanvas.width;
+    const sh = srcCanvas.height;
+    const minDim = Math.min(sw, sh);
+    const sx = (sw - minDim) / 2;
+    const sy = (sh - minDim) / 2;
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(srcCanvas, sx, sy, minDim, minDim, 0, 0, width, height);
+
+    // 5. Convert to Blob & DataURL
+    const dataUrl = targetCanvas.toDataURL(format, quality);
+    const blob = await new Promise((resolve) => targetCanvas.toBlob(resolve, format, quality));
+
+    return { blob, dataUrl, canvas: targetCanvas };
+  } catch (err) {
+    console.error('Error capturing scene canvas thumbnail:', err);
+    return null;
+  }
+}
+
+/**
+ * Offscreen 3D model thumbnail capture returning both Blob and DataURL
+ */
+export async function captureModelThumbnailBlob(modelUrlOrFile, customConfig = null, options = {}) {
+  const dataUrl = await captureModelThumbnail(modelUrlOrFile, customConfig);
+  if (!dataUrl) return null;
+
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    return { blob, dataUrl };
+  } catch (err) {
+    console.warn('DataURL to Blob conversion error:', err);
+    return null;
+  }
+}
+
+/**
+ * Uploads a thumbnail Blob or DataURL to Firebase Storage and updates Firestore documents
+ */
+export async function uploadAssetThumbnail(assetId, blobOrDataUrl, options = {}) {
+  if (!assetId || !blobOrDataUrl) return null;
+  const cleanId = String(assetId).trim();
+
+  try {
+    let blob = blobOrDataUrl;
+    if (typeof blobOrDataUrl === 'string') {
+      const res = await fetch(blobOrDataUrl);
+      blob = await res.blob();
+    }
+
+    const ts = Date.now();
+    const storagePath = `assets/${cleanId}/thumbnails/thumb_${ts}.png`;
+    const storageRef = ref(storage, storagePath);
+
+    await uploadBytes(storageRef, blob, {
+      contentType: 'image/png',
+      customMetadata: {
+        batchId: cleanId,
+        generatedAt: new Date().toISOString()
+      }
+    });
+
+    const downloadUrl = await getDownloadURL(storageRef);
+
+    const patch = {
+      thumbnailUrl: downloadUrl,
+      thumbnail_url: downloadUrl,
+      updatedAt: new Date().toISOString()
+    };
+
+    const docPromises = [
+      setDoc(doc(db, 'assets', cleanId), patch, { merge: true }),
+      setDoc(doc(db, 'batches', cleanId), patch, { merge: true })
+    ];
+
+    if (options.altAssetId && String(options.altAssetId).trim() !== cleanId) {
+      docPromises.push(setDoc(doc(db, 'assets', String(options.altAssetId).trim()), patch, { merge: true }));
+    }
+
+    await Promise.all(docPromises);
+
+    invalidateThumbnailCache(cleanId);
+    invalidateThumbnailCache(downloadUrl);
+
+    return downloadUrl;
+  } catch (err) {
+    console.error(`Failed to upload asset thumbnail for ${cleanId}:`, err);
+    throw err;
+  }
+}
+
+/**
+ * Automatically iterates through assets in Firestore, renders 3D thumbnails offscreen,
+ * uploads to Firebase Storage, and updates the Firestore documents.
+ */
+export async function batchUpdateAllAssetThumbnails({ onProgress, force = false } = {}) {
+  try {
+    const snap = await getDocs(collection(db, 'assets'));
+    if (snap.empty) return { updated: 0, total: 0 };
+
+    const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const total = docs.length;
+    let updatedCount = 0;
+
+    for (let i = 0; i < total; i++) {
+      const asset = docs[i];
+      const assetId = asset.id;
+      const hasThumb = Boolean(asset.thumbnailUrl || asset.thumbnail_url);
+
+      if (hasThumb && !force) {
+        if (onProgress) onProgress({ current: i + 1, total, assetId, status: 'skipped', url: asset.thumbnailUrl });
+        continue;
+      }
+
+      const glbPathOrUrl = asset.gltf_file_path || asset.glb_url || asset.model_url || asset.modelUrl;
+      if (!glbPathOrUrl) {
+        if (onProgress) onProgress({ current: i + 1, total, assetId, status: 'no_model' });
+        continue;
+      }
+
+      try {
+        if (onProgress) onProgress({ current: i + 1, total, assetId, status: 'rendering' });
+        const config = asset.ar_config || asset.config || null;
+        const thumbRes = await captureModelThumbnailBlob(glbPathOrUrl, config);
+
+        if (thumbRes?.blob) {
+          if (onProgress) onProgress({ current: i + 1, total, assetId, status: 'uploading' });
+          const downloadUrl = await uploadAssetThumbnail(assetId, thumbRes.blob);
+          updatedCount++;
+          if (onProgress) onProgress({ current: i + 1, total, assetId, status: 'success', url: downloadUrl });
+        } else {
+          if (onProgress) onProgress({ current: i + 1, total, assetId, status: 'render_failed' });
+        }
+      } catch (renderErr) {
+        console.warn(`Error generating thumbnail for asset ${assetId}:`, renderErr);
+        if (onProgress) onProgress({ current: i + 1, total, assetId, status: 'error', error: renderErr.message });
+      }
+    }
+
+    return { updated: updatedCount, total };
+  } catch (err) {
+    console.error('Batch thumbnail update error:', err);
+    throw err;
+  }
 }

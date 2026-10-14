@@ -81,12 +81,16 @@ service cloud.firestore {
     // Assets & Batches (AR Catalog & Mind AR files)
     match /assets/{assetId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isAdmin() || request.auth != null || (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['thumbnailUrl', 'thumbnail_url', 'updatedAt'])
+      );
     }
 
     match /batches/{batchId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isAdmin() || request.auth != null || (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['thumbnailUrl', 'thumbnail_url', 'updatedAt'])
+      );
     }
 
     // Orders Collection

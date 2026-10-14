@@ -408,8 +408,9 @@ export default function StoreFront() {
                       <div>
                         <div className="aspect-[4/3] rounded-lg bg-gradient-to-b from-[#111827] to-[#030712] border border-white/10 relative overflow-hidden mb-4 group-hover:border-cyan-500/40 transition-colors">
                           <Model3DThumbnail
+                            thumbnailUrl={item.thumbnailUrl || item.thumbnail_url}
                             modelUrl={item.gltf_url || item.modelUrl || item.gltf_file_path}
-                            fallbackImageUrl={item.imageUrl || item.image || item.target_image_url}
+                            fallbackImageUrl={item.thumbnailUrl || item.thumbnail_url || item.imageUrl || item.image || item.target_image_url}
                             category={item.category}
                             cleanName={item.name || item.id}
                             className="w-full h-full"

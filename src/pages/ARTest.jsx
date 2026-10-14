@@ -17,6 +17,13 @@ import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfa
 import AddGeometryModal from '../components/AddGeometryModal';
 import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES } from '../utils/geometryHelper';
 import { loadMarkerForBatch, createDefaultMarkerDataUrl, getImageDimensions } from '../utils/markerHelper';
+import {
+  captureSceneCanvasThumbnail,
+  captureModelThumbnailBlob,
+  uploadAssetThumbnail,
+  invalidateThumbnailCache,
+  batchUpdateAllAssetThumbnails
+} from '../utils/modelThumbnailRenderer';
 
 // =========================================================================
 // 1. REUSABLE TYPED SLIDER CONTROL WITH DUAL-WAY DATA BINDING
@@ -3903,11 +3910,61 @@ const ARTest = () => {
         updatedAt: new Date().toISOString()
       };
 
+      // 2d. Capture live 3D scene thumbnail of altered composition
+      setUploadProgress('Capturing updated 3D thumbnail preview...');
+      let freshThumbnailUrl = arData?.thumbnailUrl || arData?.thumbnail_url || arData?.config?.thumbnailUrl || '';
+      try {
+        const sceneContainer = document.getElementById('ar-scene-container');
+        const sceneEl = sceneContainer?.querySelector('a-scene');
+        let thumbResult = null;
+
+        if (sceneEl) {
+          thumbResult = await captureSceneCanvasThumbnail(sceneEl, {
+            width: 512,
+            height: 512,
+            hideMarkers: true
+          });
+        }
+
+        // Fallback to offscreen Three.js model capture if scene snapshot is not available
+        if (!thumbResult?.blob && finalGltfUrl) {
+          setUploadProgress('Rendering 3D model thumbnail offscreen...');
+          thumbResult = await captureModelThumbnailBlob(finalGltfUrl, arConfigPayload);
+        }
+
+        if (thumbResult?.blob) {
+          setUploadProgress('Uploading fresh 3D thumbnail to Storage...');
+          const ts = Date.now();
+          const thumbStoragePath = `assets/${batchId.trim()}/thumbnails/thumb_${ts}.png`;
+          const thumbRef = ref(storage, thumbStoragePath);
+
+          await uploadBytes(thumbRef, thumbResult.blob, {
+            contentType: 'image/png',
+            customMetadata: {
+              batchId: batchId.trim(),
+              generatedAt: new Date().toISOString()
+            }
+          });
+
+          freshThumbnailUrl = await getDownloadURL(thumbRef);
+          invalidateThumbnailCache(batchId.trim());
+          if (finalGltfUrl) invalidateThumbnailCache(finalGltfUrl);
+        }
+      } catch (thumbErr) {
+        console.warn('[ARTest] Thumbnail capture/upload notice:', thumbErr);
+      }
+
+      if (freshThumbnailUrl) {
+        arConfigPayload.thumbnailUrl = freshThumbnailUrl;
+        arConfigPayload.thumbnail_url = freshThumbnailUrl;
+      }
+
       const payload = {
         video_url: finalVideoUrl,
         videoUrl: finalVideoUrl,
         video_file_path: videoFilePath,
         ...(gltfFilePath ? { gltf_file_path: gltfFilePath } : {}),
+        ...(freshThumbnailUrl ? { thumbnailUrl: freshThumbnailUrl, thumbnail_url: freshThumbnailUrl } : {}),
         ar_config: arConfigPayload,
         portalConfig: arConfigPayload.portalConfig,
         particleConfig: arConfigPayload.particleConfig,
@@ -3942,6 +3999,8 @@ const ARTest = () => {
       // Update local arData state immediately so current session is in sync
       setArData((prev) => ({
         ...(prev || {}),
+        thumbnailUrl: freshThumbnailUrl || prev?.thumbnailUrl,
+        thumbnail_url: freshThumbnailUrl || prev?.thumbnail_url,
         videoUrl: finalVideoUrl,
         video_url: finalVideoUrl,
         video_file_path: videoFilePath,
@@ -3949,6 +4008,8 @@ const ARTest = () => {
         config: arConfigPayload,
         arExperience: {
           ...(prev?.arExperience || {}),
+          thumbnailUrl: freshThumbnailUrl || prev?.arExperience?.thumbnailUrl,
+          thumbnail_url: freshThumbnailUrl || prev?.arExperience?.thumbnail_url,
           modelUrl: finalGltfUrl || prev?.arExperience?.modelUrl,
           videoUrl: finalVideoUrl,
           config: arConfigPayload
@@ -3962,11 +4023,97 @@ const ARTest = () => {
       setSelectedPortalGlbFile(null);
 
       const timeStr = new Date().toLocaleTimeString();
-      setSaveSuccessMsg(`Video & config saved to Storage & Batch at ${timeStr}`);
+      setSaveSuccessMsg(`Batch composition & fresh 3D thumbnail saved at ${timeStr}`);
       setTimeout(() => setSaveSuccessMsg(''), 6000);
     } catch (err) {
       console.error('Error saving configuration:', err);
       alert('Error saving configuration: ' + err.message);
+    } finally {
+      setSavingConfig(false);
+      setUploadProgress('');
+    }
+  };
+
+  // Dedicated one-click handler to capture current live camera viewport angle as 3D asset thumbnail
+  const handleCaptureThumbnail = async () => {
+    if (!batchId.trim()) {
+      alert('Please enter a Batch ID in the input above before capturing a thumbnail.');
+      return;
+    }
+
+    setSavingConfig(true);
+    setUploadProgress('Capturing current 3D view angle snapshot...');
+    try {
+      const sceneContainer = document.getElementById('ar-scene-container');
+      const sceneEl = sceneContainer?.querySelector('a-scene');
+      let thumbResult = null;
+
+      if (sceneEl) {
+        thumbResult = await captureSceneCanvasThumbnail(sceneEl, {
+          width: 512,
+          height: 512,
+          hideMarkers: true
+        });
+      }
+
+      if (!thumbResult?.blob) {
+        const finalModel = localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath;
+        if (finalModel) {
+          setUploadProgress('Rendering 3D model thumbnail offscreen...');
+          thumbResult = await captureModelThumbnailBlob(finalModel, arData?.config || {});
+        }
+      }
+
+      if (thumbResult?.blob) {
+        setUploadProgress('Uploading fresh thumbnail to Storage...');
+        const newUrl = await uploadAssetThumbnail(batchId.trim(), thumbResult.blob, {
+          altAssetId: arData?.asset_id || arData?.assetId
+        });
+
+        setArData((prev) => ({
+          ...(prev || {}),
+          thumbnailUrl: newUrl,
+          thumbnail_url: newUrl,
+          config: {
+            ...(prev?.config || {}),
+            thumbnailUrl: newUrl,
+            thumbnail_url: newUrl
+          }
+        }));
+
+        setSaveSuccessMsg(`Fresh 3D asset thumbnail saved & updated at ${new Date().toLocaleTimeString()}`);
+        setTimeout(() => setSaveSuccessMsg(''), 6000);
+      } else {
+        alert('Could not capture scene snapshot. Please ensure the 3D model is loaded and visible.');
+      }
+    } catch (err) {
+      console.error('Error capturing thumbnail:', err);
+      alert('Failed to capture thumbnail: ' + err.message);
+    } finally {
+      setSavingConfig(false);
+      setUploadProgress('');
+    }
+  };
+
+  // Batch tool to sync thumbnails for all assets in catalog
+  const handleBatchSyncThumbnails = async () => {
+    const confirm = window.confirm(
+      'Update 3D thumbnails for all assets in the catalog?\n\nThis will load each model, render an accurate showroom thumbnail preview, upload to Storage, and update database records.'
+    );
+    if (!confirm) return;
+
+    setSavingConfig(true);
+    try {
+      const result = await batchUpdateAllAssetThumbnails({
+        force: true,
+        onProgress: (p) => {
+          setUploadProgress(`Updating ${p.current}/${p.total} (${p.assetId}): ${p.status}...`);
+        }
+      });
+      alert(`Successfully updated 3D thumbnails for ${result.updated} of ${result.total} assets!`);
+    } catch (err) {
+      console.error('Batch sync error:', err);
+      alert('Batch thumbnail sync failed: ' + err.message);
     } finally {
       setSavingConfig(false);
       setUploadProgress('');
@@ -4191,15 +4338,57 @@ const ARTest = () => {
 
             <button
               type="button"
+              onClick={handleCaptureThumbnail}
+              disabled={savingConfig || !batchId.trim()}
+              className="px-2.5 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-cyan-950/40"
+              title="Capture & Save 3D Thumbnail from Current View"
+            >
+              <span className="material-symbols-outlined text-[15px]">photo_camera</span>
+              <span>Snap</span>
+            </button>
+
+            <button
+              type="button"
               onClick={handleSaveConfig}
               disabled={savingConfig || !batchId.trim()}
-              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-emerald-950/40"
-              title="Save Configuration to Firebase Batch"
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-emerald-950/40"
+              title="Save Configuration & 3D Thumbnail to Firebase Batch"
             >
               <span className="material-symbols-outlined text-sm">save</span>
-              <span>{savingConfig ? 'Saving...' : 'Save to Batch'}</span>
+              <span>{savingConfig ? 'Saving...' : 'Save'}</span>
             </button>
           </div>
+
+          {/* Active 3D Thumbnail Chip Preview */}
+          {(arData?.thumbnailUrl || arData?.thumbnail_url) && (
+            <div className="mt-2 pt-2 border-t border-neutral-800/80 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded bg-black/60 border border-cyan-500/40 overflow-hidden flex-shrink-0 shadow-sm">
+                  <img
+                    src={arData?.thumbnailUrl || arData?.thumbnail_url}
+                    alt="Active Thumbnail"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] font-mono font-bold text-cyan-300 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+                    3D Thumbnail
+                  </p>
+                  <p className="text-[9px] text-neutral-400 font-mono truncate">Updated & Live</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleBatchSyncThumbnails}
+                disabled={savingConfig}
+                className="text-[10px] text-neutral-400 hover:text-white font-mono underline hover:no-underline cursor-pointer"
+                title="Sync 3D thumbnails for all catalog assets"
+              >
+                Sync Catalog
+              </button>
+            </div>
+          )}
 
           {/* Progress / Uploading Banner */}
           {savingConfig && (
@@ -9461,7 +9650,7 @@ const ARTest = () => {
             key={batchId || localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || (portalEnabled ? 'portal-active' : '') || (particleSystemEnabled ? 'particles-active' : '') || (additionalGeometries.length > 0 ? 'geoms-active' : '') || (markerImageUrl ? 'marker-active' : '') || (websiteEnabled ? 'website-active' : '') || 'ar-portal-scene'}
             embedded
             color-space="sRGB"
-            renderer="colorManagement: true; antialias: true; stencil: true;"
+            renderer="colorManagement: true; antialias: true; stencil: true; preserveDrawingBuffer: true;"
             light="defaultLightsEnabled: false"
             vr-mode-ui="enabled: false"
             device-orientation-permission-ui="enabled: false"
@@ -9674,6 +9863,17 @@ const ARTest = () => {
               title="Align Camera Perpendicular to Marker Face"
             >
               <span className="material-symbols-outlined text-xs">crop_free</span>
+            </button>
+            <div className="w-[1px] h-4 bg-slate-700 mx-0.5"></div>
+            <button
+              type="button"
+              onClick={handleCaptureThumbnail}
+              disabled={savingConfig || !batchId.trim()}
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-cyan-700 hover:bg-cyan-600 text-white transition-all shadow-sm flex items-center gap-1 cursor-pointer"
+              title="Capture & Save Current 3D View Angle as Asset Thumbnail"
+            >
+              <span className="material-symbols-outlined text-xs">photo_camera</span>
+              <span>Snap Thumb</span>
             </button>
           </div>
         )}

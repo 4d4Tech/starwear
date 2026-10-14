@@ -4,11 +4,14 @@ import { ref, uploadBytes, deleteObject, getDownloadURL } from 'firebase/storage
 import { httpsCallable } from 'firebase/functions';
 import { db, storage, functions } from '../firebase';
 import Model3DThumbnail from '../components/Model3DThumbnail';
+import { batchUpdateAllAssetThumbnails } from '../utils/modelThumbnailRenderer';
 
 const AdminInventory = () => {
   const [search, setSearch] = useState('');
   const [inventory, setInventory] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [syncingThumbnails, setSyncingThumbnails] = useState(false);
+  const [syncProgress, setSyncProgress] = useState('');
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -146,6 +149,32 @@ const AdminInventory = () => {
       console.error("Error fetching inventory:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSyncAllThumbnails = async () => {
+    const confirm = window.confirm(
+      'Update 3D thumbnails for all catalog assets?\n\nThis will load each 3D model, render an accurate showroom thumbnail preview, upload to Storage, and update database records.'
+    );
+    if (!confirm) return;
+
+    setSyncingThumbnails(true);
+    setSyncProgress('Starting...');
+    try {
+      const result = await batchUpdateAllAssetThumbnails({
+        force: true,
+        onProgress: (p) => {
+          setSyncProgress(`${p.current}/${p.total} (${p.assetId})`);
+        }
+      });
+      alert(`Successfully updated 3D thumbnails for ${result.updated} of ${result.total} assets!`);
+      await fetchInventory();
+    } catch (err) {
+      console.error('Batch sync error:', err);
+      alert('Thumbnail sync failed: ' + err.message);
+    } finally {
+      setSyncingThumbnails(false);
+      setSyncProgress('');
     }
   };
 
@@ -492,6 +521,17 @@ const AdminInventory = () => {
             />
           </div>
           <button
+            onClick={handleSyncAllThumbnails}
+            disabled={syncingThumbnails}
+            className="bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-500/40 px-4 py-2 rounded flex items-center gap-2 transition-all font-label-caps text-label-caps whitespace-nowrap cursor-pointer shadow-sm disabled:opacity-50"
+            title="Automatically render & upload 3D thumbnails for all catalog assets"
+          >
+            <span className={`material-symbols-outlined text-[18px] ${syncingThumbnails ? 'animate-spin' : ''}`}>
+              {syncingThumbnails ? 'progress_activity' : 'sync'}
+            </span>
+            <span>{syncingThumbnails ? syncProgress || 'SYNCING...' : 'SYNC 3D THUMBNAILS'}</span>
+          </button>
+          <button
             onClick={openAddModal}
             className="bg-primary text-on-primary px-6 py-2 rounded flex items-center gap-2 hover:opacity-90 transition-opacity font-label-caps text-label-caps whitespace-nowrap"
           >
@@ -527,8 +567,10 @@ const AdminInventory = () => {
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-lg overflow-hidden bg-black/40 border border-white/10 flex-shrink-0">
                         <Model3DThumbnail
+                          thumbnailUrl={item.thumbnailUrl || item.thumbnail_url}
                           modelUrl={item.gltf_url || item.modelUrl || item.gltf_file_path}
-                          fallbackImageUrl={item.imageUrl || item.image || item.target_image_url}
+                          fallbackImageUrl={item.thumbnailUrl || item.thumbnail_url || item.imageUrl || item.image || item.target_image_url}
+                          lightingConfig={item.ar_config || item.config}
                           category={item.category}
                           cleanName={item.name || item.id}
                           className="w-full h-full"

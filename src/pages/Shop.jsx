@@ -1072,8 +1072,9 @@ export default function Shop() {
                 >
                   <div className="w-5 h-5 rounded-full overflow-hidden bg-black/60 border border-white/20 shrink-0 flex items-center justify-center">
                     <Model3DThumbnail
+                      thumbnailUrl={item.thumbnailUrl || item.thumbnail_url}
                       modelUrl={item.model_url || item.glb_url || item.modelUrl || item.gltf_file_path}
-                      fallbackImageUrl={item.thumbnailUrl || item.imageUrl || item.image}
+                      fallbackImageUrl={item.thumbnailUrl || item.thumbnail_url || item.imageUrl || item.image}
                       cleanName={item.name || item.id}
                       category={item.category}
                       badge={false}
@@ -1332,8 +1333,9 @@ export default function Shop() {
                         className="aspect-[4/3] rounded-2xl overflow-hidden bg-[#0d0d10] relative cursor-pointer group-hover:shadow-[0_10px_30px_rgba(0,0,0,0.6)] transition-all"
                       >
                         <Model3DThumbnail
+                          thumbnailUrl={product.thumbnailUrl || product.thumbnail_url}
                           modelUrl={product.model_url || product.glb_url || product.modelUrl || product.gltf_file_path}
-                          fallbackImageUrl={product.thumbnailUrl || product.imageUrl || product.image || product.target_image_url}
+                          fallbackImageUrl={product.thumbnailUrl || product.thumbnail_url || product.imageUrl || product.image || product.target_image_url}
                           category={product.category}
                           cleanName={product.name || product.id}
                           className="w-full h-full"

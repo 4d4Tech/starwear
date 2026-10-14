@@ -265,8 +265,10 @@ export default function Collections() {
                       <Link to={`/product/${product.id}`}>
                         <div className="relative aspect-[3/4] mb-5 overflow-hidden bg-gradient-to-b from-[#111827] to-[#030712] rounded-xl border border-white/10 group-hover:border-primary/60 transition-all">
                           <Model3DThumbnail
+                            thumbnailUrl={product.thumbnailUrl || product.thumbnail_url}
                             modelUrl={product.glb_url || product.model_url || product.modelUrl || product.gltf_file_path}
-                            fallbackImageUrl={product.imageUrl || product.image || product.thumbnailUrl}
+                            fallbackImageUrl={product.thumbnailUrl || product.thumbnail_url || product.imageUrl || product.image}
+                            lightingConfig={product.ar_config || product.config}
                             category={product.category}
                             cleanName={product.name || product.id}
                             className="w-full h-full"

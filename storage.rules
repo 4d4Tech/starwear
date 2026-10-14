@@ -35,6 +35,11 @@ service firebase.storage {
       );
     }
 
+    // Public Assets & 3D Showroom Thumbnails
+    match /assets/{batchId}/thumbnails/{allPaths=**} {
+      allow read, write: if true;
+    }
+
     // Public Assets (3D models, textures, templates, AR targets, videos)
     // Read: Public for web experiences and AR players
     // Write: Restricted to verified admins and superadmins
