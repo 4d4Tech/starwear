@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { ref, getDownloadURL, uploadBytes } from 'firebase/storage';
+import { ref, getDownloadURL, uploadBytes, deleteObject, listAll } from 'firebase/storage';
 import { doc, setDoc, getDocs, collection } from 'firebase/firestore';
 import { storage, db } from '../firebase';
 import { createPortalObject3D, createParticleSystemObject3D } from './portalThreeHelper';
@@ -775,6 +775,57 @@ export async function uploadAssetThumbnail(assetId, blobOrDataUrl, options = {})
     });
 
     const downloadUrl = await getDownloadURL(storageRef);
+
+    // Delete all previous thumbnail images from Storage so only the fresh one remains
+    const targetFolders = [`assets/${cleanId}/thumbnails`];
+    if (options.altAssetId && String(options.altAssetId).trim() !== cleanId) {
+      targetFolders.push(`assets/${String(options.altAssetId).trim()}/thumbnails`);
+    }
+
+    for (const folderPath of targetFolders) {
+      try {
+        const folderRef = ref(storage, folderPath);
+        const folderList = await listAll(folderRef);
+        for (const itemRef of folderList.items) {
+          if (itemRef.fullPath !== storageRef.fullPath) {
+            try {
+              await deleteObject(itemRef);
+              console.log('[ThumbnailRenderer] Deleted previous thumbnail from Storage:', itemRef.fullPath);
+            } catch (delErr) {
+              if (delErr?.code !== 'storage/object-not-found') {
+                console.warn('[ThumbnailRenderer] Could not delete old thumbnail:', itemRef.fullPath, delErr);
+              }
+            }
+          }
+        }
+      } catch (listErr) {
+        if (listErr?.code !== 'storage/object-not-found') {
+          console.warn('[ThumbnailRenderer] Notice inspecting thumbnail folder:', folderPath, listErr?.message);
+        }
+      }
+    }
+
+    // Also remove explicit previous thumbnail URL if stored elsewhere in Storage
+    const prevUrls = [
+      options.previousThumbnailUrl,
+      ...(Array.isArray(options.previousThumbnailUrls) ? options.previousThumbnailUrls : [])
+    ].filter(Boolean);
+
+    for (const prevUrl of prevUrls) {
+      if (typeof prevUrl === 'string' && (prevUrl.includes('firebasestorage.googleapis.com') || prevUrl.startsWith('gs://'))) {
+        try {
+          const oldRef = ref(storage, prevUrl);
+          if (oldRef && oldRef.fullPath !== storageRef.fullPath) {
+            await deleteObject(oldRef);
+            console.log('[ThumbnailRenderer] Deleted previous thumbnail ref from Storage:', oldRef.fullPath);
+          }
+        } catch (delErr) {
+          if (delErr?.code !== 'storage/object-not-found') {
+            console.warn('[ThumbnailRenderer] Could not delete previous thumbnail by URL:', prevUrl, delErr);
+          }
+        }
+      }
+    }
 
     const patch = {
       thumbnailUrl: downloadUrl,

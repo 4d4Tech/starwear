@@ -5557,9 +5557,16 @@ const ARTest = () => {
       }
 
       if (thumbResult?.blob) {
-        setUploadProgress('Uploading fresh thumbnail to Storage...');
+        setUploadProgress('Uploading fresh thumbnail & cleaning up previous images...');
+        const previousThumbnailUrl =
+          arData?.thumbnailUrl ||
+          arData?.thumbnail_url ||
+          arData?.config?.thumbnailUrl ||
+          arData?.arExperience?.thumbnailUrl;
+
         const newUrl = await uploadAssetThumbnail(batchId.trim(), thumbResult.blob, {
-          altAssetId: arData?.asset_id || arData?.assetId
+          altAssetId: arData?.asset_id || arData?.assetId,
+          previousThumbnailUrl
         });
 
         setArData((prev) => ({
@@ -5590,7 +5597,7 @@ const ARTest = () => {
           console.warn('[ARTest] localStorage sync in captureThumbnail failed:', storageErr);
         }
 
-        setSaveSuccessMsg(`Fresh 3D asset thumbnail saved & updated at ${new Date().toLocaleTimeString()}`);
+        setSaveSuccessMsg(`Fresh 3D asset thumbnail saved & previous images cleaned up at ${new Date().toLocaleTimeString()}`);
         setTimeout(() => setSaveSuccessMsg(''), 6000);
       } else {
         alert('Could not capture scene snapshot. Please ensure the 3D model is loaded and visible.');
