@@ -22,7 +22,7 @@ import VectorPenModal from '../components/VectorPenModal';
 import Add3DTextModal from '../components/Add3DTextModal';
 import ARLightDiagnosticsDrawer from '../components/ARLightDiagnosticsDrawer';
 import { AVAILABLE_FONTS, TEXT_MATERIAL_PRESETS } from '../utils/text3DHelper';
-import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES, createPrimitiveMesh } from '../utils/geometryHelper';
+import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES, createPrimitiveMesh, INFLATION_PROFILES } from '../utils/geometryHelper';
 import { loadMarkerForBatch, createDefaultMarkerDataUrl, getImageDimensions } from '../utils/markerHelper';
 import {
   captureSceneCanvasThumbnail,
@@ -1310,12 +1310,13 @@ const ARTest = () => {
   const [geometryModalOpen, setGeometryModalOpen] = useState(false);
   const [vectorPenModalOpen, setVectorPenModalOpen] = useState(false);
   const [editingVectorGeom, setEditingVectorGeom] = useState(null);
+  const [vectorPenInitialMode, setVectorPenInitialMode] = useState('extrude');
 
   const handleAddGeometry = (payload) => {
     const count = additionalGeometries.length;
     const newId = `geom_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const type = payload.type || 'box';
-    const cleanTypeName = type === 'vectorExtrude' ? 'Vector Extrude' : (type.charAt(0).toUpperCase() + type.slice(1));
+    const cleanTypeName = type === 'vectorInflate' ? 'Inflated Vector' : (type === 'vectorExtrude' ? 'Vector Extrude' : (type.charAt(0).toUpperCase() + type.slice(1)));
     const geomName = payload.name || `${cleanTypeName} ${count + 1}`;
     const newGeom = {
       id: newId,
@@ -1355,6 +1356,7 @@ const ARTest = () => {
     if (editingVectorGeom) {
       handleUpdateGeometry(editingVectorGeom.id, {
         name: payload.name || editingVectorGeom.name,
+        type: payload.type || editingVectorGeom.type,
         params: {
           ...(editingVectorGeom.params || {}),
           ...payload.params
@@ -1368,10 +1370,11 @@ const ARTest = () => {
         flatShading: payload.flatShading !== undefined ? payload.flatShading : editingVectorGeom.flatShading,
         preset: payload.preset || editingVectorGeom.preset
       });
-      setSaveSuccessMsg(`Updated 3D Vector Shape: ${payload.name || editingVectorGeom.name}`);
+      setSaveSuccessMsg(`Updated 3D Shape: ${payload.name || editingVectorGeom.name}`);
       setTimeout(() => setSaveSuccessMsg(''), 4000);
       setEditingVectorGeom(null);
       setVectorPenModalOpen(false);
+      setVectorPenInitialMode('extrude');
     } else {
       handleAddGeometry(payload);
       setVectorPenModalOpen(false);
@@ -5414,53 +5417,11 @@ const ARTest = () => {
         updatedAt: new Date().toISOString()
       };
 
-      // 2d. Capture live 3D scene thumbnail of altered composition
-      setUploadProgress('Capturing updated 3D thumbnail preview...');
-      let freshThumbnailUrl = arData?.thumbnailUrl || arData?.thumbnail_url || arData?.config?.thumbnailUrl || '';
-      try {
-        const sceneContainer = document.getElementById('ar-scene-container');
-        const sceneEl = sceneContainer?.querySelector('a-scene');
-        let thumbResult = null;
-
-        if (sceneEl) {
-          thumbResult = await captureSceneCanvasThumbnail(sceneEl, {
-            width: 512,
-            height: 512,
-            hideMarkers: true
-          });
-        }
-
-        // Fallback to offscreen Three.js model capture if scene snapshot is not available
-        if (!thumbResult?.blob && finalGltfUrl) {
-          setUploadProgress('Rendering 3D model thumbnail offscreen...');
-          thumbResult = await captureModelThumbnailBlob(finalGltfUrl, arConfigPayload);
-        }
-
-        if (thumbResult?.blob) {
-          setUploadProgress('Uploading fresh 3D thumbnail to Storage...');
-          const ts = Date.now();
-          const thumbStoragePath = `assets/${batchId.trim()}/thumbnails/thumb_${ts}.png`;
-          const thumbRef = ref(storage, thumbStoragePath);
-
-          await uploadBytes(thumbRef, thumbResult.blob, {
-            contentType: 'image/png',
-            customMetadata: {
-              batchId: batchId.trim(),
-              generatedAt: new Date().toISOString()
-            }
-          });
-
-          freshThumbnailUrl = await getDownloadURL(thumbRef);
-          invalidateThumbnailCache(batchId.trim());
-          if (finalGltfUrl) invalidateThumbnailCache(finalGltfUrl);
-        }
-      } catch (thumbErr) {
-        console.warn('[ARTest] Thumbnail capture/upload notice:', thumbErr);
-      }
-
-      if (freshThumbnailUrl) {
-        arConfigPayload.thumbnailUrl = freshThumbnailUrl;
-        arConfigPayload.thumbnail_url = freshThumbnailUrl;
+      // 2d. Preserve existing thumbnail (fresh thumbnails are strictly saved only when clicking the Snap button)
+      const existingThumbnailUrl = arData?.thumbnailUrl || arData?.thumbnail_url || arData?.config?.thumbnailUrl || arData?.arExperience?.thumbnailUrl || '';
+      if (existingThumbnailUrl) {
+        arConfigPayload.thumbnailUrl = existingThumbnailUrl;
+        arConfigPayload.thumbnail_url = existingThumbnailUrl;
       }
 
       const payload = {
@@ -5468,7 +5429,7 @@ const ARTest = () => {
         videoUrl: finalVideoUrl,
         video_file_path: videoFilePath,
         ...(gltfFilePath ? { gltf_file_path: gltfFilePath } : {}),
-        ...(freshThumbnailUrl ? { thumbnailUrl: freshThumbnailUrl, thumbnail_url: freshThumbnailUrl } : {}),
+        ...(existingThumbnailUrl ? { thumbnailUrl: existingThumbnailUrl, thumbnail_url: existingThumbnailUrl } : {}),
         ar_config: arConfigPayload,
         portalConfig: arConfigPayload.portalConfig,
         particleConfig: arConfigPayload.particleConfig,
@@ -5527,8 +5488,8 @@ const ARTest = () => {
       // Update local arData state immediately so current session is in sync
       setArData((prev) => ({
         ...(prev || {}),
-        thumbnailUrl: freshThumbnailUrl || prev?.thumbnailUrl,
-        thumbnail_url: freshThumbnailUrl || prev?.thumbnail_url,
+        thumbnailUrl: existingThumbnailUrl || prev?.thumbnailUrl,
+        thumbnail_url: existingThumbnailUrl || prev?.thumbnail_url,
         videoUrl: finalVideoUrl,
         video_url: finalVideoUrl,
         video_file_path: videoFilePath,
@@ -5537,8 +5498,8 @@ const ARTest = () => {
         customModels: cleanedCustomModels,
         arExperience: {
           ...(prev?.arExperience || {}),
-          thumbnailUrl: freshThumbnailUrl || prev?.arExperience?.thumbnailUrl,
-          thumbnail_url: freshThumbnailUrl || prev?.arExperience?.thumbnail_url,
+          thumbnailUrl: existingThumbnailUrl || prev?.arExperience?.thumbnailUrl,
+          thumbnail_url: existingThumbnailUrl || prev?.arExperience?.thumbnail_url,
           modelUrl: finalGltfUrl || prev?.arExperience?.modelUrl,
           videoUrl: finalVideoUrl,
           config: arConfigPayload,
@@ -5553,7 +5514,7 @@ const ARTest = () => {
       setSelectedPortalGlbFile(null);
 
       const timeStr = new Date().toLocaleTimeString();
-      setSaveSuccessMsg(`Batch composition & fresh 3D thumbnail saved at ${timeStr}`);
+      setSaveSuccessMsg(`Batch composition saved at ${timeStr}`);
       setTimeout(() => setSaveSuccessMsg(''), 6000);
     } catch (err) {
       console.error('Error saving configuration:', err);
@@ -5609,8 +5570,25 @@ const ARTest = () => {
             ...(prev?.config || {}),
             thumbnailUrl: newUrl,
             thumbnail_url: newUrl
+          },
+          arExperience: {
+            ...(prev?.arExperience || {}),
+            thumbnailUrl: newUrl,
+            thumbnail_url: newUrl
           }
         }));
+
+        try {
+          const cfg = {
+            ...(arData?.config || {}),
+            thumbnailUrl: newUrl,
+            thumbnail_url: newUrl
+          };
+          localStorage.setItem('starwear_live_preview_config_' + batchId.trim(), JSON.stringify(cfg));
+          localStorage.setItem('starwear_live_preview_config_last', JSON.stringify(cfg));
+        } catch (storageErr) {
+          console.warn('[ARTest] localStorage sync in captureThumbnail failed:', storageErr);
+        }
 
         setSaveSuccessMsg(`Fresh 3D asset thumbnail saved & updated at ${new Date().toLocaleTimeString()}`);
         setTimeout(() => setSaveSuccessMsg(''), 6000);
@@ -5900,7 +5878,7 @@ const ARTest = () => {
               onClick={handleSaveConfig}
               disabled={savingConfig || !batchId.trim()}
               className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-emerald-950/40"
-              title="Save Configuration & 3D Thumbnail to Firebase Batch"
+              title="Save Configuration to Firebase Batch"
             >
               <span className="material-symbols-outlined text-sm">save</span>
               <span>{savingConfig ? 'Saving...' : 'Save'}</span>
@@ -7268,6 +7246,20 @@ const ARTest = () => {
                     type="button"
                     onClick={() => {
                       setEditingVectorGeom(null);
+                      setVectorPenInitialMode('inflate');
+                      setVectorPenModalOpen(true);
+                    }}
+                    className="px-2.5 py-1.5 bg-gradient-to-r from-teal-500 via-emerald-600 to-cyan-600 hover:opacity-95 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-teal-950/40 transition-all cursor-pointer"
+                    title="Draw 2D vector silhouette and inflate into curved 3D volumetric geometry"
+                  >
+                    <span className="material-symbols-outlined text-sm">bubble_chart</span>
+                    <span>+ Inflate</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingVectorGeom(null);
+                      setVectorPenInitialMode('extrude');
                       setVectorPenModalOpen(true);
                     }}
                     className="px-2.5 py-1.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:opacity-95 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-purple-950/40 transition-all cursor-pointer"
@@ -7297,14 +7289,27 @@ const ARTest = () => {
                   <div className="space-y-1">
                     <h3 className="text-xs font-bold text-neutral-200">No Custom Geometries in Scene</h3>
                     <p className="text-[11px] text-neutral-400 max-w-sm mx-auto">
-                      Draw custom vector paths with the Photoshop-style Pen Tool or add 3D primitives (cubes, spheres, cylinders, cones, torus rings) to compose your AR experience.
+                      Draw custom vector paths with the Photoshop-style Pen Tool, inflate 2D silhouettes into organic 3D volumes, or add 3D primitives (cubes, spheres, cylinders, cones, torus rings) to compose your AR experience.
                     </p>
                   </div>
-                  <div className="flex items-center justify-center gap-2 pt-1">
+                  <div className="flex items-center justify-center gap-2 pt-1 flex-wrap">
                     <button
                       type="button"
                       onClick={() => {
                         setEditingVectorGeom(null);
+                        setVectorPenInitialMode('inflate');
+                        setVectorPenModalOpen(true);
+                      }}
+                      className="px-3.5 py-2 bg-gradient-to-r from-teal-500 via-emerald-600 to-cyan-600 hover:opacity-90 text-white font-bold text-xs rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer shadow-md"
+                    >
+                      <span className="material-symbols-outlined text-sm">bubble_chart</span>
+                      <span>Inflate Silhouette</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingVectorGeom(null);
+                        setVectorPenInitialMode('extrude');
                         setVectorPenModalOpen(true);
                       }}
                       className="px-3.5 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-90 text-white font-bold text-xs rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer shadow-md"
@@ -7441,34 +7446,371 @@ const ARTest = () => {
                           </div>
                         </div>
 
-                        {/* Vector Path Info & Edit in Pen Studio */}
-                        {currentGeom.type === 'vectorExtrude' && (
-                          <div className="p-3 bg-gradient-to-r from-purple-950/40 via-indigo-950/30 to-neutral-900 border border-purple-500/40 rounded-lg space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold text-purple-300 flex items-center gap-1.5">
-                                <span className="material-symbols-outlined text-sm">gesture</span>
-                                Vector Pen Path
-                              </span>
-                              <span className="text-[10px] text-purple-400 font-mono bg-purple-950/60 px-2 py-0.5 rounded border border-purple-500/30">
-                                {currentGeom.params?.points?.length || 0} anchor points
-                              </span>
+                        {/* Vector Silhouette & Curvature / Volumetric Inflation Tool */}
+                        {(() => {
+                          const isVectorShape = currentGeom.type === 'vectorExtrude' || currentGeom.type === 'vectorInflate' || Boolean(currentGeom.params?.points);
+                          if (!isVectorShape) return null;
+
+                          const isInflate = currentGeom.type === 'vectorInflate' || Boolean(currentGeom.params?.inflateEnabled);
+                          const activeProfileKey = currentGeom.params?.curvatureProfile || currentGeom.params?.profile || 'elliptic';
+                          const activeProfile =
+                            (Array.isArray(INFLATION_PROFILES)
+                              ? INFLATION_PROFILES.find((p) => p.id === activeProfileKey) || INFLATION_PROFILES[0]
+                              : INFLATION_PROFILES?.[activeProfileKey]) || {
+                              id: 'elliptic',
+                              name: 'Elliptic Balloon',
+                              icon: 'bubble_chart',
+                              description: 'Classic organic puff with vertical boundary tangents and soft central dome'
+                            };
+
+                          return (
+                            <div className="p-3.5 bg-gradient-to-b from-purple-950/40 via-neutral-900 to-teal-950/30 border border-teal-500/40 rounded-xl space-y-3.5 shadow-md">
+                              {/* Header & Anchor Points Count */}
+                              <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
+                                <div className="flex items-center gap-2">
+                                  <span className={`material-symbols-outlined text-base ${isInflate ? 'text-teal-400' : 'text-purple-400'}`}>
+                                    {isInflate ? 'bubble_chart' : 'gesture'}
+                                  </span>
+                                  <div>
+                                    <div className="text-xs font-bold text-neutral-100 flex items-center gap-1.5">
+                                      <span>{isInflate ? 'Volumetric Inflation Engine' : 'Vector Extrusion Studio'}</span>
+                                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-teal-500/20 text-teal-300 font-mono">
+                                        Poisson 3D
+                                      </span>
+                                    </div>
+                                    <span className="text-[10px] text-neutral-400">
+                                      {currentGeom.params?.points?.length || 0} vector anchor points
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingVectorGeom(currentGeom);
+                                    setVectorPenInitialMode(isInflate ? 'inflate' : 'extrude');
+                                    setVectorPenModalOpen(true);
+                                  }}
+                                  className="px-2.5 py-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-90 text-white font-semibold text-[11px] rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-sm"
+                                  title="Open in Photoshop-style 2D Pen Studio"
+                                >
+                                  <span className="material-symbols-outlined text-xs">edit</span>
+                                  <span>Edit Pen Path</span>
+                                </button>
+                              </div>
+
+                              {/* Mode Switcher Pill Tabs: Extrusion vs Curvature Inflation */}
+                              <div className="grid grid-cols-2 gap-1.5 bg-neutral-950 p-1 rounded-lg border border-neutral-800">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    handleUpdateGeometry(currentGeom.id, {
+                                      type: 'vectorInflate',
+                                      params: {
+                                        ...(currentGeom.params || {}),
+                                        inflateEnabled: true,
+                                        depth: currentGeom.params?.depth ?? 0.35,
+                                        curvatureProfile: currentGeom.params?.curvatureProfile || 'elliptic',
+                                        symmetric: currentGeom.params?.symmetric !== false,
+                                        smoothPasses: currentGeom.params?.smoothPasses ?? 2,
+                                        resolution: currentGeom.params?.resolution ?? 24,
+                                        rimDepth: currentGeom.params?.rimDepth ?? 0.0,
+                                        connectEdges: currentGeom.params?.connectEdges !== false
+                                      }
+                                    });
+                                  }}
+                                  className={`py-1.5 px-2 rounded-md text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                                    isInflate
+                                      ? 'bg-gradient-to-r from-teal-500 to-emerald-600 text-white shadow-md shadow-teal-950/50'
+                                      : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900'
+                                  }`}
+                                >
+                                  <span className="material-symbols-outlined text-sm">bubble_chart</span>
+                                  <span>Curvature Inflation</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    handleUpdateGeometry(currentGeom.id, {
+                                      type: 'vectorExtrude',
+                                      params: {
+                                        ...(currentGeom.params || {}),
+                                        inflateEnabled: false,
+                                        depth: currentGeom.params?.depth ?? 0.25,
+                                        bevelEnabled: currentGeom.params?.bevelEnabled !== false,
+                                        bevelThickness: currentGeom.params?.bevelThickness ?? 0.03,
+                                        bevelSize: currentGeom.params?.bevelSize ?? 0.02,
+                                        bevelSegments: currentGeom.params?.bevelSegments ?? 3,
+                                        curveSegments: currentGeom.params?.curveSegments ?? 24
+                                      }
+                                    });
+                                  }}
+                                  className={`py-1.5 px-2 rounded-md text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                                    !isInflate
+                                      ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-950/50'
+                                      : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900'
+                                  }`}
+                                >
+                                  <span className="material-symbols-outlined text-sm">gesture</span>
+                                  <span>Flat Extrude & Bevel</span>
+                                </button>
+                              </div>
+
+                              {/* Curvature & Volumetric Inflation Controls */}
+                              {isInflate ? (
+                                <div className="space-y-3 pt-1">
+                                  {/* Curvature Profiles Selector */}
+                                  <div className="space-y-1.5">
+                                    <div className="flex items-center justify-between">
+                                      <span className="text-[10px] font-bold text-neutral-300 uppercase tracking-wider">
+                                        Curvature Profile
+                                      </span>
+                                      <span className="text-[10px] text-teal-400 font-mono">
+                                        {activeProfile?.name || 'Elliptic Balloon'}
+                                      </span>
+                                    </div>
+                                    <div className="grid grid-cols-5 gap-1">
+                                      {(Array.isArray(INFLATION_PROFILES) ? INFLATION_PROFILES : []).map((prof) => {
+                                        const isSelected = activeProfileKey === prof.id;
+                                        return (
+                                          <button
+                                            key={prof.id}
+                                            type="button"
+                                            onClick={() => handleUpdateGeometryParam(currentGeom.id, 'curvatureProfile', prof.id)}
+                                            className={`p-1.5 rounded-lg border flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                                              isSelected
+                                                ? 'bg-teal-500/20 border-teal-400 text-teal-300 shadow-sm'
+                                                : 'bg-neutral-900/80 border-neutral-800 text-neutral-400 hover:text-neutral-200 hover:border-neutral-700'
+                                            }`}
+                                            title={`${prof.name}: ${prof.description}`}
+                                          >
+                                            <span className="material-symbols-outlined text-base">{prof.icon}</span>
+                                            <span className="text-[9px] font-medium truncate max-w-full">{prof.name}</span>
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                    <p className="text-[10px] text-neutral-400 italic bg-neutral-950/50 p-1.5 rounded border border-neutral-800/60">
+                                      {activeProfile?.description || ''}
+                                    </p>
+                                  </div>
+
+                                  {/* Inflation Depth Slider */}
+                                  <NumberSliderInput
+                                    label="Volumetric Thickness (Depth)"
+                                    value={currentGeom.params?.depth ?? 0.35}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'depth', val)}
+                                    min={0.02}
+                                    max={2.0}
+                                    step={0.02}
+                                    unit="m"
+                                    color="teal"
+                                    description="Maximum balloon elevation at distance field centroid"
+                                  />
+
+                                  {/* Laplacian Curvature Smoothing */}
+                                  <NumberSliderInput
+                                    label="Laplacian Curvature Smoothing"
+                                    value={currentGeom.params?.smoothPasses ?? 2}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'smoothPasses', val)}
+                                    min={0}
+                                    max={6}
+                                    step={1}
+                                    color="emerald"
+                                    description="Relaxes interior mesh heights to eliminate crease ridges while preserving boundary"
+                                  />
+
+                                  {/* Steiner Mesh Resolution */}
+                                  <NumberSliderInput
+                                    label="Steiner Grid Density"
+                                    value={currentGeom.params?.resolution ?? 24}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'resolution', val)}
+                                    min={12}
+                                    max={48}
+                                    step={2}
+                                    color="sky"
+                                    description="Delaunay triangulation density for smooth continuous curvature"
+                                  />
+
+                                  {/* Rim Wall Depth */}
+                                  <NumberSliderInput
+                                    label="Rim Wall Depth"
+                                    value={currentGeom.params?.rimDepth ?? 0}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'rimDepth', val)}
+                                    min={0.0}
+                                    max={0.5}
+                                    step={0.02}
+                                    unit="m"
+                                    color="indigo"
+                                    description="Straight cylindrical wall height before curvature ballooning starts"
+                                  />
+
+                                  {/* Dual-Sided Manifold Toggle */}
+                                  <label className="flex items-center justify-between p-2 rounded-lg bg-neutral-950 border border-neutral-800 cursor-pointer hover:bg-neutral-900 transition-colors">
+                                    <div className="space-y-0.5">
+                                      <span className="text-xs font-semibold text-neutral-200 block">
+                                        Dual-Sided Manifold (Symmetric)
+                                      </span>
+                                      <span className="text-[10px] text-neutral-400 block">
+                                        {currentGeom.params?.symmetric !== false
+                                          ? 'Balloons front and back, welded seamlessly at boundary'
+                                          : 'Single-sided curved dome with flat back plate'}
+                                      </span>
+                                    </div>
+                                    <input
+                                      type="checkbox"
+                                      checked={currentGeom.params?.symmetric !== false}
+                                      onChange={(e) => handleUpdateGeometryParam(currentGeom.id, 'symmetric', e.target.checked)}
+                                      className="rounded text-teal-500 focus:ring-teal-400 w-4 h-4"
+                                    />
+                                  </label>
+
+                                  {/* Connect All Edges (Watertight Seal) Toggle */}
+                                  <label className="flex items-center justify-between p-2 rounded-lg bg-neutral-950 border border-neutral-800 cursor-pointer hover:bg-neutral-900 transition-colors">
+                                    <div className="space-y-0.5">
+                                      <span className="text-xs font-semibold text-neutral-200 block">
+                                        Connect All Edges (Watertight Seal)
+                                      </span>
+                                      <span className="text-[10px] text-neutral-400 block">
+                                        {currentGeom.params?.connectEdges !== false
+                                          ? 'Seamlessly stitches and welds all perimeter edges to eliminate non-mesh gaps'
+                                          : 'Leaves front and back shells unstitched at perimeter'}
+                                      </span>
+                                    </div>
+                                    <input
+                                      type="checkbox"
+                                      checked={currentGeom.params?.connectEdges !== false}
+                                      onChange={(e) => handleUpdateGeometryParam(currentGeom.id, 'connectEdges', e.target.checked)}
+                                      className="rounded text-teal-500 focus:ring-teal-400 w-4 h-4"
+                                    />
+                                  </label>
+                                </div>
+                              ) : (
+                                <div className="space-y-3 pt-1">
+                                  {/* Extrude Depth Slider */}
+                                  <NumberSliderInput
+                                    label="Extrude Depth"
+                                    value={currentGeom.params?.depth ?? 0.25}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'depth', val)}
+                                    min={0.02}
+                                    max={2.0}
+                                    step={0.02}
+                                    unit="m"
+                                    color="purple"
+                                  />
+
+                                  {/* Bevel Settings */}
+                                  <label className="flex items-center gap-2 p-2 rounded bg-neutral-950 border border-neutral-800 text-xs text-neutral-300 cursor-pointer hover:bg-neutral-900">
+                                    <input
+                                      type="checkbox"
+                                      checked={currentGeom.params?.bevelEnabled !== false}
+                                      onChange={(e) => handleUpdateGeometryParam(currentGeom.id, 'bevelEnabled', e.target.checked)}
+                                      className="rounded text-purple-500 focus:ring-purple-400"
+                                    />
+                                    <span>Chamfer Beveling</span>
+                                  </label>
+
+                                  {currentGeom.params?.bevelEnabled !== false && (
+                                    <div className="space-y-2 pl-2 border-l-2 border-purple-500/30">
+                                      <NumberSliderInput
+                                        label="Bevel Thickness"
+                                        value={currentGeom.params?.bevelThickness ?? 0.03}
+                                        onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'bevelThickness', val)}
+                                        min={0.0}
+                                        max={0.2}
+                                        step={0.01}
+                                        unit="m"
+                                        color="purple"
+                                      />
+                                      <NumberSliderInput
+                                        label="Bevel Size"
+                                        value={currentGeom.params?.bevelSize ?? 0.02}
+                                        onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'bevelSize', val)}
+                                        min={0.0}
+                                        max={0.2}
+                                        step={0.01}
+                                        unit="m"
+                                        color="purple"
+                                      />
+                                      <NumberSliderInput
+                                        label="Bevel Segments"
+                                        value={currentGeom.params?.bevelSegments ?? 3}
+                                        onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'bevelSegments', val)}
+                                        min={1}
+                                        max={8}
+                                        step={1}
+                                        color="purple"
+                                      />
+                                    </div>
+                                  )}
+
+                                  <NumberSliderInput
+                                    label="Curve Smoothness"
+                                    value={currentGeom.params?.curveSegments ?? 24}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'curveSegments', val)}
+                                    min={6}
+                                    max={48}
+                                    step={2}
+                                    color="indigo"
+                                  />
+
+                                  {/* Procedural Dome Curvature Warp (Pipeline D) */}
+                                  <div className="p-2.5 rounded-lg bg-neutral-950/80 border border-neutral-800 space-y-2">
+                                    <label className="flex items-center justify-between cursor-pointer">
+                                      <div className="space-y-0.5">
+                                        <span className="text-xs font-semibold text-neutral-200 block">
+                                          Procedural Dome Curvature Warp
+                                        </span>
+                                        <span className="text-[10px] text-neutral-400 block">
+                                          Parabolic lattice deformation across extruded face
+                                        </span>
+                                      </div>
+                                      <input
+                                        type="checkbox"
+                                        checked={Boolean(currentGeom.params?.domeWarpEnabled)}
+                                        onChange={(e) => handleUpdateGeometryParam(currentGeom.id, 'domeWarpEnabled', e.target.checked)}
+                                        className="rounded text-indigo-500 focus:ring-indigo-400 w-4 h-4"
+                                      />
+                                    </label>
+
+                                    {Boolean(currentGeom.params?.domeWarpEnabled) && (
+                                      <div className="space-y-2 pt-1 border-t border-neutral-800">
+                                        <NumberSliderInput
+                                          label="Curvature Dome Height"
+                                          value={currentGeom.params?.domeCurvature ?? 0.3}
+                                          onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'domeCurvature', val)}
+                                          min={0.05}
+                                          max={1.0}
+                                          step={0.05}
+                                          color="indigo"
+                                        />
+                                        <div className="space-y-1">
+                                          <span className="text-[10px] text-neutral-400 font-medium">Falloff Curve</span>
+                                          <div className="grid grid-cols-4 gap-1">
+                                            {['smoothstep', 'cosine', 'gaussian', 'linear'].map((falloff) => (
+                                              <button
+                                                key={falloff}
+                                                type="button"
+                                                onClick={() => handleUpdateGeometryParam(currentGeom.id, 'domeFalloff', falloff)}
+                                                className={`py-1 px-1 rounded text-[10px] font-medium border text-center transition-all cursor-pointer ${
+                                                  (currentGeom.params?.domeFalloff || 'smoothstep') === falloff
+                                                    ? 'bg-indigo-500/20 border-indigo-400 text-indigo-300 font-bold'
+                                                    : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                                                }`}
+                                              >
+                                                {falloff}
+                                              </button>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
                             </div>
-                            <p className="text-[11px] text-neutral-300">
-                              Photoshop-style vector face. You can adjust anchor points, handles, bevels, and depth in the interactive 2D canvas.
-                            </p>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditingVectorGeom(currentGeom);
-                                setVectorPenModalOpen(true);
-                              }}
-                              className="w-full py-2 px-3 bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:opacity-95 text-white font-bold text-xs rounded-lg transition-all flex items-center justify-center gap-1.5 shadow-md shadow-purple-950/50 cursor-pointer"
-                            >
-                              <span className="material-symbols-outlined text-sm">edit</span>
-                              <span>Edit Vector Path in Pen Studio</span>
-                            </button>
-                          </div>
-                        )}
+                          );
+                        })()}
 
                         {/* Material Presets Quick Select */}
                         <div className="space-y-1.5">
@@ -7678,8 +8020,8 @@ const ARTest = () => {
                           </div>
                         </div>
 
-                        {/* Primitive-Specific Shape Dimensions */}
-                        {def && def.paramConfigs && (
+                        {/* Primitive-Specific Shape Dimensions (for standard 3D primitives) */}
+                        {def && def.paramConfigs && !['vectorExtrude', 'vectorInflate'].includes(currentGeom.type) && !currentGeom.params?.points && (
                           <div className="space-y-2.5 pt-2 border-t border-neutral-800">
                             <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block">
                               {def.name} Geometry Dimensions
@@ -13346,12 +13688,23 @@ const ARTest = () => {
           onClose={() => {
             setVectorPenModalOpen(false);
             setEditingVectorGeom(null);
+            setVectorPenInitialMode('extrude');
           }}
           onExtrude={handleCommitVectorExtrude}
+          initialMode={
+            vectorPenInitialMode === 'inflate' ||
+            editingVectorGeom?.type === 'vectorInflate' ||
+            editingVectorGeom?.params?.inflateEnabled
+              ? 'inflate'
+              : 'extrude'
+          }
           initialPoints={editingVectorGeom?.params?.points || null}
           initialParams={editingVectorGeom?.params || null}
           initialColor={editingVectorGeom?.color || '#38bdf8'}
-          initialName={editingVectorGeom?.name || 'Extruded Vector Shape'}
+          initialName={
+            editingVectorGeom?.name ||
+            (vectorPenInitialMode === 'inflate' ? 'Inflated Vector Volume' : 'Extruded Vector Shape')
+          }
         />
       )}
 

@@ -30,7 +30,7 @@ export default function AddGeometryModal({
   const handleSelectGeometry = (geom) => {
     setSelectedGeometryId(geom.id);
     setParams({ ...geom.defaultParams });
-    if (geom.id === 'vectorExtrude') {
+    if (geom.id === 'vectorExtrude' || geom.id === 'vectorInflate') {
       setIsVectorPenOpen(true);
     }
   };
@@ -44,7 +44,7 @@ export default function AddGeometryModal({
 
   const handleAddGeometry = (overrideDef = null) => {
     const defToUse = overrideDef || currentDef;
-    if (defToUse.id === 'vectorExtrude') {
+    if (defToUse.id === 'vectorExtrude' || defToUse.id === 'vectorInflate') {
       setIsVectorPenOpen(true);
       return;
     }
@@ -371,14 +371,18 @@ export default function AddGeometryModal({
             >
               Cancel
             </button>
-            {selectedGeometryId === 'vectorExtrude' ? (
+            {selectedGeometryId === 'vectorExtrude' || selectedGeometryId === 'vectorInflate' ? (
               <button
                 type="button"
                 onClick={() => setIsVectorPenOpen(true)}
-                className="flex-1 sm:flex-none py-2.5 px-6 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:opacity-95 text-white text-xs font-bold shadow-lg shadow-purple-500/25 transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                className="flex-1 sm:flex-none py-2.5 px-6 rounded-xl bg-gradient-to-r from-pink-600 via-purple-600 to-indigo-600 hover:opacity-95 text-white text-xs font-bold shadow-lg shadow-purple-500/25 transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
               >
-                <span className="material-symbols-outlined text-base">gesture</span>
-                <span>Open Vector Pen Studio</span>
+                <span className="material-symbols-outlined text-base">
+                  {selectedGeometryId === 'vectorInflate' ? 'bubble_chart' : 'gesture'}
+                </span>
+                <span>
+                  {selectedGeometryId === 'vectorInflate' ? 'Open Inflation & Curvature Studio' : 'Open Vector Pen Studio'}
+                </span>
               </button>
             ) : (
               <button
@@ -400,6 +404,7 @@ export default function AddGeometryModal({
           isOpen={isVectorPenOpen}
           onClose={() => setIsVectorPenOpen(false)}
           initialColor={selectedColor}
+          initialMode={selectedGeometryId === 'vectorInflate' ? 'inflate' : 'extrude'}
           onExtrude={(payload) => {
             setIsVectorPenOpen(false);
             if (typeof onAddGeometry === 'function') {

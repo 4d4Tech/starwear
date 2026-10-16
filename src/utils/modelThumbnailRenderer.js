@@ -779,6 +779,10 @@ export async function uploadAssetThumbnail(assetId, blobOrDataUrl, options = {})
     const patch = {
       thumbnailUrl: downloadUrl,
       thumbnail_url: downloadUrl,
+      ar_config: {
+        thumbnailUrl: downloadUrl,
+        thumbnail_url: downloadUrl
+      },
       updatedAt: new Date().toISOString()
     };
 

@@ -1,4 +1,12 @@
 import * as THREE from 'three';
+import {
+  createInflatedGeometryFromPoints,
+  applyDomeDeformation,
+  INFLATION_PROFILES,
+  INFLATION_PROFILE_MAP
+} from './inflationEngine.js';
+
+export { INFLATION_PROFILES, INFLATION_PROFILE_MAP };
 
 export const GEOMETRY_DEFINITIONS = [
   {
@@ -192,6 +200,41 @@ export const GEOMETRY_DEFINITIONS = [
       { key: 'bevelSegments', label: 'Bevel Segments', min: 1, max: 8, step: 1 },
       { key: 'curveSegments', label: 'Curve Smoothness', min: 6, max: 48, step: 2 }
     ]
+  },
+  {
+    id: 'vectorInflate',
+    name: 'Inflated Vector Volume',
+    category: 'Vector / Pen',
+    icon: 'bubble_chart',
+    description: 'Volumetric curved 3D mesh inflated from 2D vector silhouette using Distance-Field Poisson equations.',
+    defaultParams: {
+      depth: 0.35,
+      curvatureProfile: 'elliptic',
+      symmetric: true,
+      smoothPasses: 2,
+      resolution: 24,
+      rimDepth: 0.0,
+      scaleFactor: 0.005,
+      connectEdges: true,
+      points: [
+        { x: 0, y: -110 },
+        { x: 30, y: -35 },
+        { x: 110, y: -35 },
+        { x: 45, y: 15 },
+        { x: 70, y: 95 },
+        { x: 0, y: 45 },
+        { x: -70, y: 95 },
+        { x: -45, y: 15 },
+        { x: -110, y: -35 },
+        { x: -30, y: -35 }
+      ]
+    },
+    paramConfigs: [
+      { key: 'depth', label: 'Inflation Depth', min: 0.02, max: 2.0, step: 0.02, unit: 'm' },
+      { key: 'smoothPasses', label: 'Smoothing Passes', min: 0, max: 6, step: 1 },
+      { key: 'resolution', label: 'Mesh Resolution', min: 12, max: 48, step: 2 },
+      { key: 'rimDepth', label: 'Rim Wall Depth', min: 0.0, max: 0.5, step: 0.02, unit: 'm' }
+    ]
   }
 ];
 
@@ -318,6 +361,7 @@ export function createPrimitiveThreeGeometry(type, params, THREE_LIB = THREE) {
         p.detail || 0
       );
       break;
+    case 'vectorInflate':
     case 'vectorExtrude':
     case 'extrude': {
       const rawPoints = p.points || [];
@@ -325,47 +369,79 @@ export function createPrimitiveThreeGeometry(type, params, THREE_LIB = THREE) {
         geom = new THREE_LIB.BoxGeometry(1, 1, 0.2);
         break;
       }
-      const shape = new THREE_LIB.Shape();
-      const scale = Number(p.scaleFactor ?? 0.005);
-      const p0 = rawPoints[0];
-      shape.moveTo(p0.x * scale, -p0.y * scale);
 
-      for (let i = 0; i < rawPoints.length; i++) {
-        const curr = rawPoints[i];
-        const next = rawPoints[(i + 1) % rawPoints.length];
+      const isInflateMode = type === 'vectorInflate' || Boolean(p.inflateEnabled);
 
-        const cp1 = curr.handleOut
-          ? { x: (curr.x + curr.handleOut.x) * scale, y: -(curr.y + curr.handleOut.y) * scale }
-          : null;
-        const cp2 = next.handleIn
-          ? { x: (next.x + next.handleIn.x) * scale, y: -(next.y + next.handleIn.y) * scale }
-          : null;
-
-        if (cp1 || cp2) {
-          const c1 = cp1 || { x: curr.x * scale, y: -curr.y * scale };
-          const c2 = cp2 || { x: next.x * scale, y: -next.y * scale };
-          shape.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, next.x * scale, -next.y * scale);
-        } else {
-          shape.lineTo(next.x * scale, -next.y * scale);
+      if (isInflateMode) {
+        try {
+          geom = createInflatedGeometryFromPoints(rawPoints, {
+            depth: Number(p.depth ?? p.inflationAmount ?? 0.35),
+            curvatureProfile: p.curvatureProfile || p.profile || 'elliptic',
+            symmetric: p.symmetric !== false,
+            smoothPasses: p.smoothPasses !== undefined ? Number(p.smoothPasses) : 2,
+            resolution: p.resolution !== undefined ? Number(p.resolution) : 24,
+            rimDepth: Number(p.rimDepth ?? 0),
+            scaleFactor: Number(p.scaleFactor ?? 0.005),
+            curveSegments: Number(p.curveSegments ?? 24),
+            connectEdges: p.connectEdges !== false
+          }, THREE_LIB);
+        } catch (inflateErr) {
+          console.warn('[geometryHelper] Inflation generation fallback:', inflateErr);
         }
       }
-      shape.closePath();
 
-      const extrudeSettings = {
-        depth: Number(p.depth ?? 0.25),
-        bevelEnabled: p.bevelEnabled !== false,
-        bevelThickness: Number(p.bevelThickness ?? 0.03),
-        bevelSize: Number(p.bevelSize ?? 0.02),
-        bevelSegments: Math.max(1, Number(p.bevelSegments ?? 3)),
-        curveSegments: Math.max(6, Number(p.curveSegments ?? 24)),
-        steps: Math.max(1, Number(p.steps ?? 1))
-      };
+      if (!geom) {
+        const shape = new THREE_LIB.Shape();
+        const scale = Number(p.scaleFactor ?? 0.005);
+        const p0 = rawPoints[0];
+        shape.moveTo(p0.x * scale, -p0.y * scale);
 
-      try {
-        geom = new THREE_LIB.ExtrudeGeometry(shape, extrudeSettings);
-      } catch (err) {
-        console.warn('[geometryHelper] ExtrudeGeometry creation fallback:', err);
-        geom = new THREE_LIB.BoxGeometry(1, 1, 0.2);
+        for (let i = 0; i < rawPoints.length; i++) {
+          const curr = rawPoints[i];
+          const next = rawPoints[(i + 1) % rawPoints.length];
+
+          const cp1 = curr.handleOut
+            ? { x: (curr.x + curr.handleOut.x) * scale, y: -(curr.y + curr.handleOut.y) * scale }
+            : null;
+          const cp2 = next.handleIn
+            ? { x: (next.x + next.handleIn.x) * scale, y: -(next.y + next.handleIn.y) * scale }
+            : null;
+
+          if (cp1 || cp2) {
+            const c1 = cp1 || { x: curr.x * scale, y: -curr.y * scale };
+            const c2 = cp2 || { x: next.x * scale, y: -next.y * scale };
+            shape.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, next.x * scale, -next.y * scale);
+          } else {
+            shape.lineTo(next.x * scale, -next.y * scale);
+          }
+        }
+        shape.closePath();
+
+        const extrudeSettings = {
+          depth: Number(p.depth ?? 0.25),
+          bevelEnabled: p.bevelEnabled !== false,
+          bevelThickness: Number(p.bevelThickness ?? 0.03),
+          bevelSize: Number(p.bevelSize ?? 0.02),
+          bevelSegments: Math.max(1, Number(p.bevelSegments ?? 3)),
+          curveSegments: Math.max(6, Number(p.curveSegments ?? 24)),
+          steps: Math.max(1, Number(p.steps ?? 1))
+        };
+
+        try {
+          geom = new THREE_LIB.ExtrudeGeometry(shape, extrudeSettings);
+          if (p.domeWarpEnabled) {
+            applyDomeDeformation(geom, {
+              depth: Number(p.domeCurvature ?? p.domeWarpDepth ?? 0.2),
+              curvature: Number(p.domeCurvature ?? p.domeWarpDepth ?? 0.2),
+              falloff: p.domeFalloff || 'smoothstep',
+              curvatureProfile: p.curvatureProfile || 'spherical',
+              symmetric: p.symmetric !== false
+            });
+          }
+        } catch (err) {
+          console.warn('[geometryHelper] ExtrudeGeometry creation fallback:', err);
+          geom = new THREE_LIB.BoxGeometry(1, 1, 0.2);
+        }
       }
       break;
     }

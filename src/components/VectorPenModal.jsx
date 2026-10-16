@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { MATERIAL_PRESETS, COLOR_SWATCHES, createPrimitiveMesh } from '../utils/geometryHelper';
+import { INFLATION_PROFILES } from '../utils/inflationEngine';
 
 // Presets with Photoshop-style anchor points and bezier handles
 const VECTOR_PRESETS = [
@@ -153,7 +154,8 @@ export default function VectorPenModal({
   initialPoints = null,
   initialParams = null,
   initialColor = '#38bdf8',
-  initialName = 'Vector Pen Shape'
+  initialName = 'Vector Pen Shape',
+  initialMode = 'extrude'
 }) {
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -198,6 +200,13 @@ export default function VectorPenModal({
   const [activeTool, setActiveTool] = useState('pen'); // 'pen' | 'hand'
   const [isPanningState, setIsPanningState] = useState(false); // for cursor feedback
 
+  // 3D Generation Mode: 'extrude' (beveled 2.5D extrusion) or 'inflate' (volumetric Poisson/distance-field curvature)
+  const [creationMode, setCreationMode] = useState(() => {
+    if (initialMode === 'inflate') return 'inflate';
+    if (initialParams?.inflateEnabled) return 'inflate';
+    return 'extrude';
+  });
+
   // Extrusion & Material Settings
   const [shapeName, setShapeName] = useState(initialName);
   const [extrudeDepth, setExtrudeDepth] = useState(initialParams?.depth ?? 0.25);
@@ -206,6 +215,17 @@ export default function VectorPenModal({
   const [bevelSize, setBevelSize] = useState(initialParams?.bevelSize ?? 0.02);
   const [bevelSegments, setBevelSegments] = useState(initialParams?.bevelSegments ?? 3);
   const [curveSegments, setCurveSegments] = useState(initialParams?.curveSegments ?? 24);
+
+  // Curvature & Volumetric Inflation Settings (Monster Mash / Distance-Field Poisson)
+  const [inflateDepth, setInflateDepth] = useState(initialParams?.depth ?? 0.35);
+  const [curvatureProfile, setCurvatureProfile] = useState(
+    initialParams?.curvatureProfile || initialParams?.profile || 'elliptic'
+  );
+  const [inflateSymmetric, setInflateSymmetric] = useState(initialParams?.symmetric !== false);
+  const [inflateSmoothPasses, setInflateSmoothPasses] = useState(initialParams?.smoothPasses ?? 2);
+  const [inflateResolution, setInflateResolution] = useState(initialParams?.resolution ?? 24);
+  const [inflateRimDepth, setInflateRimDepth] = useState(initialParams?.rimDepth ?? 0.0);
+  const [connectEdges, setConnectEdges] = useState(initialParams?.connectEdges !== false);
 
   const [selectedColor, setSelectedColor] = useState(initialColor);
   const [materialPreset, setMaterialPreset] = useState('standard');
@@ -262,20 +282,37 @@ export default function VectorPenModal({
     }
     if (initialName) setShapeName(initialName);
     if (initialColor) setSelectedColor(initialColor);
+    if (initialMode === 'inflate' || initialParams?.inflateEnabled) {
+      setCreationMode('inflate');
+    } else if (initialMode === 'extrude') {
+      setCreationMode('extrude');
+    }
     if (initialParams) {
-      if (initialParams.depth !== undefined) setExtrudeDepth(Number(initialParams.depth));
+      if (initialParams.depth !== undefined) {
+        setExtrudeDepth(Number(initialParams.depth));
+        setInflateDepth(Number(initialParams.depth));
+      }
       if (initialParams.bevelEnabled !== undefined) setBevelEnabled(Boolean(initialParams.bevelEnabled));
       if (initialParams.bevelThickness !== undefined) setBevelThickness(Number(initialParams.bevelThickness));
       if (initialParams.bevelSize !== undefined) setBevelSize(Number(initialParams.bevelSize));
       if (initialParams.bevelSegments !== undefined) setBevelSegments(Number(initialParams.bevelSegments));
       if (initialParams.curveSegments !== undefined) setCurveSegments(Number(initialParams.curveSegments));
+
+      if (initialParams.curvatureProfile || initialParams.profile) {
+        setCurvatureProfile(initialParams.curvatureProfile || initialParams.profile);
+      }
+      if (initialParams.symmetric !== undefined) setInflateSymmetric(Boolean(initialParams.symmetric));
+      if (initialParams.smoothPasses !== undefined) setInflateSmoothPasses(Number(initialParams.smoothPasses));
+      if (initialParams.resolution !== undefined) setInflateResolution(Number(initialParams.resolution));
+      if (initialParams.rimDepth !== undefined) setInflateRimDepth(Number(initialParams.rimDepth));
+      if (initialParams.connectEdges !== undefined) setConnectEdges(Boolean(initialParams.connectEdges));
     }
     setSelectedPointIdx(null);
     setHistory([]);
     setZoom(1.0);
     setPanOffset({ x: 0, y: 0 });
     setActiveTool('pen');
-  }, [isOpen, initialPoints, initialParams, initialColor, initialName]);
+  }, [isOpen, initialPoints, initialParams, initialColor, initialName, initialMode]);
 
   // Save history state
   const pushHistory = useCallback((newPoints, newClosed = isClosed) => {
@@ -1290,19 +1327,29 @@ export default function VectorPenModal({
 
   if (!isOpen) return null;
 
-  // Handle Extrude Action
+  // Handle Extrude / Inflate Action
   const handleExtrudeAction = () => {
     if (!isClosed || points.length < 3) return;
 
     const matPresetObj = MATERIAL_PRESETS.find((m) => m.id === materialPreset) || MATERIAL_PRESETS[0];
+    const isInflate = creationMode === 'inflate';
 
     const payload = {
-      type: 'vectorExtrude',
-      name: shapeName || 'Extruded Vector Shape',
+      type: isInflate ? 'vectorInflate' : 'vectorExtrude',
+      name: shapeName || (isInflate ? 'Inflated Vector Shape' : 'Extruded Vector Shape'),
       params: {
         points: points,
         scaleFactor: 0.005, // 200px on canvas = 1 meter in 3D AR space
-        depth: Number(extrudeDepth),
+        inflateEnabled: isInflate,
+        depth: Number(isInflate ? inflateDepth : extrudeDepth),
+        curvatureProfile: curvatureProfile,
+        profile: curvatureProfile,
+        symmetric: Boolean(inflateSymmetric),
+        smoothPasses: Number(inflateSmoothPasses),
+        resolution: Number(inflateResolution),
+        rimDepth: Number(inflateRimDepth),
+        connectEdges: Boolean(connectEdges),
+        // Extrusion fallback params
         bevelEnabled: Boolean(bevelEnabled),
         bevelThickness: Number(bevelThickness),
         bevelSize: Number(bevelSize),
@@ -1331,14 +1378,23 @@ export default function VectorPenModal({
     if (!isClosed || points.length < 3) return;
 
     const matPresetObj = MATERIAL_PRESETS.find((m) => m.id === materialPreset) || MATERIAL_PRESETS[0];
+    const isInflate = creationMode === 'inflate';
 
     const payload = {
-      type: 'vectorExtrude',
-      name: shapeName || 'Extruded Vector Shape',
+      type: isInflate ? 'vectorInflate' : 'vectorExtrude',
+      name: shapeName || (isInflate ? 'Inflated Vector Shape' : 'Extruded Vector Shape'),
       params: {
         points: points,
         scaleFactor: 0.005,
-        depth: Number(extrudeDepth),
+        inflateEnabled: isInflate,
+        depth: Number(isInflate ? inflateDepth : extrudeDepth),
+        curvatureProfile: curvatureProfile,
+        profile: curvatureProfile,
+        symmetric: Boolean(inflateSymmetric),
+        smoothPasses: Number(inflateSmoothPasses),
+        resolution: Number(inflateResolution),
+        rimDepth: Number(inflateRimDepth),
+        connectEdges: Boolean(connectEdges),
         bevelEnabled: Boolean(bevelEnabled),
         bevelThickness: Number(bevelThickness),
         bevelSize: Number(bevelSize),
@@ -1373,7 +1429,7 @@ export default function VectorPenModal({
           const blob = new Blob([result], { type: 'model/gltf-binary' });
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
-          const safeName = (shapeName || 'extruded_vector').toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+          const safeName = (shapeName || (isInflate ? 'inflated_vector' : 'extruded_vector')).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
           a.href = url;
           a.download = `${safeName}.glb`;
           document.body.appendChild(a);
@@ -1943,122 +1999,309 @@ export default function VectorPenModal({
               />
             </div>
 
-            {/* Extrusion Parameters */}
-            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-3.5">
-              <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-sm text-sky-400">straighten</span>
-                  3D Face Extrusion
-                </h4>
-                <span className="text-[10px] font-mono text-sky-400 font-bold bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/20">
-                  {extrudeDepth.toFixed(2)}m Depth
-                </span>
-              </div>
+            {/* 3D Generation Mode Tabs: 3D Extrusion vs Curvature & Volumetric Inflation */}
+            <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-950 border border-slate-800 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setCreationMode('extrude')}
+                className={`py-2 px-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  creationMode === 'extrude'
+                    ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                }`}
+              >
+                <span className="material-symbols-outlined text-base">straighten</span>
+                <span>3D Extrusion</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreationMode('inflate')}
+                className={`py-2 px-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                  creationMode === 'inflate'
+                    ? 'bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow-md shadow-pink-600/30'
+                    : 'text-pink-400 hover:text-white hover:bg-slate-900'
+                }`}
+              >
+                <span className="material-symbols-outlined text-base">bubble_chart</span>
+                <span>Curvature & Inflation</span>
+              </button>
+            </div>
 
-              {/* Extrude Depth */}
-              <div className="space-y-1">
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-300 font-medium">Extrude Depth (Z Thickness)</span>
-                  <span className="font-mono text-sky-400">{extrudeDepth.toFixed(2)}m</span>
-                </div>
-                <input
-                  type="range"
-                  min="0.02"
-                  max="1.5"
-                  step="0.02"
-                  value={extrudeDepth}
-                  onChange={(e) => setExtrudeDepth(parseFloat(e.target.value))}
-                  className="w-full accent-sky-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
-                />
-              </div>
-
-              {/* Bevel Toggle & Sliders */}
-              <div className="pt-2 border-t border-slate-800/80 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-300">
-                    <input
-                      type="checkbox"
-                      checked={bevelEnabled}
-                      onChange={(e) => setBevelEnabled(e.target.checked)}
-                      className="rounded bg-slate-900 border-slate-700 text-sky-500"
-                    />
-                    <span>Bevel Edges (Chamfer / Fillet)</span>
-                  </label>
-                  <span className="text-[10px] font-mono text-slate-400">
-                    {bevelEnabled ? `${bevelThickness.toFixed(2)}m` : 'Flat Edge'}
+            {/* MODE 1: 3D Face Extrusion */}
+            {creationMode === 'extrude' && (
+              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-3.5">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-sky-400">straighten</span>
+                    3D Face Extrusion
+                  </h4>
+                  <span className="text-[10px] font-mono text-sky-400 font-bold bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/20">
+                    {extrudeDepth.toFixed(2)}m Depth
                   </span>
                 </div>
 
-                {bevelEnabled && (
-                  <div className="space-y-2.5 pl-3 border-l-2 border-sky-500/30">
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[11px] text-slate-300">
-                        <span>Bevel Thickness</span>
-                        <span className="font-mono text-sky-400">{bevelThickness.toFixed(2)}m</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0.00"
-                        max="0.10"
-                        step="0.01"
-                        value={bevelThickness}
-                        onChange={(e) => setBevelThickness(parseFloat(e.target.value))}
-                        className="w-full accent-sky-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[11px] text-slate-300">
-                        <span>Bevel Size (Offset)</span>
-                        <span className="font-mono text-sky-400">{bevelSize.toFixed(2)}m</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="0.00"
-                        max="0.10"
-                        step="0.01"
-                        value={bevelSize}
-                        onChange={(e) => setBevelSize(parseFloat(e.target.value))}
-                        className="w-full accent-sky-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-[11px] text-slate-300">
-                        <span>Bevel Segments</span>
-                        <span className="font-mono text-sky-400">{bevelSegments}</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="1"
-                        max="6"
-                        step="1"
-                        value={bevelSegments}
-                        onChange={(e) => setBevelSegments(parseInt(e.target.value, 10))}
-                        className="w-full accent-sky-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
-                      />
-                    </div>
+                {/* Extrude Depth */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Extrude Depth (Z Thickness)</span>
+                    <span className="font-mono text-sky-400">{extrudeDepth.toFixed(2)}m</span>
                   </div>
-                )}
-              </div>
-
-              {/* Curve Segments Smoothness */}
-              <div className="pt-2 border-t border-slate-800/80 space-y-1">
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-300 font-medium">Curve Smoothness (Steps)</span>
-                  <span className="font-mono text-purple-400">{curveSegments}</span>
+                  <input
+                    type="range"
+                    min="0.02"
+                    max="1.5"
+                    step="0.02"
+                    value={extrudeDepth}
+                    onChange={(e) => setExtrudeDepth(parseFloat(e.target.value))}
+                    className="w-full accent-sky-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                  />
                 </div>
-                <input
-                  type="range"
-                  min="8"
-                  max="48"
-                  step="2"
-                  value={curveSegments}
-                  onChange={(e) => setCurveSegments(parseInt(e.target.value, 10))}
-                  className="w-full accent-purple-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
-                />
+
+                {/* Bevel Toggle & Sliders */}
+                <div className="pt-2 border-t border-slate-800/80 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={bevelEnabled}
+                        onChange={(e) => setBevelEnabled(e.target.checked)}
+                        className="rounded bg-slate-900 border-slate-700 text-sky-500"
+                      />
+                      <span>Bevel Edges (Chamfer / Fillet)</span>
+                    </label>
+                    <span className="text-[10px] font-mono text-slate-400">
+                      {bevelEnabled ? `${bevelThickness.toFixed(2)}m` : 'Flat Edge'}
+                    </span>
+                  </div>
+
+                  {bevelEnabled && (
+                    <div className="space-y-2.5 pl-3 border-l-2 border-sky-500/30">
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[11px] text-slate-300">
+                          <span>Bevel Thickness</span>
+                          <span className="font-mono text-sky-400">{bevelThickness.toFixed(2)}m</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.00"
+                          max="0.10"
+                          step="0.01"
+                          value={bevelThickness}
+                          onChange={(e) => setBevelThickness(parseFloat(e.target.value))}
+                          className="w-full accent-sky-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[11px] text-slate-300">
+                          <span>Bevel Size (Offset)</span>
+                          <span className="font-mono text-sky-400">{bevelSize.toFixed(2)}m</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.00"
+                          max="0.10"
+                          step="0.01"
+                          value={bevelSize}
+                          onChange={(e) => setBevelSize(parseFloat(e.target.value))}
+                          className="w-full accent-sky-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[11px] text-slate-300">
+                          <span>Bevel Segments</span>
+                          <span className="font-mono text-sky-400">{bevelSegments}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="1"
+                          max="6"
+                          step="1"
+                          value={bevelSegments}
+                          onChange={(e) => setBevelSegments(parseInt(e.target.value, 10))}
+                          className="w-full accent-sky-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Curve Segments Smoothness */}
+                <div className="pt-2 border-t border-slate-800/80 space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Curve Smoothness (Steps)</span>
+                    <span className="font-mono text-purple-400">{curveSegments}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="8"
+                    max="48"
+                    step="2"
+                    value={curveSegments}
+                    onChange={(e) => setCurveSegments(parseInt(e.target.value, 10))}
+                    className="w-full accent-purple-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                  />
+                </div>
               </div>
-            </div>
+            )}
+
+            {/* MODE 2: Curvature & Volumetric Inflation (Distance-Field Poisson Engine) */}
+            {creationMode === 'inflate' && (
+              <div className="bg-slate-950/80 border border-pink-500/30 rounded-xl p-4 space-y-3.5 shadow-lg shadow-pink-950/20">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-pink-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-pink-400">bubble_chart</span>
+                    Curvature & Volumetric Inflation
+                  </h4>
+                  <span className="text-[10px] font-mono text-pink-400 font-bold bg-pink-500/10 px-2 py-0.5 rounded border border-pink-500/20">
+                    {inflateDepth.toFixed(2)}m Puff
+                  </span>
+                </div>
+
+                {/* Curvature Profile Selector */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center justify-between">
+                    <span>Curvature Profile</span>
+                    <span className="font-mono text-pink-400 text-[10px] font-semibold">
+                      {INFLATION_PROFILES.find((p) => p.id === curvatureProfile)?.name || 'Elliptic'}
+                    </span>
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                    {INFLATION_PROFILES.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => setCurvatureProfile(p.id)}
+                        className={`py-1.5 px-2 rounded-lg text-[11px] font-semibold border transition-all text-left flex items-center gap-1.5 cursor-pointer ${
+                          curvatureProfile === p.id
+                            ? 'bg-gradient-to-r from-pink-600 to-purple-600 text-white border-pink-400 shadow-sm'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                        }`}
+                        title={p.description}
+                      >
+                        <span className="material-symbols-outlined text-sm">{p.icon}</span>
+                        <span className="truncate">{p.name.split(' ')[0]}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Inflation Depth (Z Height) */}
+                <div className="space-y-1 pt-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Volumetric Thickness (Elevation)</span>
+                    <span className="font-mono text-pink-400 font-bold">{inflateDepth.toFixed(2)}m</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.02"
+                    max="1.50"
+                    step="0.02"
+                    value={inflateDepth}
+                    onChange={(e) => setInflateDepth(parseFloat(e.target.value))}
+                    className="w-full accent-pink-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                  />
+                </div>
+
+                {/* Symmetry Mode: Dual-Sided Puffy vs Single-Sided Dome & Edge Connection */}
+                <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                  <label className="flex items-center justify-between cursor-pointer p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition-colors">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={inflateSymmetric}
+                        onChange={(e) => setInflateSymmetric(e.target.checked)}
+                        className="rounded bg-slate-800 border-slate-700 text-pink-500"
+                      />
+                      <span className="text-xs font-semibold text-slate-200">
+                        Dual-Sided Symmetry
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono text-pink-400">
+                      {inflateSymmetric ? 'Full 3D Puffy Balloon' : 'Flat Back (Relief Dome)'}
+                    </span>
+                  </label>
+
+                  {/* Connect All Edges (Watertight Seal) */}
+                  <label className="flex items-center justify-between cursor-pointer p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition-colors">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={connectEdges}
+                        onChange={(e) => setConnectEdges(e.target.checked)}
+                        className="rounded bg-slate-800 border-slate-700 text-pink-500"
+                      />
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-semibold text-slate-200 block">
+                          Connect All Edges (Watertight Seal)
+                        </span>
+                        <span className="text-[10px] text-slate-400 block">
+                          Seamlessly stitches all perimeter edges to eliminate non-mesh gaps
+                        </span>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono text-pink-400 font-semibold shrink-0 ml-2">
+                      {connectEdges ? 'Watertight' : 'Open Shell'}
+                    </span>
+                  </label>
+                </div>
+
+                {/* Laplacian Smoothing Passes */}
+                <div className="space-y-1 pt-1">
+                  <div className="flex justify-between text-[11px] text-slate-300">
+                    <span>Smoothing Passes (Laplacian Relaxation)</span>
+                    <span className="font-mono text-pink-400 font-bold">{inflateSmoothPasses} passes</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="6"
+                    step="1"
+                    value={inflateSmoothPasses}
+                    onChange={(e) => setInflateSmoothPasses(parseInt(e.target.value, 10))}
+                    className="w-full accent-pink-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                  />
+                  <p className="text-[10px] text-slate-500">
+                    Relaxes internal vertex heights while keeping the 2D boundary silhouette locked at zero elevation.
+                  </p>
+                </div>
+
+                {/* Mesh Grid Density */}
+                <div className="space-y-1 pt-1">
+                  <div className="flex justify-between text-[11px] text-slate-300">
+                    <span>Interior Mesh Resolution (Steiner Grid)</span>
+                    <span className="font-mono text-purple-400 font-bold">{inflateResolution} divisions</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="14"
+                    max="44"
+                    step="2"
+                    value={inflateResolution}
+                    onChange={(e) => setInflateResolution(parseInt(e.target.value, 10))}
+                    className="w-full accent-purple-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                  />
+                </div>
+
+                {/* Optional Rim / Wall Depth */}
+                <div className="space-y-1 pt-1 border-t border-slate-800/80">
+                  <div className="flex justify-between text-[11px] text-slate-300">
+                    <span>Side Rim Wall Depth</span>
+                    <span className="font-mono text-slate-400">{inflateRimDepth.toFixed(2)}m</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.00"
+                    max="0.40"
+                    step="0.02"
+                    value={inflateRimDepth}
+                    onChange={(e) => setInflateRimDepth(parseFloat(e.target.value))}
+                    className="w-full accent-slate-400 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                  />
+                </div>
+              </div>
+            )}
 
             {/* PBR Surface & Finish */}
             <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-3">
@@ -2162,18 +2405,20 @@ export default function VectorPenModal({
           </div>
         </div>
 
-        {/* Footer Extrude Actions */}
+        {/* Footer Actions */}
         <div className="p-4 sm:p-5 border-t border-slate-800 bg-slate-950 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="text-xs text-slate-400 font-mono">
             {isClosed ? (
               <span className="text-emerald-400 font-semibold flex items-center gap-1">
                 <span className="material-symbols-outlined text-sm">verified</span>
-                Closed face ready for 3D extrusion ({points.length} nodes) • Depth {extrudeDepth}m
+                {creationMode === 'inflate'
+                  ? `Closed contour ready for volumetric inflation (${points.length} nodes) • Depth ${inflateDepth.toFixed(2)}m (${curvatureProfile})`
+                  : `Closed face ready for 3D extrusion (${points.length} nodes) • Depth ${extrudeDepth.toFixed(2)}m`}
               </span>
             ) : (
               <span className="text-amber-400 flex items-center gap-1">
                 <span className="material-symbols-outlined text-sm">warning</span>
-                Connect path back to start point to complete face before extruding.
+                Connect path back to start point to complete closed contour before generating 3D shape.
               </span>
             )}
           </div>
@@ -2191,7 +2436,7 @@ export default function VectorPenModal({
               disabled={!isClosed || points.length < 3}
               onClick={handleExportGLB}
               className="flex-1 sm:flex-none py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 hover:text-teal-200 border border-teal-500/40 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Download Extruded Vector Face directly as a .GLB file"
+              title={creationMode === 'inflate' ? 'Download Inflated 3D Mesh directly as a .GLB file' : 'Download Extruded Vector Face directly as a .GLB file'}
             >
               <span className="material-symbols-outlined text-base">download</span>
               <span>Export .GLB</span>
@@ -2200,10 +2445,18 @@ export default function VectorPenModal({
               type="button"
               disabled={!isClosed || points.length < 3}
               onClick={handleExtrudeAction}
-              className="flex-1 sm:flex-none py-2.5 px-6 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:opacity-95 text-white text-xs font-bold shadow-lg shadow-purple-500/25 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed active:scale-98"
+              className={`flex-1 sm:flex-none py-2.5 px-6 rounded-xl text-white text-xs font-bold shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed active:scale-98 ${
+                creationMode === 'inflate'
+                  ? 'bg-gradient-to-r from-pink-600 via-purple-600 to-indigo-600 hover:opacity-95 shadow-pink-500/25'
+                  : 'bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:opacity-95 shadow-purple-500/25'
+              }`}
             >
-              <span className="material-symbols-outlined text-base">view_in_ar</span>
-              <span>Extrude Vector Face to 3D Scene</span>
+              <span className="material-symbols-outlined text-base">
+                {creationMode === 'inflate' ? 'bubble_chart' : 'view_in_ar'}
+              </span>
+              <span>
+                {creationMode === 'inflate' ? 'Inflate Shape to 3D Scene' : 'Extrude Vector Face to 3D Scene'}
+              </span>
             </button>
           </div>
         </div>
