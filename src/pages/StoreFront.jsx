@@ -6,6 +6,7 @@ import { db, storage } from '../firebase';
 import Header from '../components/Header';
 import ProductViewer from '../components/ProductViewer';
 import Model3DThumbnail from '../components/Model3DThumbnail';
+import WebGLErrorBoundary from '../components/WebGLErrorBoundary';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 
@@ -265,62 +266,90 @@ export default function StoreFront() {
             <div className="hidden md:flex absolute inset-y-0 right-0 w-1/2 items-center justify-center p-8 z-10 pointer-events-auto">
               <div className="w-full h-[620px] max-h-[85vh] rounded-3xl overflow-hidden border border-white/20 shadow-[0_30px_90px_rgba(0,0,0,0.85)] bg-black/60 backdrop-blur-2xl relative">
                 {featuredModelUrl ? (
-                  <ProductViewer
-                    modelUrl={featuredModelUrl}
-                    videoUrl={featuredVideoUrl}
-                    config={(() => {
-                      const pCfg = featuredAsset?.ar_config || featuredAsset?.config || featuredAsset?.arExperience?.config || {};
-                      const bCfg = featuredBatchConfig?.ar_config || featuredBatchConfig?.config || featuredBatchConfig?.arExperience?.config || {};
-                      const res = {
-                        ...pCfg,
-                        ...(featuredAsset || {}),
-                        ...bCfg,
-                        ...(featuredBatchConfig || {})
-                      };
-                      const keys = [
-                        'ambientColor', 'ambientIntensity',
-                        'dir1Color', 'dir1Intensity', 'dir1Position',
-                        'dir2Color', 'dir2Intensity', 'dir2Position',
-                        'rimColor', 'rimIntensity', 'rimPosition',
-                        'modelScale', 'modelPosition', 'modelRotation',
-                        'modelRotX', 'modelRotY', 'modelRotZ',
-                        'modelPosX', 'modelPosY', 'modelPosZ', 'modelRotSpeed',
-                        'matMetalness', 'matRoughness', 'matEmissive', 'matEmissiveIntensity',
-                        'matWireframe', 'matOpacity', 'meshOverrides',
-                        'portalConfig', 'particleConfig'
-                      ];
-                      keys.forEach((k) => {
-                        if (bCfg[k] !== undefined && bCfg[k] !== null) res[k] = bCfg[k];
-                        else if (featuredBatchConfig?.[k] !== undefined && featuredBatchConfig?.[k] !== null) res[k] = featuredBatchConfig[k];
-                        else if (pCfg[k] !== undefined && pCfg[k] !== null) res[k] = pCfg[k];
-                        else if (featuredAsset?.[k] !== undefined && featuredAsset?.[k] !== null) res[k] = featuredAsset[k];
-                      });
-                      res.customLights = (Array.isArray(bCfg.customLights) && bCfg.customLights.length > 0)
-                        ? bCfg.customLights
-                        : (Array.isArray(featuredBatchConfig?.customLights) && featuredBatchConfig.customLights.length > 0)
-                        ? featuredBatchConfig.customLights
-                        : (Array.isArray(pCfg.customLights) && pCfg.customLights.length > 0)
-                        ? pCfg.customLights
-                        : (Array.isArray(featuredAsset?.customLights) ? featuredAsset.customLights : []);
-                      res.custom3DTexts = (Array.isArray(bCfg.custom3DTexts) && bCfg.custom3DTexts.length > 0)
-                        ? bCfg.custom3DTexts
-                        : (Array.isArray(featuredBatchConfig?.custom3DTexts) && featuredBatchConfig.custom3DTexts.length > 0)
-                        ? featuredBatchConfig.custom3DTexts
-                        : (Array.isArray(pCfg.custom3DTexts) && pCfg.custom3DTexts.length > 0)
-                        ? pCfg.custom3DTexts
-                        : (Array.isArray(featuredAsset?.custom3DTexts) ? featuredAsset.custom3DTexts : []);
-                      res.additionalGeometries = (Array.isArray(bCfg.additionalGeometries) && bCfg.additionalGeometries.length > 0)
-                        ? bCfg.additionalGeometries
-                        : (Array.isArray(featuredBatchConfig?.additionalGeometries) && featuredBatchConfig.additionalGeometries.length > 0)
-                        ? featuredBatchConfig.additionalGeometries
-                        : (Array.isArray(pCfg.additionalGeometries) && pCfg.additionalGeometries.length > 0)
-                        ? pCfg.additionalGeometries
-                        : (Array.isArray(featuredAsset?.additionalGeometries) ? featuredAsset.additionalGeometries : []);
-                      return res;
-                    })()}
-                    assetName={featuredAsset?.name || featuredAsset?.id || 'Featured Digital Asset'}
-                    assetId={featuredAsset?.id || ''}
-                  />
+                  <WebGLErrorBoundary
+                    fallback={
+                      <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-black/80 relative">
+                        {featuredAsset?.thumbnailUrl || featuredAsset?.thumbnail_url || featuredAsset?.imageUrl ? (
+                          <img
+                            src={featuredAsset.thumbnailUrl || featuredAsset.thumbnail_url || featuredAsset.imageUrl}
+                            alt={featuredAsset.name || featuredAsset.id}
+                            className="max-h-[55%] object-contain mb-4 drop-shadow-2xl"
+                          />
+                        ) : (
+                          <div className="w-16 h-16 rounded-full bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center mb-4 text-cyan-400">
+                            <span className="material-symbols-outlined text-3xl">view_in_ar</span>
+                          </div>
+                        )}
+                        <span className="text-xs font-mono font-bold tracking-widest text-cyan-300 uppercase mb-3">
+                          {featuredAsset?.name || featuredAsset?.id || 'Featured Digital Asset'}
+                        </span>
+                        <Link
+                          to={`/product/${featuredAsset?.id}`}
+                          className="px-5 py-2.5 bg-gradient-to-r from-cyan-500 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white font-mono text-xs font-bold rounded-lg uppercase tracking-wider transition-all flex items-center gap-2 shadow-lg cursor-pointer"
+                        >
+                          <span>Inspect in 3D</span>
+                          <span className="material-symbols-outlined text-xs">arrow_forward</span>
+                        </Link>
+                      </div>
+                    }
+                  >
+                    <ProductViewer
+                      modelUrl={featuredModelUrl}
+                      videoUrl={featuredVideoUrl}
+                      config={(() => {
+                        const pCfg = featuredAsset?.ar_config || featuredAsset?.config || featuredAsset?.arExperience?.config || {};
+                        const bCfg = featuredBatchConfig?.ar_config || featuredBatchConfig?.config || featuredBatchConfig?.arExperience?.config || {};
+                        const res = {
+                          ...pCfg,
+                          ...(featuredAsset || {}),
+                          ...bCfg,
+                          ...(featuredBatchConfig || {})
+                        };
+                        const keys = [
+                          'ambientColor', 'ambientIntensity',
+                          'dir1Color', 'dir1Intensity', 'dir1Position',
+                          'dir2Color', 'dir2Intensity', 'dir2Position',
+                          'rimColor', 'rimIntensity', 'rimPosition',
+                          'modelScale', 'modelPosition', 'modelRotation',
+                          'modelRotX', 'modelRotY', 'modelRotZ',
+                          'modelPosX', 'modelPosY', 'modelPosZ', 'modelRotSpeed',
+                          'matMetalness', 'matRoughness', 'matEmissive', 'matEmissiveIntensity',
+                          'matWireframe', 'matOpacity', 'meshOverrides',
+                          'portalConfig', 'particleConfig'
+                        ];
+                        keys.forEach((k) => {
+                          if (bCfg[k] !== undefined && bCfg[k] !== null) res[k] = bCfg[k];
+                          else if (featuredBatchConfig?.[k] !== undefined && featuredBatchConfig?.[k] !== null) res[k] = featuredBatchConfig[k];
+                          else if (pCfg[k] !== undefined && pCfg[k] !== null) res[k] = pCfg[k];
+                          else if (featuredAsset?.[k] !== undefined && featuredAsset?.[k] !== null) res[k] = featuredAsset[k];
+                        });
+                        res.customLights = (Array.isArray(bCfg.customLights) && bCfg.customLights.length > 0)
+                          ? bCfg.customLights
+                          : (Array.isArray(featuredBatchConfig?.customLights) && featuredBatchConfig.customLights.length > 0)
+                          ? featuredBatchConfig.customLights
+                          : (Array.isArray(pCfg.customLights) && pCfg.customLights.length > 0)
+                          ? pCfg.customLights
+                          : (Array.isArray(featuredAsset?.customLights) ? featuredAsset.customLights : []);
+                        res.custom3DTexts = (Array.isArray(bCfg.custom3DTexts) && bCfg.custom3DTexts.length > 0)
+                          ? bCfg.custom3DTexts
+                          : (Array.isArray(featuredBatchConfig?.custom3DTexts) && featuredBatchConfig.custom3DTexts.length > 0)
+                          ? featuredBatchConfig.custom3DTexts
+                          : (Array.isArray(pCfg.custom3DTexts) && pCfg.custom3DTexts.length > 0)
+                          ? pCfg.custom3DTexts
+                          : (Array.isArray(featuredAsset?.custom3DTexts) ? featuredAsset.custom3DTexts : []);
+                        res.additionalGeometries = (Array.isArray(bCfg.additionalGeometries) && bCfg.additionalGeometries.length > 0)
+                          ? bCfg.additionalGeometries
+                          : (Array.isArray(featuredBatchConfig?.additionalGeometries) && featuredBatchConfig.additionalGeometries.length > 0)
+                          ? featuredBatchConfig.additionalGeometries
+                          : (Array.isArray(pCfg.additionalGeometries) && pCfg.additionalGeometries.length > 0)
+                          ? pCfg.additionalGeometries
+                          : (Array.isArray(featuredAsset?.additionalGeometries) ? featuredAsset.additionalGeometries : []);
+                        return res;
+                      })()}
+                      assetName={featuredAsset?.name || featuredAsset?.id || 'Featured Digital Asset'}
+                      assetId={featuredAsset?.id || ''}
+                    />
+                  </WebGLErrorBoundary>
                 ) : (
                   <div className="w-full h-full flex flex-col items-center justify-center space-y-4 p-8 text-center bg-slate-950/80">
                     <div className="w-12 h-12 border-3 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin"></div>

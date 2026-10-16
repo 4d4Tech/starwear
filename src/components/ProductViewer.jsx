@@ -5,11 +5,27 @@ import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, Html } from '@react-three/drei';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { computeGeometrySurfaceFrame } from '../utils/aframe-components';
+import { computeGeometrySurfaceFrame } from '../utils/geometryHelper';
+import WebGLErrorBoundary from './WebGLErrorBoundary';
 import { createPortalObject3D, createParticleSystemObject3D } from '../utils/portalThreeHelper';
 import { createGeometriesGroup } from '../utils/geometryHelper';
 import { createCustomLightsGroup } from '../utils/lightingHelper';
 import { create3DTextsGroup } from '../utils/text3DHelper';
+
+// Safe runtime detection of WebGL capability
+export function isWebGLAvailable() {
+  if (typeof window === 'undefined') return true;
+  try {
+    const canvas = document.createElement('canvas');
+    const gl =
+      canvas.getContext('webgl2', { failIfMajorPerformanceCaveat: false }) ||
+      canvas.getContext('webgl', { failIfMajorPerformanceCaveat: false }) ||
+      canvas.getContext('experimental-webgl');
+    return Boolean(gl);
+  } catch {
+    return false;
+  }
+}
 
 // YouTube URL parser & ID extractor
 export function isYouTubeUrl(url) {
@@ -737,7 +753,7 @@ export default function ProductViewer({
   const [loading, setLoading] = useState(true);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [loadError, setLoadError] = useState(null);
-  const [webglUnavailable, setWebglUnavailable] = useState(false);
+  const [webglUnavailable, setWebglUnavailable] = useState(() => !isWebGLAvailable());
   const [autoRotate, setAutoRotate] = useState(true);
   const [isWireframe, setIsWireframe] = useState(false);
   const [meshCount, setMeshCount] = useState(0);
@@ -1089,51 +1105,55 @@ export default function ProductViewer({
       className="w-full h-full relative overflow-hidden bg-slate-950 flex flex-col items-center justify-center select-none"
     >
       {/* React Three Fiber Canvas */}
-      <div className="w-full h-full cursor-grab active:cursor-grabbing relative">
-        <Canvas
-          gl={{ antialias: true, alpha: true, stencil: true, powerPreference: 'default' }}
-          camera={{ fov: 45, near: 0.05, far: 100, position: [0, 1.2, 2.5] }}
-          onCreated={({ gl }) => {
-            gl.localClippingEnabled = true;
-            gl.toneMapping = THREE.ACESFilmicToneMapping;
-            gl.toneMappingExposure = 1.1;
-            gl.outputColorSpace = THREE.SRGBColorSpace;
+      {!webglUnavailable ? (
+        <div className="w-full h-full cursor-grab active:cursor-grabbing relative">
+          <WebGLErrorBoundary onError={() => setWebglUnavailable(true)}>
+            <Canvas
+              gl={{ antialias: true, alpha: true, stencil: true, powerPreference: 'default' }}
+              camera={{ fov: 45, near: 0.05, far: 100, position: [0, 1.2, 2.5] }}
+              onCreated={({ gl }) => {
+                gl.localClippingEnabled = true;
+                gl.toneMapping = THREE.ACESFilmicToneMapping;
+                gl.toneMappingExposure = 1.1;
+                gl.outputColorSpace = THREE.SRGBColorSpace;
 
-            const handleContextLost = (event) => {
-              event.preventDefault();
-              setWebglUnavailable(true);
-              setLoadError(
-                'WebGL graphics context was temporarily lost. Waiting for browser restoration...'
-              );
-            };
-            const handleContextRestored = () => {
-              console.info('[ProductViewer] WebGL context successfully restored.');
-              setWebglUnavailable(false);
-              setLoadError(null);
-            };
-            gl.domElement.addEventListener('webglcontextlost', handleContextLost, false);
-            gl.domElement.addEventListener('webglcontextrestored', handleContextRestored, false);
-          }}
-          className="w-full h-full"
-        >
-          <SceneContent
-            modelGroup={modelGroup}
-            modelBoundingData={modelBoundingData}
-            isWireframe={isWireframe}
-            config={config}
-            autoRotate={autoRotate}
-            controlsRef={controlsRef}
-            cameraRef={cameraRef}
-            defaultCamPosRef={defaultCamPosRef}
-            activeVideoType={activeVideoType}
-            targetNode={targetNode}
-            youTubeId={youTubeId}
-            resolvedVideoUrl={resolvedVideoUrl}
-            iframeRef={iframeRef}
-            isMuted={isMuted}
-          />
-        </Canvas>
-      </div>
+                const handleContextLost = (event) => {
+                  event.preventDefault();
+                  setWebglUnavailable(true);
+                  setLoadError(
+                    'WebGL graphics context was temporarily lost. Waiting for browser restoration...'
+                  );
+                };
+                const handleContextRestored = () => {
+                  console.info('[ProductViewer] WebGL context successfully restored.');
+                  setWebglUnavailable(false);
+                  setLoadError(null);
+                };
+                gl.domElement.addEventListener('webglcontextlost', handleContextLost, false);
+                gl.domElement.addEventListener('webglcontextrestored', handleContextRestored, false);
+              }}
+              className="w-full h-full"
+            >
+              <SceneContent
+                modelGroup={modelGroup}
+                modelBoundingData={modelBoundingData}
+                isWireframe={isWireframe}
+                config={config}
+                autoRotate={autoRotate}
+                controlsRef={controlsRef}
+                cameraRef={cameraRef}
+                defaultCamPosRef={defaultCamPosRef}
+                activeVideoType={activeVideoType}
+                targetNode={targetNode}
+                youTubeId={youTubeId}
+                resolvedVideoUrl={resolvedVideoUrl}
+                iframeRef={iframeRef}
+                isMuted={isMuted}
+              />
+            </Canvas>
+          </WebGLErrorBoundary>
+        </div>
+      ) : null}
 
       {/* Top Floating Badge Bar */}
       <div className="absolute top-5 left-5 right-5 flex items-center justify-between pointer-events-none z-20">

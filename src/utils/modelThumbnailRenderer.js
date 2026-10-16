@@ -147,62 +147,82 @@ function getOffscreenRenderer() {
   if (typeof window === 'undefined') return null;
 
   if (!offscreenRenderer) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 384;
-    canvas.height = 384;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 384;
+      canvas.height = 384;
 
-    offscreenRenderer = new THREE.WebGLRenderer({
-      canvas,
-      antialias: true,
-      alpha: true,
-      stencil: true,
-      preserveDrawingBuffer: true,
-      powerPreference: 'low-power'
-    });
-    offscreenRenderer.localClippingEnabled = true;
-    offscreenRenderer.setSize(384, 384, false);
-    offscreenRenderer.setPixelRatio(1);
-    offscreenRenderer.outputColorSpace = THREE.SRGBColorSpace;
-    offscreenRenderer.toneMapping = THREE.ACESFilmicToneMapping;
-    offscreenRenderer.toneMappingExposure = 1.35;
+      canvas.addEventListener(
+        'webglcontextlost',
+        (e) => {
+          e.preventDefault();
+          offscreenRenderer = null;
+          offscreenScene = null;
+          offscreenCamera = null;
+          gltfLoaderInstance = null;
+        },
+        false
+      );
 
-    offscreenScene = new THREE.Scene();
-    offscreenCamera = new THREE.PerspectiveCamera(40, 1, 0.05, 50);
+      offscreenRenderer = new THREE.WebGLRenderer({
+        canvas,
+        antialias: true,
+        alpha: true,
+        stencil: true,
+        preserveDrawingBuffer: true,
+        powerPreference: 'low-power'
+      });
+      offscreenRenderer.localClippingEnabled = true;
+      offscreenRenderer.setSize(384, 384, false);
+      offscreenRenderer.setPixelRatio(1);
+      offscreenRenderer.outputColorSpace = THREE.SRGBColorSpace;
+      offscreenRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+      offscreenRenderer.toneMappingExposure = 1.35;
 
-    // Dynamic 4-Source Studio Lighting (Ambient + Key + Fill + Rim + Top)
-    const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
-    offscreenScene.add(ambientLight);
+      offscreenScene = new THREE.Scene();
+      offscreenCamera = new THREE.PerspectiveCamera(40, 1, 0.05, 50);
 
-    const keyLight = new THREE.DirectionalLight(0xffffff, 2.2);
-    keyLight.position.set(2, 4, 3);
-    offscreenScene.add(keyLight);
+      // Dynamic 4-Source Studio Lighting (Ambient + Key + Fill + Rim + Top)
+      const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
+      offscreenScene.add(ambientLight);
 
-    const fillLight = new THREE.DirectionalLight(0x818cf8, 1.2);
-    fillLight.position.set(-2, -1, -2);
-    offscreenScene.add(fillLight);
+      const keyLight = new THREE.DirectionalLight(0xffffff, 2.2);
+      keyLight.position.set(2, 4, 3);
+      offscreenScene.add(keyLight);
 
-    const rimLight = new THREE.DirectionalLight(0x38bdf8, 1.0);
-    rimLight.position.set(0, 3, -3);
-    offscreenScene.add(rimLight);
+      const fillLight = new THREE.DirectionalLight(0x818cf8, 1.2);
+      fillLight.position.set(-2, -1, -2);
+      offscreenScene.add(fillLight);
 
-    const topLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    topLight.position.set(0, 5, 0);
-    offscreenScene.add(topLight);
+      const rimLight = new THREE.DirectionalLight(0x38bdf8, 1.0);
+      rimLight.position.set(0, 3, -3);
+      offscreenScene.add(rimLight);
 
-    const dracoLoader = new DRACOLoader();
-    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+      const topLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      topLight.position.set(0, 5, 0);
+      offscreenScene.add(topLight);
 
-    gltfLoaderInstance = new GLTFLoader();
-    gltfLoaderInstance.setDRACOLoader(dracoLoader);
+      const dracoLoader = new DRACOLoader();
+      dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
 
-    offscreenRenderer._lights = {
-      ambientLight,
-      keyLight,
-      fillLight,
-      rimLight,
-      topLight
-    };
+      gltfLoaderInstance = new GLTFLoader();
+      gltfLoaderInstance.setDRACOLoader(dracoLoader);
+
+      offscreenRenderer._lights = {
+        ambientLight,
+        keyLight,
+        fillLight,
+        rimLight,
+        topLight
+      };
+    } catch (e) {
+      console.warn('[ThumbnailRenderer] Offscreen WebGL initialization skipped:', e?.message);
+      offscreenRenderer = null;
+      return null;
+    }
   }
+
+  if (!offscreenRenderer) return null;
 
   return {
     renderer: offscreenRenderer,
