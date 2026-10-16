@@ -40,7 +40,7 @@ export function AuthProvider({ children }) {
       const tokenResult = await user.getIdTokenResult(true);
       const claims = tokenResult?.claims || {};
       const roleClaim = (claims.role || claims.userType || '').toLowerCase();
-      const isClaimSuper = roleClaim === 'superadmin' || claims.superadmin === true;
+      const isClaimSuper = roleClaim === 'superadmin' || roleClaim === 'superuser' || claims.superadmin === true || claims.superuser === true || claims.isSuperAdmin === true || claims.isSuperUser === true;
       const isClaimAdmin = isClaimSuper || roleClaim === 'admin' || claims.admin === true || claims.isAdmin === true;
       const isClaimCreator = isClaimAdmin || roleClaim === 'creator' || roleClaim === 'creater' || claims.creator === true || claims.isCreator === true;
 
@@ -60,7 +60,7 @@ export function AuthProvider({ children }) {
       if (userSnap.exists()) {
         const data = userSnap.data();
         const docRole = (data.role || data.userType || '').toLowerCase();
-        const isDocSuper = docRole === 'superadmin' || data.isSuperAdmin === true;
+        const isDocSuper = docRole === 'superadmin' || docRole === 'superuser' || data.isSuperAdmin === true || data.isSuperUser === true;
         const isDocAdmin = isDocSuper || docRole === 'admin' || data.isAdmin === true;
         const isDocCreator = isDocAdmin || docRole === 'creator' || docRole === 'creater' || data.isCreator === true || data.creator === true;
 
@@ -82,7 +82,7 @@ export function AuthProvider({ children }) {
         if (emailSnap.exists()) {
           const data = emailSnap.data();
           const docRole = (data.role || data.userType || '').toLowerCase();
-          const isDocSuper = docRole === 'superadmin' || data.isSuperAdmin === true;
+          const isDocSuper = docRole === 'superadmin' || docRole === 'superuser' || data.isSuperAdmin === true || data.isSuperUser === true;
           const isDocAdmin = isDocSuper || docRole === 'admin' || data.isAdmin === true;
           const isDocCreator = isDocAdmin || docRole === 'creator' || docRole === 'creater' || data.isCreator === true || data.creator === true;
 
@@ -135,7 +135,7 @@ export function AuthProvider({ children }) {
     setIsAdmin(isAdm);
     setIsCreator(isCrt);
     setUserType(type);
-    return { user, isSuperAdmin: isSuper, isAdmin: isAdm, isCreator: isCrt, canAccessStudio: canStudio, userType: type };
+    return { user, isSuperAdmin: isSuper, isSuperUser: isSuper, isAdmin: isAdm, isCreator: isCrt, canAccessStudio: canStudio, userType: type };
   };
 
   const logout = async () => {
@@ -151,11 +151,14 @@ export function AuthProvider({ children }) {
   const canAccessStudio = Boolean(currentUser && (isSuperAdmin || isAdmin));
   const canAccessARTest = Boolean(currentUser && (isSuperAdmin || isAdmin));
 
+  const isSuperUser = Boolean(currentUser && isSuperAdmin);
+
   const value = {
     currentUser,
     userType,
     isAdmin,
     isSuperAdmin,
+    isSuperUser,
     isCreator,
     canAccessStudio,
     canAccessARTest,

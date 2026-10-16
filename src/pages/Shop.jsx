@@ -1110,58 +1110,56 @@ export default function Shop() {
                 <ProductViewer
                   modelUrl={activeModelUrl}
                   videoUrl={activeVideoUrl || selectedProduct?.video_url || selectedProduct?.videoUrl || ''}
-                  config={{
-                    ...(selectedProduct?.config || {}),
-                    ...(selectedProduct?.arExperience?.config || {}),
-                    ...(selectedProduct?.ar_config || {}),
-                    ...(selectedBatchConfig?.config || {}),
-                    ...(selectedBatchConfig?.arExperience?.config || {}),
-                    ...(selectedBatchConfig?.ar_config || {}),
-                    ...(selectedProduct?.lighting || {}),
-                    ...(selectedProduct?.lightingConfig || {}),
-                    ...(selectedBatchConfig?.lighting || {}),
-                    ...(selectedBatchConfig?.lightingConfig || {}),
-                    ...(selectedProduct?.portalConfig ? { portalConfig: selectedProduct.portalConfig } : {}),
-                    ...(selectedProduct?.particleConfig ? { particleConfig: selectedProduct.particleConfig } : {}),
-                    ...(selectedBatchConfig?.portalConfig ? { portalConfig: selectedBatchConfig.portalConfig } : {}),
-                    ...(selectedBatchConfig?.particleConfig ? { particleConfig: selectedBatchConfig.particleConfig } : {}),
-                    ...(selectedProduct?.ar_config?.portalConfig ? { portalConfig: selectedProduct.ar_config.portalConfig } : {}),
-                    ...(selectedProduct?.ar_config?.particleConfig ? { particleConfig: selectedProduct.ar_config.particleConfig } : {}),
-                    ...(selectedBatchConfig?.ar_config?.portalConfig ? { portalConfig: selectedBatchConfig.ar_config.portalConfig } : {}),
-                    ...(selectedBatchConfig?.ar_config?.particleConfig ? { particleConfig: selectedBatchConfig.ar_config.particleConfig } : {}),
-                    ...(selectedProduct?.ambientColor ? { ambientColor: selectedProduct.ambientColor } : {}),
-                    ...(selectedProduct?.ambientIntensity !== undefined ? { ambientIntensity: selectedProduct.ambientIntensity } : {}),
-                    ...(selectedProduct?.dir1Color ? { dir1Color: selectedProduct.dir1Color } : {}),
-                    ...(selectedProduct?.dir1Intensity !== undefined ? { dir1Intensity: selectedProduct.dir1Intensity } : {}),
-                    ...(selectedProduct?.dir1Position ? { dir1Position: selectedProduct.dir1Position } : {}),
-                    ...(selectedProduct?.dir2Color ? { dir2Color: selectedProduct.dir2Color } : {}),
-                    ...(selectedProduct?.dir2Intensity !== undefined ? { dir2Intensity: selectedProduct.dir2Intensity } : {}),
-                    ...(selectedProduct?.dir2Position ? { dir2Position: selectedProduct.dir2Position } : {}),
-                    ...(selectedProduct?.rimColor ? { rimColor: selectedProduct.rimColor } : {}),
-                    ...(selectedProduct?.rimIntensity !== undefined ? { rimIntensity: selectedProduct.rimIntensity } : {}),
-                    ...(selectedProduct?.rimPosition ? { rimPosition: selectedProduct.rimPosition } : {}),
-                    additionalGeometries: (Array.isArray(selectedBatchConfig?.additionalGeometries) && selectedBatchConfig.additionalGeometries.length > 0)
-                      ? selectedBatchConfig.additionalGeometries
-                      : (Array.isArray(selectedBatchConfig?.ar_config?.additionalGeometries) && selectedBatchConfig.ar_config.additionalGeometries.length > 0)
-                      ? selectedBatchConfig.ar_config.additionalGeometries
-                      : (Array.isArray(selectedProduct?.additionalGeometries) && selectedProduct.additionalGeometries.length > 0)
-                      ? selectedProduct.additionalGeometries
-                      : (Array.isArray(selectedProduct?.ar_config?.additionalGeometries) ? selectedProduct.ar_config.additionalGeometries : []),
-                    custom3DTexts: (Array.isArray(selectedBatchConfig?.custom3DTexts) && selectedBatchConfig.custom3DTexts.length > 0)
-                      ? selectedBatchConfig.custom3DTexts
-                      : (Array.isArray(selectedBatchConfig?.ar_config?.custom3DTexts) && selectedBatchConfig.ar_config.custom3DTexts.length > 0)
-                      ? selectedBatchConfig.ar_config.custom3DTexts
-                      : (Array.isArray(selectedProduct?.custom3DTexts) && selectedProduct.custom3DTexts.length > 0)
-                      ? selectedProduct.custom3DTexts
-                      : (Array.isArray(selectedProduct?.ar_config?.custom3DTexts) ? selectedProduct.ar_config.custom3DTexts : []),
-                    customLights: (Array.isArray(selectedBatchConfig?.customLights) && selectedBatchConfig.customLights.length > 0)
+                  config={(() => {
+                    const pCfg = selectedProduct?.ar_config || selectedProduct?.config || selectedProduct?.arExperience?.config || {};
+                    const bCfg = selectedBatchConfig?.ar_config || selectedBatchConfig?.config || selectedBatchConfig?.arExperience?.config || {};
+                    const res = {
+                      ...pCfg,
+                      ...(selectedProduct || {}),
+                      ...bCfg,
+                      ...(selectedBatchConfig || {})
+                    };
+                    const keys = [
+                      'ambientColor', 'ambientIntensity',
+                      'dir1Color', 'dir1Intensity', 'dir1Position',
+                      'dir2Color', 'dir2Intensity', 'dir2Position',
+                      'rimColor', 'rimIntensity', 'rimPosition',
+                      'modelScale', 'modelPosition', 'modelRotation',
+                      'modelRotX', 'modelRotY', 'modelRotZ',
+                      'modelPosX', 'modelPosY', 'modelPosZ', 'modelRotSpeed',
+                      'matMetalness', 'matRoughness', 'matEmissive', 'matEmissiveIntensity',
+                      'matWireframe', 'matOpacity', 'meshOverrides',
+                      'portalConfig', 'particleConfig'
+                    ];
+                    keys.forEach((k) => {
+                      if (bCfg[k] !== undefined && bCfg[k] !== null) res[k] = bCfg[k];
+                      else if (selectedBatchConfig?.[k] !== undefined && selectedBatchConfig?.[k] !== null) res[k] = selectedBatchConfig[k];
+                      else if (pCfg[k] !== undefined && pCfg[k] !== null) res[k] = pCfg[k];
+                      else if (selectedProduct?.[k] !== undefined && selectedProduct?.[k] !== null) res[k] = selectedProduct[k];
+                    });
+                    res.customLights = (Array.isArray(bCfg.customLights) && bCfg.customLights.length > 0)
+                      ? bCfg.customLights
+                      : (Array.isArray(selectedBatchConfig?.customLights) && selectedBatchConfig.customLights.length > 0)
                       ? selectedBatchConfig.customLights
-                      : (Array.isArray(selectedBatchConfig?.ar_config?.customLights) && selectedBatchConfig.ar_config.customLights.length > 0)
-                      ? selectedBatchConfig.ar_config.customLights
-                      : (Array.isArray(selectedProduct?.customLights) && selectedProduct.customLights.length > 0)
-                      ? selectedProduct.customLights
-                      : (Array.isArray(selectedProduct?.ar_config?.customLights) ? selectedProduct.ar_config.customLights : [])
-                  }}
+                      : (Array.isArray(pCfg.customLights) && pCfg.customLights.length > 0)
+                      ? pCfg.customLights
+                      : (Array.isArray(selectedProduct?.customLights) ? selectedProduct.customLights : []);
+                    res.custom3DTexts = (Array.isArray(bCfg.custom3DTexts) && bCfg.custom3DTexts.length > 0)
+                      ? bCfg.custom3DTexts
+                      : (Array.isArray(selectedBatchConfig?.custom3DTexts) && selectedBatchConfig.custom3DTexts.length > 0)
+                      ? selectedBatchConfig.custom3DTexts
+                      : (Array.isArray(pCfg.custom3DTexts) && pCfg.custom3DTexts.length > 0)
+                      ? pCfg.custom3DTexts
+                      : (Array.isArray(selectedProduct?.custom3DTexts) ? selectedProduct.custom3DTexts : []);
+                    res.additionalGeometries = (Array.isArray(bCfg.additionalGeometries) && bCfg.additionalGeometries.length > 0)
+                      ? bCfg.additionalGeometries
+                      : (Array.isArray(selectedBatchConfig?.additionalGeometries) && selectedBatchConfig.additionalGeometries.length > 0)
+                      ? selectedBatchConfig.additionalGeometries
+                      : (Array.isArray(pCfg.additionalGeometries) && pCfg.additionalGeometries.length > 0)
+                      ? pCfg.additionalGeometries
+                      : (Array.isArray(selectedProduct?.additionalGeometries) ? selectedProduct.additionalGeometries : []);
+                    return res;
+                  })()}
                   assetName={selectedProduct?.name || selectedProduct?.id}
                   assetId={selectedProduct?.id}
                 />

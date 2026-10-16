@@ -106,10 +106,17 @@ function ProductDetails() {
             'ambientColor', 'ambientIntensity',
             'dir1Color', 'dir1Intensity', 'dir1Position',
             'dir2Color', 'dir2Intensity', 'dir2Position',
-            'rimColor', 'rimIntensity', 'rimPosition'
+            'rimColor', 'rimIntensity', 'rimPosition',
+            'modelScale', 'modelPosition', 'modelRotation',
+            'modelRotX', 'modelRotY', 'modelRotZ',
+            'modelPosX', 'modelPosY', 'modelPosZ', 'modelRotSpeed',
+            'matMetalness', 'matRoughness', 'matEmissive', 'matEmissiveIntensity',
+            'matWireframe', 'matOpacity', 'meshOverrides'
           ];
           keys.forEach((k) => {
             if (data[k] !== undefined && data[k] !== null) res[k] = data[k];
+            else if (data.ar_config?.[k] !== undefined && data.ar_config?.[k] !== null) res[k] = data.ar_config[k];
+            else if (data.config?.[k] !== undefined && data.config?.[k] !== null) res[k] = data.config[k];
           });
           return res;
         };
@@ -125,13 +132,13 @@ function ProductDetails() {
               ...bLighting,
               customLights: (Array.isArray(bLighting.customLights) && bLighting.customLights.length > 0)
                 ? bLighting.customLights
-                : mergedConfig.customLights,
+                : (Array.isArray(mergedConfig.customLights) ? mergedConfig.customLights : []),
               custom3DTexts: (Array.isArray(bLighting.custom3DTexts) && bLighting.custom3DTexts.length > 0)
                 ? bLighting.custom3DTexts
-                : mergedConfig.custom3DTexts,
+                : (Array.isArray(mergedConfig.custom3DTexts) ? mergedConfig.custom3DTexts : []),
               additionalGeometries: (Array.isArray(bLighting.additionalGeometries) && bLighting.additionalGeometries.length > 0)
                 ? bLighting.additionalGeometries
-                : mergedConfig.additionalGeometries
+                : (Array.isArray(mergedConfig.additionalGeometries) ? mergedConfig.additionalGeometries : [])
             };
           }
         } catch (bErr) {

@@ -157,6 +157,41 @@ export const GEOMETRY_DEFINITIONS = [
       { key: 'radius', label: 'Radius', min: 0.1, max: 4, step: 0.05, unit: 'm' },
       { key: 'detail', label: 'Subdivision Detail Level', min: 0, max: 4, step: 1 }
     ]
+  },
+  {
+    id: 'vectorExtrude',
+    name: 'Vector Pen Tool (Extruded Face)',
+    category: 'Vector / Pen',
+    icon: 'gesture',
+    description: 'Photoshop-style vector pen tool: draw custom bezier curves, connect a closed face, and extrude into 3D geometry.',
+    defaultParams: {
+      depth: 0.25,
+      bevelEnabled: true,
+      bevelThickness: 0.03,
+      bevelSize: 0.02,
+      bevelSegments: 3,
+      curveSegments: 24,
+      scaleFactor: 0.005,
+      points: [
+        { x: 0, y: -110 },
+        { x: 30, y: -35 },
+        { x: 110, y: -35 },
+        { x: 45, y: 15 },
+        { x: 70, y: 95 },
+        { x: 0, y: 45 },
+        { x: -70, y: 95 },
+        { x: -45, y: 15 },
+        { x: -110, y: -35 },
+        { x: -30, y: -35 }
+      ]
+    },
+    paramConfigs: [
+      { key: 'depth', label: 'Extrude Depth', min: 0.02, max: 2.0, step: 0.02, unit: 'm' },
+      { key: 'bevelThickness', label: 'Bevel Thickness', min: 0.0, max: 0.2, step: 0.01, unit: 'm' },
+      { key: 'bevelSize', label: 'Bevel Size', min: 0.0, max: 0.2, step: 0.01, unit: 'm' },
+      { key: 'bevelSegments', label: 'Bevel Segments', min: 1, max: 8, step: 1 },
+      { key: 'curveSegments', label: 'Curve Smoothness', min: 6, max: 48, step: 2 }
+    ]
   }
 ];
 
@@ -181,9 +216,10 @@ export const COLOR_SWATCHES = [
 
 export function createPrimitiveThreeGeometry(type, params, THREE_LIB = THREE) {
   const p = params || {};
+  let geom;
   switch (type) {
     case 'box':
-      return new THREE_LIB.BoxGeometry(
+      geom = new THREE_LIB.BoxGeometry(
         p.width || 1,
         p.height || 1,
         p.depth || 1,
@@ -191,34 +227,39 @@ export function createPrimitiveThreeGeometry(type, params, THREE_LIB = THREE) {
         p.heightSegments || 1,
         p.depthSegments || 1
       );
+      break;
     case 'sphere':
-      return new THREE_LIB.SphereGeometry(
+      geom = new THREE_LIB.SphereGeometry(
         p.radius || 0.6,
         p.widthSegments || 32,
         p.heightSegments || 32
       );
+      break;
     case 'cylinder':
-      return new THREE_LIB.CylinderGeometry(
+      geom = new THREE_LIB.CylinderGeometry(
         p.radiusTop !== undefined ? p.radiusTop : 0.5,
         p.radiusBottom !== undefined ? p.radiusBottom : 0.5,
         p.height || 1.2,
         p.radialSegments || 32
       );
+      break;
     case 'cone':
-      return new THREE_LIB.ConeGeometry(
+      geom = new THREE_LIB.ConeGeometry(
         p.radius || 0.6,
         p.height || 1.3,
         p.radialSegments || 32
       );
+      break;
     case 'torus':
-      return new THREE_LIB.TorusGeometry(
+      geom = new THREE_LIB.TorusGeometry(
         p.radius || 0.65,
         p.tube || 0.22,
         p.radialSegments || 24,
         p.tubularSegments || 48
       );
+      break;
     case 'torusKnot':
-      return new THREE_LIB.TorusKnotGeometry(
+      geom = new THREE_LIB.TorusKnotGeometry(
         p.radius || 0.55,
         p.tube || 0.16,
         p.tubularSegments || 80,
@@ -226,58 +267,127 @@ export function createPrimitiveThreeGeometry(type, params, THREE_LIB = THREE) {
         p.p || 2,
         p.q || 3
       );
+      break;
     case 'capsule':
       if (typeof THREE_LIB.CapsuleGeometry === 'function') {
-        return new THREE_LIB.CapsuleGeometry(
+        geom = new THREE_LIB.CapsuleGeometry(
           p.radius || 0.4,
           p.length || 0.9,
           p.capSegments || 8,
           p.radialSegments || 24
         );
+      } else {
+        geom = new THREE_LIB.CylinderGeometry(
+          p.radius || 0.4,
+          p.radius || 0.4,
+          (p.length || 0.9) + (p.radius || 0.4) * 2,
+          24
+        );
       }
-      return new THREE_LIB.CylinderGeometry(
-        p.radius || 0.4,
-        p.radius || 0.4,
-        (p.length || 0.9) + (p.radius || 0.4) * 2,
-        24
-      );
+      break;
     case 'plane':
-      return new THREE_LIB.PlaneGeometry(
+      geom = new THREE_LIB.PlaneGeometry(
         p.width || 2.5,
         p.height || 2.5,
         p.widthSegments || 1,
         p.heightSegments || 1
       );
+      break;
     case 'ring':
-      return new THREE_LIB.RingGeometry(
+      geom = new THREE_LIB.RingGeometry(
         p.innerRadius || 0.35,
         p.outerRadius || 0.85,
         p.thetaSegments || 32
       );
+      break;
     case 'icosahedron':
-      return new THREE_LIB.IcosahedronGeometry(
+      geom = new THREE_LIB.IcosahedronGeometry(
         p.radius || 0.7,
         p.detail || 0
       );
+      break;
     case 'dodecahedron':
-      return new THREE_LIB.DodecahedronGeometry(
+      geom = new THREE_LIB.DodecahedronGeometry(
         p.radius || 0.7,
         p.detail || 0
       );
+      break;
     case 'tetrahedron':
-      return new THREE_LIB.TetrahedronGeometry(
+      geom = new THREE_LIB.TetrahedronGeometry(
         p.radius || 0.75,
         p.detail || 0
       );
+      break;
+    case 'vectorExtrude':
+    case 'extrude': {
+      const rawPoints = p.points || [];
+      if (!Array.isArray(rawPoints) || rawPoints.length < 3) {
+        geom = new THREE_LIB.BoxGeometry(1, 1, 0.2);
+        break;
+      }
+      const shape = new THREE_LIB.Shape();
+      const scale = Number(p.scaleFactor ?? 0.005);
+      const p0 = rawPoints[0];
+      shape.moveTo(p0.x * scale, -p0.y * scale);
+
+      for (let i = 0; i < rawPoints.length; i++) {
+        const curr = rawPoints[i];
+        const next = rawPoints[(i + 1) % rawPoints.length];
+
+        const cp1 = curr.handleOut
+          ? { x: (curr.x + curr.handleOut.x) * scale, y: -(curr.y + curr.handleOut.y) * scale }
+          : null;
+        const cp2 = next.handleIn
+          ? { x: (next.x + next.handleIn.x) * scale, y: -(next.y + next.handleIn.y) * scale }
+          : null;
+
+        if (cp1 || cp2) {
+          const c1 = cp1 || { x: curr.x * scale, y: -curr.y * scale };
+          const c2 = cp2 || { x: next.x * scale, y: -next.y * scale };
+          shape.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, next.x * scale, -next.y * scale);
+        } else {
+          shape.lineTo(next.x * scale, -next.y * scale);
+        }
+      }
+      shape.closePath();
+
+      const extrudeSettings = {
+        depth: Number(p.depth ?? 0.25),
+        bevelEnabled: p.bevelEnabled !== false,
+        bevelThickness: Number(p.bevelThickness ?? 0.03),
+        bevelSize: Number(p.bevelSize ?? 0.02),
+        bevelSegments: Math.max(1, Number(p.bevelSegments ?? 3)),
+        curveSegments: Math.max(6, Number(p.curveSegments ?? 24)),
+        steps: Math.max(1, Number(p.steps ?? 1))
+      };
+
+      try {
+        geom = new THREE_LIB.ExtrudeGeometry(shape, extrudeSettings);
+      } catch (err) {
+        console.warn('[geometryHelper] ExtrudeGeometry creation fallback:', err);
+        geom = new THREE_LIB.BoxGeometry(1, 1, 0.2);
+      }
+      break;
+    }
     default:
-      return new THREE_LIB.BoxGeometry(1, 1, 1);
+      geom = new THREE_LIB.BoxGeometry(1, 1, 1);
+      break;
   }
+
+  if (geom && typeof geom.center === 'function') {
+    geom.center();
+    geom.computeVertexNormals();
+  }
+
+  return geom;
 }
 
 export function createPrimitiveMaterial(options = {}, THREE_LIB = THREE) {
   const color = options.color || '#38bdf8';
   const roughness = options.roughness !== undefined ? Number(options.roughness) : 0.35;
   const metalness = options.metalness !== undefined ? Number(options.metalness) : 0.15;
+  const emissive = options.emissive || '#000000';
+  const emissiveIntensity = options.emissiveIntensity !== undefined ? Number(options.emissiveIntensity) : 0.0;
   const wireframe = Boolean(options.wireframe);
   const flatShading = Boolean(options.flatShading);
 
@@ -285,6 +395,8 @@ export function createPrimitiveMaterial(options = {}, THREE_LIB = THREE) {
     color: new THREE_LIB.Color(color),
     roughness,
     metalness,
+    emissive: new THREE_LIB.Color(emissive),
+    emissiveIntensity,
     wireframe,
     flatShading,
     side: THREE_LIB.DoubleSide

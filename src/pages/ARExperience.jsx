@@ -1,9 +1,11 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, Fragment } from 'react';
 import { useParams } from 'react-router-dom';
 import 'aframe';
 import 'mind-ar/dist/mindar-image-aframe.prod.js';
 import * as THREE from 'three';
 import BuyNowButton from '../components/BuyNowButton';
+import ARLightDiagnosticsDrawer from '../components/ARLightDiagnosticsDrawer';
+import { useAuth } from '../context/AuthContext';
 import { isYouTubeShortUrl } from '../utils/aframe-components';
 import { db, storage } from '../firebase';
 import { doc, getDoc, getDocFromServer } from 'firebase/firestore';
@@ -18,6 +20,16 @@ if (typeof THREE !== 'undefined' && THREE.Cache) {
 const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const { batchId: routeBatchId } = useParams();
   const batchId = (propBatchId || routeBatchId || '').trim();
+
+  // Superuser Authentication Guard - Diagnostics and DevTools are strictly restricted to authenticated superusers
+  const { currentUser, isSuperAdmin, isSuperUser } = useAuth();
+  const isSuperUserAuthenticated = Boolean(
+    currentUser && (
+      isSuperAdmin || 
+      isSuperUser || 
+      currentUser.email?.toLowerCase() === 'brandonrobinson81@gmail.com'
+    )
+  );
 
   const [arData, setArData] = useState(null);
   const [error, setError] = useState(null);
@@ -202,6 +214,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   }, [cameraEnabled, setCameraView]);
 
   const logToScreen = (tag, data) => {
+    if (!isSuperUserAuthenticated) return;
     const payload = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
     const timestamp = new Date().toLocaleTimeString();
     setDiagnosticLogs((prev) => [
@@ -229,22 +242,25 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
     const fetchPayload = async () => {
       try {
-        logToScreen('ROUTER_FETCH', `Loading configuration for batch: ${batchId}...`);
-        const response = await fetch(`https://loomrouter-5qjmmwdvcq-uc.a.run.app/s/${batchId}?t=${Date.now()}`, {
-          cache: 'no-store',
-          headers: {
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': '0'
+        let data = null;
+        try {
+          logToScreen('ROUTER_FETCH', `Loading configuration for batch: ${batchId}...`);
+          const response = await fetch(`https://loomrouter-5qjmmwdvcq-uc.a.run.app/s/${batchId}?t=${Date.now()}`, {
+            cache: 'no-store',
+            headers: {
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              'Pragma': 'no-cache',
+              'Expires': '0'
+            }
+          });
+          if (response.ok) {
+            data = await response.json();
+            logToScreen('ROUTER_PAYLOAD', data);
+          } else {
+            logToScreen('ROUTER_WARN', `Batch router returned HTTP ${response.status}. Falling back to Firestore...`);
           }
-        });
-        if (!response.ok) throw new Error(`Batch router error: HTTP ${response.status}`);
-
-        const data = await response.json();
-        logToScreen('ROUTER_PAYLOAD', data);
-
-        if (!data || !data.arExperience) {
-          throw new Error('No 3D experience configuration found for this batch.');
+        } catch (fetchErr) {
+          logToScreen('ROUTER_FETCH_WARN', `Batch router request failed (${fetchErr.message}). Falling back to Firestore...`);
         }
 
         // Fetch live ar_config directly from Firestore server (bypassing local client cache)
@@ -283,6 +299,44 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           logToScreen('FIRESTORE_ASSET_WARN', fsErr.message);
         }
 
+        if (!data || !data.arExperience || !data.arExperience.modelUrl) {
+          const docSource = assetDocData || batchDocData;
+          if (docSource) {
+            const rawGltf = docSource.gltf_url || docSource.modelUrl || docSource.arExperience?.modelUrl || docSource.gltf_file_path || '';
+            let resolvedGltf = rawGltf;
+            if (rawGltf && !rawGltf.startsWith('http')) {
+              try {
+                resolvedGltf = await getDownloadURL(ref(storage, rawGltf));
+              } catch (storageGltfErr) {
+                console.warn('Could not resolve gltf storage path:', storageGltfErr);
+              }
+            }
+            const rawMind = docSource.mind_file_url || docSource.mind_url || docSource.trackingConfig?.mindUrl || docSource.mind_file_path || '';
+            let resolvedMind = rawMind;
+            if (rawMind && !rawMind.startsWith('http')) {
+              try {
+                resolvedMind = await getDownloadURL(ref(storage, rawMind));
+              } catch (storageMindErr) {
+                console.warn('Could not resolve mind storage path:', storageMindErr);
+              }
+            }
+            data = {
+              asset_id: targetAssetId,
+              arExperience: {
+                modelUrl: resolvedGltf,
+                config: docSource.arExperience?.config || docSource.ar_config || docSource.config || {}
+              },
+              trackingConfig: {
+                mindUrl: resolvedMind
+              }
+            };
+          }
+        }
+
+        if (!data || !data.arExperience || !data.arExperience.modelUrl) {
+          throw new Error('No 3D experience configuration found for this batch.');
+        }
+
         const extractConfigFields = (docData) => {
           if (!docData || typeof docData !== 'object') return {};
           const cfg = {};
@@ -306,11 +360,18 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             'ambientColor', 'ambientIntensity',
             'dir1Color', 'dir1Intensity', 'dir1Position',
             'dir2Color', 'dir2Intensity', 'dir2Position',
-            'rimColor', 'rimIntensity', 'rimPosition'
+            'rimColor', 'rimIntensity', 'rimPosition',
+            'modelScale', 'modelPosition', 'modelRotation',
+            'modelRotX', 'modelRotY', 'modelRotZ',
+            'modelPosX', 'modelPosY', 'modelPosZ', 'modelRotSpeed',
+            'matMetalness', 'matRoughness', 'matEmissive', 'matEmissiveIntensity',
+            'matWireframe', 'matOpacity', 'meshOverrides'
           ];
           directLightingKeys.forEach((key) => {
             if (docData[key] !== undefined && docData[key] !== null) {
               cfg[key] = docData[key];
+            } else if (docData.ar_config?.[key] !== undefined && docData.ar_config?.[key] !== null) {
+              cfg[key] = docData.ar_config[key];
             }
           });
           return cfg;
@@ -457,6 +518,17 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           data?.ar_config?.customLights
         );
 
+        const resolvedCustomModels = getNonEmptyArray(
+          localPreviewConfig?.customModels,
+          localPreviewConfig?.ar_config?.customModels,
+          batchDocData?.customModels,
+          batchDocData?.ar_config?.customModels,
+          assetDocData?.customModels,
+          assetDocData?.ar_config?.customModels,
+          data?.customModels,
+          data?.ar_config?.customModels
+        );
+
         const mergedConfig = {
           ...(data.arExperience?.config || {}),
           ...(data.ar_config || {}),
@@ -477,6 +549,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           ...(localPreviewConfig?.ar_config?.particleConfig ? { particleConfig: localPreviewConfig.ar_config.particleConfig } : {}),
           ...(localPreviewConfig?.particleConfig ? { particleConfig: localPreviewConfig.particleConfig } : {}),
           additionalGeometries: resolvedGeometries,
+          customModels: resolvedCustomModels,
           custom3DTexts: resolved3DTexts,
           customLights: resolvedLights,
           ...(urlPortalOverride ? { portalConfig: { ...(liveConfig?.portalConfig || {}), ...(localPreviewConfig?.portalConfig || {}), ...urlPortalOverride } } : {}),
@@ -748,6 +821,101 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     });
   };
 
+  // WebGL Context Preservation & Clean Resource Teardown
+  useEffect(() => {
+    const sceneEl = sceneRef.current || document.querySelector('a-scene');
+    if (!sceneEl) return;
+
+    let canvas = sceneEl.canvas;
+    let handleContextLost = null;
+    let handleContextRestored = null;
+
+    const setupCanvasListeners = (cvs) => {
+      if (!cvs || cvs.__webgl_handlers_attached) return;
+      cvs.__webgl_handlers_attached = true;
+
+      handleContextLost = (event) => {
+        // Critical: preventDefault informs browser that the app will handle context recovery
+        event.preventDefault();
+        console.warn('[ARExperience] WebGL context lost on canvas. Waiting for GPU restoration...');
+      };
+
+      handleContextRestored = () => {
+        console.info('[ARExperience] WebGL context successfully restored by browser.');
+        if (sceneEl.renderer && sceneEl.object3D && sceneEl.camera) {
+          try {
+            sceneEl.renderer.render(sceneEl.object3D, sceneEl.camera);
+          } catch (e) {
+            console.warn('[ARExperience] Render post-context restore warning:', e);
+          }
+        }
+      };
+
+      cvs.addEventListener('webglcontextlost', handleContextLost, false);
+      cvs.addEventListener('webglcontextrestored', handleContextRestored, false);
+    };
+
+    if (canvas) {
+      setupCanvasListeners(canvas);
+    } else {
+      const onRenderStart = () => {
+        if (sceneEl.canvas) {
+          setupCanvasListeners(sceneEl.canvas);
+        }
+      };
+      sceneEl.addEventListener('renderstart', onRenderStart, { once: true });
+    }
+
+    return () => {
+      try {
+        if (canvas) {
+          if (handleContextLost) canvas.removeEventListener('webglcontextlost', handleContextLost);
+          if (handleContextRestored) canvas.removeEventListener('webglcontextrestored', handleContextRestored);
+          canvas.__webgl_handlers_attached = false;
+        }
+
+        // Deep dispose scene geometries, materials, textures to prevent VRAM leaks
+        if (sceneEl.object3D) {
+          sceneEl.object3D.traverse((child) => {
+            if (child.geometry) {
+              try { child.geometry.dispose(); } catch {}
+            }
+            if (child.material) {
+              const materials = Array.isArray(child.material) ? child.material : [child.material];
+              materials.forEach((mat) => {
+                if (!mat) return;
+                Object.keys(mat).forEach((key) => {
+                  if (mat[key] && typeof mat[key].dispose === 'function') {
+                    try { mat[key].dispose(); } catch {}
+                  }
+                });
+                try { mat.dispose(); } catch {}
+              });
+            }
+          });
+        }
+
+        // Cleanly dispose renderer and free WebGL drawing context
+        if (sceneEl.renderer) {
+          const gl = sceneEl.renderer.getContext();
+          try {
+            sceneEl.renderer.dispose();
+          } catch {}
+          if (gl) {
+            try {
+              const loseContextExt = gl.getExtension('WEBGL_lose_context');
+              if (loseContextExt) {
+                loseContextExt.loseContext();
+              }
+            } catch {}
+          }
+        }
+      } catch (teardownErr) {
+        console.warn('[ARExperience] Cleanup warning during scene unmount:', teardownErr);
+      }
+    };
+  }, []);
+
   // 3. Attach MindAR & Model Event Listeners
   useEffect(() => {
     const sceneEl = sceneRef.current;
@@ -866,18 +1034,79 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         }
       });
 
-      const isFlipX = !!(arData?.config?.videoFlipX);
-      const targetMesh = arData?.config?.videoTargetMesh || 'auto';
+      // Force target-entity matrixWorld to update with MindAR's camera tracking
+      const targetEntity = document.getElementById('target-entity');
+      if (targetEntity && targetEntity.object3D) {
+        targetEntity.object3D.visible = true;
+        targetEntity.object3D.matrixWorldNeedsUpdate = true;
+        targetEntity.object3D.updateMatrixWorld(true);
+      }
 
-      ['ar-model', 'preview-model', 'ar-model-forced'].forEach((id) => {
-        const modelEl = document.getElementById(id);
-        if (modelEl) {
-          const mesh = modelEl.getObject3D('mesh');
-          if (mesh) {
-            applyFlipXToMesh(mesh, isFlipX, targetMesh);
+      // Ensure all custom lights refresh matrix & visibility on marker lock
+      document.querySelectorAll('[ar-custom-lights]').forEach((el) => {
+        if (el && el.object3D) {
+          el.object3D.visible = true;
+          el.object3D.matrixWorldNeedsUpdate = true;
+          el.object3D.updateMatrixWorld(true);
+        }
+        if (el && el.components && el.components['ar-custom-lights']) {
+          const comp = el.components['ar-custom-lights'];
+          if (comp.rootGroup) {
+            comp.rootGroup.visible = true;
+            comp.rootGroup.children.forEach((c) => {
+              c.visible = c.userData?.visible !== false;
+            });
+            comp.rootGroup.updateMatrixWorld(true);
+          }
+          if (typeof comp.onTargetFound === 'function') {
+            comp.onTargetFound();
           }
         }
       });
+
+      const isFlipX = !!(arData?.config?.videoFlipX);
+      const targetMesh = arData?.config?.videoTargetMesh || 'auto';
+
+      const refreshAllMaterials = () => {
+        if (sceneEl?.renderer?.renderLists?.dispose) {
+          try { sceneEl.renderer.renderLists.dispose(); } catch (e) {}
+        }
+
+        if (targetEntity && targetEntity.object3D) {
+          targetEntity.object3D.matrixWorldNeedsUpdate = true;
+          targetEntity.object3D.updateMatrixWorld(true);
+        }
+
+        ['ar-model', 'preview-model', 'ar-model-forced'].forEach((id) => {
+          const modelEl = document.getElementById(id);
+          if (modelEl) {
+            const mesh = modelEl.getObject3D('mesh');
+            if (mesh) {
+              applyFlipXToMesh(mesh, isFlipX, targetMesh);
+            }
+          }
+        });
+
+        // Recompile ALL meshes in the scene graph (GLTF models, 3D texts, geometries)
+        // so Three.js includes newly active point/spot lights in shaders
+        if (sceneEl && sceneEl.object3D) {
+          sceneEl.object3D.traverse((node) => {
+            if (node.isMesh && node.material) {
+              const mats = Array.isArray(node.material) ? node.material : [node.material];
+              mats.forEach((m) => {
+                m.needsUpdate = true;
+              });
+            }
+          });
+        }
+      };
+
+      refreshAllMaterials();
+      requestAnimationFrame(refreshAllMaterials);
+      setTimeout(refreshAllMaterials, 80);
+      setTimeout(refreshAllMaterials, 250);
+      setTimeout(refreshAllMaterials, 600);
+      setTimeout(refreshAllMaterials, 1200);
     };
 
     const onTargetLost = (e) => {
@@ -1004,6 +1233,10 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                 }
               }
               if (node.material) {
+                const mats = Array.isArray(node.material) ? node.material : [node.material];
+                mats.forEach((m) => {
+                  m.needsUpdate = true;
+                });
                 const mat = node.material;
                 const hasMap = mat.map ? 'YES' : 'NO';
                 const matType = mat.type || 'Standard';
@@ -1077,10 +1310,18 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     }
   });
 
+  const onTargetUpdate = () => {
+    if (targetEl && targetEl.object3D) {
+      targetEl.object3D.matrixWorldNeedsUpdate = true;
+      targetEl.object3D.updateMatrixWorld(true);
+    }
+  };
+
   const targetEl = document.getElementById('target-entity');
   if (targetEl) {
     targetEl.addEventListener('targetFound', onTargetFound);
     targetEl.addEventListener('targetLost', onTargetLost);
+    targetEl.addEventListener('targetUpdate', onTargetUpdate);
   }
 
   return () => {
@@ -1100,6 +1341,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     if (targetEl) {
       targetEl.removeEventListener('targetFound', onTargetFound);
       targetEl.removeEventListener('targetLost', onTargetLost);
+      targetEl.removeEventListener('targetUpdate', onTargetUpdate);
     }
   };
 }, [arData, cameraEnabled, getOrbitControls, getThreeCamera]);
@@ -1223,19 +1465,44 @@ useEffect(() => {
 
   // Extract Scene & Lighting Properties
   const cfg = arData.config || {};
+
+  const customLights = (Array.isArray(cfg?.customLights) && cfg.customLights.length > 0)
+    ? cfg.customLights
+    : (Array.isArray(cfg?.ar_config?.customLights) && cfg.ar_config.customLights.length > 0)
+    ? cfg.ar_config.customLights
+    : (Array.isArray(arData?.customLights) && arData.customLights.length > 0)
+    ? arData.customLights
+    : (Array.isArray(arData?.config?.customLights) && arData.config.customLights.length > 0)
+    ? arData.config.customLights
+    : (Array.isArray(arData?.ar_config?.customLights) && arData.ar_config.customLights.length > 0)
+    ? arData.ar_config.customLights
+    : (Array.isArray(cfg?.customLights) ? cfg.customLights : []);
+  const hasCustomLights = Array.isArray(customLights) && customLights.some((l) => l && l.visible !== false);
+  const customLightsAttr = customLights && customLights.length > 0
+    ? `lights: ${encodeURIComponent(JSON.stringify(customLights))}; showHelpers: false; showBulbs: false;`
+    : '';
+
   const ambientColor = cfg.ambientColor || '#ffffff';
-  const ambientIntensity = cfg.ambientIntensity ?? 1.4;
+  const ambientIntensity = cfg.ambientIntensity !== undefined
+    ? Number(cfg.ambientIntensity)
+    : (hasCustomLights ? 0.6 : 1.4);
 
   const dir1Color = cfg.dir1Color || '#ffffff';
-  const dir1Intensity = cfg.dir1Intensity ?? 2.2;
+  const dir1Intensity = cfg.dir1Intensity !== undefined
+    ? (hasCustomLights ? Number(cfg.dir1Intensity) * 0.45 : Number(cfg.dir1Intensity))
+    : (hasCustomLights ? 0.9 : 2.2);
   const dir1Position = cfg.dir1Position || '2 4 3';
 
   const dir2Color = cfg.dir2Color || '#ffffff';
-  const dir2Intensity = cfg.dir2Intensity ?? 1.2;
+  const dir2Intensity = cfg.dir2Intensity !== undefined
+    ? (hasCustomLights ? Number(cfg.dir2Intensity) * 0.45 : Number(cfg.dir2Intensity))
+    : (hasCustomLights ? 0.5 : 1.2);
   const dir2Position = cfg.dir2Position || '-2 -1 -2';
 
   const rimColor = cfg.rimColor || '#818cf8';
-  const rimIntensity = cfg.rimIntensity ?? 1.0;
+  const rimIntensity = cfg.rimIntensity !== undefined
+    ? (hasCustomLights ? Number(cfg.rimIntensity) * 0.45 : Number(cfg.rimIntensity))
+    : (hasCustomLights ? 0.4 : 1.0);
   const rimPosition = cfg.rimPosition || '0 3 -3';
 
   const studioLightingAttr = `enabled: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${rimIntensity}; rimPosition: ${rimPosition};`;
@@ -1362,6 +1629,21 @@ useEffect(() => {
     ? `geometries: ${encodeURIComponent(JSON.stringify(additionalGeometries))};`
     : '';
 
+  const customModels = (Array.isArray(cfg?.customModels) && cfg.customModels.length > 0)
+    ? cfg.customModels
+    : (Array.isArray(cfg?.ar_config?.customModels) && cfg.ar_config.customModels.length > 0)
+    ? cfg.ar_config.customModels
+    : (Array.isArray(arData?.customModels) && arData.customModels.length > 0)
+    ? arData.customModels
+    : (Array.isArray(arData?.config?.customModels) && arData.config.customModels.length > 0)
+    ? arData.config.customModels
+    : (Array.isArray(arData?.ar_config?.customModels) && arData.ar_config.customModels.length > 0)
+    ? arData.ar_config.customModels
+    : (Array.isArray(cfg?.customModels) ? cfg.customModels : []);
+  const customModelsAttr = customModels && customModels.length > 0
+    ? `models: ${encodeURIComponent(JSON.stringify(customModels))};`
+    : '';
+
   const custom3DTexts = (Array.isArray(cfg?.custom3DTexts) && cfg.custom3DTexts.length > 0)
     ? cfg.custom3DTexts
     : (Array.isArray(cfg?.ar_config?.custom3DTexts) && cfg.ar_config.custom3DTexts.length > 0)
@@ -1375,21 +1657,6 @@ useEffect(() => {
     : (Array.isArray(cfg?.custom3DTexts) ? cfg.custom3DTexts : []);
   const custom3DTextsAttr = custom3DTexts && custom3DTexts.length > 0
     ? `texts: ${encodeURIComponent(JSON.stringify(custom3DTexts))};`
-    : '';
-
-  const customLights = (Array.isArray(cfg?.customLights) && cfg.customLights.length > 0)
-    ? cfg.customLights
-    : (Array.isArray(cfg?.ar_config?.customLights) && cfg.ar_config.customLights.length > 0)
-    ? cfg.ar_config.customLights
-    : (Array.isArray(arData?.customLights) && arData.customLights.length > 0)
-    ? arData.customLights
-    : (Array.isArray(arData?.config?.customLights) && arData.config.customLights.length > 0)
-    ? arData.config.customLights
-    : (Array.isArray(arData?.ar_config?.customLights) && arData.ar_config.customLights.length > 0)
-    ? arData.ar_config.customLights
-    : (Array.isArray(cfg?.customLights) ? cfg.customLights : []);
-  const customLightsAttr = customLights && customLights.length > 0
-    ? `lights: ${encodeURIComponent(JSON.stringify(customLights))}; showHelpers: false;`
     : '';
 
   const webCfg = cfg?.websiteLayer || cfg?.webLayer || arData?.websiteLayer || null;
@@ -1452,18 +1719,18 @@ useEffect(() => {
         )}
 
         {/* Right: Quick Action Controls */}
-        <div className="flex items-center gap-2 pointer-events-auto">
+        <div className="flex items-center gap-1.5 sm:gap-2 pointer-events-auto">
           {/* Camera / 3D Preview Toggle */}
           <button
             onClick={() => setCameraEnabled(!cameraEnabled)}
-            className={`w-10 h-10 flex items-center justify-center rounded-full border shadow-lg backdrop-blur-md active:scale-95 transition-all ${
+            className={`w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-full border shadow-lg backdrop-blur-md active:scale-95 transition-all ${
               cameraEnabled
                 ? 'bg-black/60 text-white border-white/10 hover:bg-black/80'
                 : 'bg-indigo-600 text-white border-indigo-400/40 hover:bg-indigo-500'
             }`}
             title={cameraEnabled ? 'Switch to 3D Preview Mode' : 'Switch to AR Camera Mode'}
           >
-            <span className="material-symbols-outlined text-lg">
+            <span className="material-symbols-outlined text-base sm:text-lg">
               {cameraEnabled ? 'videocam' : '3d_rotation'}
             </span>
           </button>
@@ -1471,10 +1738,10 @@ useEffect(() => {
           {/* Media Play/Pause Button */}
           <button
             onClick={toggleMedia}
-            className="w-10 h-10 flex items-center justify-center bg-black/60 hover:bg-black/80 text-white rounded-full border border-white/10 shadow-lg backdrop-blur-md active:scale-95 transition-all"
+            className="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center bg-black/60 hover:bg-black/80 text-white rounded-full border border-white/10 shadow-lg backdrop-blur-md active:scale-95 transition-all"
             title={mediaPlaying ? 'Pause Video/Animations' : 'Play Video/Animations'}
           >
-            <span className="material-symbols-outlined text-lg">
+            <span className="material-symbols-outlined text-base sm:text-lg">
               {mediaPlaying ? 'pause' : 'play_arrow'}
             </span>
           </button>
@@ -1482,30 +1749,32 @@ useEffect(() => {
           {/* Media Audio Mute/Unmute Button */}
           <button
             onClick={toggleMediaMute}
-            className={`w-10 h-10 flex items-center justify-center text-white rounded-full border shadow-lg backdrop-blur-md active:scale-95 transition-all ${
+            className={`w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center text-white rounded-full border shadow-lg backdrop-blur-md active:scale-95 transition-all ${
               mediaMuted
                 ? 'bg-rose-600/80 hover:bg-rose-600 border-rose-400/30'
                 : 'bg-emerald-600/80 hover:bg-emerald-600 border-emerald-400/30'
             }`}
             title={mediaMuted ? 'Unmute Video Audio (Sound Off)' : 'Mute Video Audio (Sound On)'}
           >
-            <span className="material-symbols-outlined text-lg">
+            <span className="material-symbols-outlined text-base sm:text-lg">
               {mediaMuted ? 'volume_off' : 'volume_up'}
             </span>
           </button>
 
-          {/* Diagnostics Button */}
-          <button
-            onClick={() => setShowDiagnostics(!showDiagnostics)}
-            className={`w-10 h-10 flex items-center justify-center rounded-full border shadow-lg backdrop-blur-md active:scale-95 transition-all ${
-              showDiagnostics
-                ? 'bg-amber-500 text-black border-amber-300'
-                : 'bg-black/60 text-white border-white/10 hover:bg-black/80'
-            }`}
-            title="System Diagnostics HUD"
-          >
-            <span className="material-symbols-outlined text-lg">terminal</span>
-          </button>
+          {/* Diagnostics Button (Only for Authenticated Superusers) */}
+          {isSuperUserAuthenticated && (
+            <button
+              onClick={() => setShowDiagnostics(!showDiagnostics)}
+              className={`w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-full border shadow-lg backdrop-blur-md active:scale-95 transition-all ${
+                showDiagnostics
+                  ? 'bg-amber-500 text-black border-amber-300'
+                  : 'bg-black/60 text-white border-white/10 hover:bg-black/80'
+              }`}
+              title="AR Light Diagnostics & DevTools Drawer"
+            >
+              <span className="material-symbols-outlined text-base sm:text-lg">tune</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -1543,11 +1812,7 @@ useEffect(() => {
         >
         </a-camera>
 
-        {/* Dynamic Multi-Source Studio Lighting Rig: Illuminates models across all viewing and tracking modes */}
-        <a-entity
-          id="experience-lighting-rig"
-          ar-studio-lighting={studioLightingAttr}
-        ></a-entity>
+        {/* Dynamic Ambient Light Base for All Viewing Modes */}
         <a-entity
           id="experience-ambient-light"
           light={`type: ambient; color: ${ambientColor}; intensity: ${ambientIntensity};`}
@@ -1562,19 +1827,25 @@ useEffect(() => {
             <>
               <a-entity
                 id="target-dir1-light"
-                light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false;`}
+                light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false; target: #target-dir1-aim;`}
                 position={dir1Position}
-              ></a-entity>
+              >
+                <a-entity id="target-dir1-aim" position="0 0 0"></a-entity>
+              </a-entity>
               <a-entity
                 id="target-dir2-light"
-                light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false;`}
+                light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false; target: #target-dir2-aim;`}
                 position={dir2Position}
-              ></a-entity>
+              >
+                <a-entity id="target-dir2-aim" position="0 0 0"></a-entity>
+              </a-entity>
               <a-entity
                 id="target-rim-light"
-                light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false;`}
+                light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false; target: #target-rim-aim;`}
                 position={rimPosition}
-              ></a-entity>
+              >
+                <a-entity id="target-rim-aim" position="0 0 0"></a-entity>
+              </a-entity>
             </>
           )}
 
@@ -1620,6 +1891,13 @@ useEffect(() => {
             ></a-entity>
           )}
 
+          {cameraEnabled && customModels && customModels.length > 0 && (
+            <a-entity
+              id="ar-custom-models-anchor"
+              ar-custom-models={customModelsAttr}
+            ></a-entity>
+          )}
+
           {cameraEnabled && custom3DTexts && custom3DTexts.length > 0 && (
             <a-entity
               id="ar-3d-texts-anchor"
@@ -1629,7 +1907,7 @@ useEffect(() => {
 
           {cameraEnabled && customLights && customLights.length > 0 && (
             <a-entity
-              id="ar-custom-lights-anchor"
+              id="ar-custom-lights-target"
               ar-custom-lights={customLightsAttr}
             ></a-entity>
           )}
@@ -1650,19 +1928,25 @@ useEffect(() => {
           >
             <a-entity
               id="preview-dir1-light"
-              light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false;`}
+              light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false; target: #preview-dir1-aim;`}
               position={dir1Position}
-            ></a-entity>
+            >
+              <a-entity id="preview-dir1-aim" position="0 0 0"></a-entity>
+            </a-entity>
             <a-entity
               id="preview-dir2-light"
-              light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false;`}
+              light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false; target: #preview-dir2-aim;`}
               position={dir2Position}
-            ></a-entity>
+            >
+              <a-entity id="preview-dir2-aim" position="0 0 0"></a-entity>
+            </a-entity>
             <a-entity
               id="preview-rim-light"
-              light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false;`}
+              light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false; target: #preview-rim-aim;`}
               position={rimPosition}
-            ></a-entity>
+            >
+              <a-entity id="preview-rim-aim" position="0 0 0"></a-entity>
+            </a-entity>
 
             {!portalHideOutsideModel && (
               <a-gltf-model
@@ -1706,6 +1990,13 @@ useEffect(() => {
               ></a-entity>
             )}
 
+            {customModels && customModels.length > 0 && (
+              <a-entity
+                id="ar-custom-models-anchor-preview"
+                ar-custom-models={customModelsAttr}
+              ></a-entity>
+            )}
+
             {custom3DTexts && custom3DTexts.length > 0 && (
               <a-entity
                 id="ar-3d-texts-anchor-preview"
@@ -1715,7 +2006,7 @@ useEffect(() => {
 
             {customLights && customLights.length > 0 && (
               <a-entity
-                id="ar-custom-lights-anchor-preview"
+                id="ar-custom-lights-preview"
                 ar-custom-lights={customLightsAttr}
               ></a-entity>
             )}
@@ -1736,19 +2027,25 @@ useEffect(() => {
           >
             <a-entity
               id="force-dir1-light"
-              light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false;`}
+              light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false; target: #force-dir1-aim;`}
               position={dir1Position}
-            ></a-entity>
+            >
+              <a-entity id="force-dir1-aim" position="0 0 0"></a-entity>
+            </a-entity>
             <a-entity
               id="force-dir2-light"
-              light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false;`}
+              light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false; target: #force-dir2-aim;`}
               position={dir2Position}
-            ></a-entity>
+            >
+              <a-entity id="force-dir2-aim" position="0 0 0"></a-entity>
+            </a-entity>
             <a-entity
               id="force-rim-light"
-              light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false;`}
+              light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false; target: #force-rim-aim;`}
               position={rimPosition}
-            ></a-entity>
+            >
+              <a-entity id="force-rim-aim" position="0 0 0"></a-entity>
+            </a-entity>
             {!portalHideOutsideModel && (
               <a-gltf-model
                 id="ar-model-forced"
@@ -1791,6 +2088,13 @@ useEffect(() => {
               ></a-entity>
             )}
 
+            {customModels && customModels.length > 0 && (
+              <a-entity
+                id="ar-custom-models-anchor-forced"
+                ar-custom-models={customModelsAttr}
+              ></a-entity>
+            )}
+
             {custom3DTexts && custom3DTexts.length > 0 && (
               <a-entity
                 id="ar-3d-texts-anchor-forced"
@@ -1800,7 +2104,7 @@ useEffect(() => {
 
             {customLights && customLights.length > 0 && (
               <a-entity
-                id="ar-custom-lights-anchor-forced"
+                id="ar-custom-lights-forced"
                 ar-custom-lights={customLightsAttr}
               ></a-entity>
             )}
@@ -2022,53 +2326,32 @@ useEffect(() => {
         />
       )}
 
-      {/* System Diagnostics Drawer */}
-      {showDiagnostics && (
-        <div className="absolute inset-x-0 bottom-0 max-h-[50dvh] bg-black/95 z-50 p-4 flex flex-col font-mono text-xs shadow-2xl border-t border-indigo-500/30 backdrop-blur-xl">
-          <div className="flex justify-between items-center pb-2 mb-2 border-b border-neutral-800">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span className="font-bold text-white tracking-wider">AR RUNTIME DIAGNOSTICS</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setForceShowModel(!forceShowModel)}
-                className={`px-3 py-1 text-[11px] font-bold rounded transition-colors ${
-                  forceShowModel ? 'bg-emerald-500 text-white' : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
-                }`}
-              >
-                {forceShowModel ? 'FORCE: ACTIVE' : 'FORCE RENDER'}
-              </button>
-              <button
-                onClick={() => {
-                  const text = diagnosticLogs.map((l) => `[${l.time}] [${l.tag}]\n${l.text}`).join('\n\n');
-                  navigator.clipboard?.writeText(text);
-                }}
-                className="px-3 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-[11px] font-bold rounded"
-              >
-                COPY LOGS
-              </button>
-              <button
-                onClick={() => setShowDiagnostics(false)}
-                className="w-6 h-6 flex items-center justify-center text-neutral-400 hover:text-white rounded"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
+      {/* Floating Quick Diagnostics & DevTools Toggle (Only for Authenticated Superusers) */}
+      {isSuperUserAuthenticated && (
+        <button
+          type="button"
+          onClick={() => setShowDiagnostics((prev) => !prev)}
+          className="fixed bottom-24 right-3 sm:right-6 z-40 px-3.5 py-2.5 bg-slate-950/90 hover:bg-slate-900 border border-amber-500/60 hover:border-amber-400 rounded-full shadow-2xl backdrop-blur-md flex items-center gap-2 font-mono text-xs font-bold text-amber-300 active:scale-95 transition-all cursor-pointer pointer-events-auto"
+          title="Open AR Light Diagnostics & DevTools Drawer"
+        >
+          <span className={`w-2.5 h-2.5 rounded-full ${trackingStatus === 'DETECTED' ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]' : 'bg-amber-400 animate-pulse'}`} />
+          <span>LIGHTS DEV</span>
+        </button>
+      )}
 
-          <div className="flex-1 overflow-y-auto space-y-2 pr-1 select-text">
-            {diagnosticLogs.map((log) => (
-              <div key={log.id} className="p-2 rounded bg-neutral-900/80 border border-neutral-800 leading-tight">
-                <div className="flex items-center justify-between text-[10px] text-neutral-500 mb-1">
-                  <span className="font-bold text-indigo-400">[{log.tag}]</span>
-                  <span>{log.time}</span>
-                </div>
-                <pre className="text-neutral-300 whitespace-pre-wrap break-all text-[11px] font-mono">{log.text}</pre>
-              </div>
-            ))}
-          </div>
-        </div>
+      {/* Real-Time AR Light Diagnostics & DevTools Drawer (Only for Authenticated Superusers) */}
+      {isSuperUserAuthenticated && (
+        <ARLightDiagnosticsDrawer
+          isOpen={showDiagnostics}
+          onClose={() => setShowDiagnostics(false)}
+          sceneRef={sceneRef}
+          diagnosticLogs={diagnosticLogs}
+          trackingStatus={trackingStatus}
+          cameraEnabled={cameraEnabled}
+          onForceRender={() => setForceShowModel(!forceShowModel)}
+          forceShowModel={forceShowModel}
+          requireSuperUser={true}
+        />
       )}
     </div>
   );

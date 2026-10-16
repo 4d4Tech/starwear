@@ -5,12 +5,14 @@ import {
   MATERIAL_PRESETS,
   COLOR_SWATCHES
 } from '../utils/geometryHelper';
+import VectorPenModal from './VectorPenModal';
 
 export default function AddGeometryModal({
   isOpen = false,
   onClose,
   appInstance,
-  onAddGeometry
+  onAddGeometry,
+  onOpenAddModelModal
 }) {
   const [activeCategory, setActiveCategory] = useState('All');
   const [selectedGeometryId, setSelectedGeometryId] = useState('box');
@@ -19,6 +21,7 @@ export default function AddGeometryModal({
   const [materialPreset, setMaterialPreset] = useState('standard');
   const [isWireframe, setIsWireframe] = useState(false);
   const [isFlatShading, setIsFlatShading] = useState(false);
+  const [isVectorPenOpen, setIsVectorPenOpen] = useState(false);
 
   if (!isOpen) return null;
 
@@ -27,6 +30,9 @@ export default function AddGeometryModal({
   const handleSelectGeometry = (geom) => {
     setSelectedGeometryId(geom.id);
     setParams({ ...geom.defaultParams });
+    if (geom.id === 'vectorExtrude') {
+      setIsVectorPenOpen(true);
+    }
   };
 
   const handleParamChange = (key, val) => {
@@ -38,6 +44,10 @@ export default function AddGeometryModal({
 
   const handleAddGeometry = (overrideDef = null) => {
     const defToUse = overrideDef || currentDef;
+    if (defToUse.id === 'vectorExtrude') {
+      setIsVectorPenOpen(true);
+      return;
+    }
     const paramsToUse = overrideDef ? overrideDef.defaultParams : params;
     const matPresetObj = MATERIAL_PRESETS.find((m) => m.id === materialPreset) || MATERIAL_PRESETS[0];
 
@@ -65,7 +75,7 @@ export default function AddGeometryModal({
     }
   };
 
-  const categories = ['All', 'Basics', 'Curved', 'Polyhedra', 'Surfaces'];
+  const categories = ['All', 'Basics', 'Curved', 'Polyhedra', 'Surfaces', 'Vector / Pen'];
   const filteredGeometries = activeCategory === 'All'
     ? GEOMETRY_DEFINITIONS
     : GEOMETRY_DEFINITIONS.filter((g) => g.category === activeCategory);
@@ -119,6 +129,17 @@ export default function AddGeometryModal({
               {cat}
             </button>
           ))}
+          {typeof onOpenAddModelModal === 'function' && (
+            <button
+              type="button"
+              onClick={onOpenAddModelModal}
+              className="ml-auto px-2.5 py-1 rounded-lg text-xs font-semibold bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 border border-purple-500/40 flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+              title="Upload or import external 3D model (.GLB / .GLTF)"
+            >
+              <span className="material-symbols-outlined text-sm">view_in_ar</span>
+              <span>Import 3D Model (.GLB)</span>
+            </button>
+          )}
         </div>
 
         {/* Main Content Area (Two Columns) */}
@@ -192,37 +213,59 @@ export default function AddGeometryModal({
               </div>
             </div>
 
-            {/* Shape Dimensions Sliders */}
-            <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 space-y-3">
-              <h5 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                Shape Dimensions & Segments
-              </h5>
-
-              <div className="space-y-2.5">
-                {currentDef.paramConfigs.map((cfg) => {
-                  const val = params[cfg.key] !== undefined ? params[cfg.key] : currentDef.defaultParams[cfg.key];
-                  return (
-                    <div key={cfg.key} className="space-y-1">
-                      <div className="flex justify-between text-xs">
-                        <span className="text-slate-300 font-medium">{cfg.label}</span>
-                        <span className="font-mono text-sky-400 font-semibold">
-                          {cfg.step < 1 ? Number(val).toFixed(2) : val}{cfg.unit || ''}
-                        </span>
-                      </div>
-                      <input
-                        type="range"
-                        min={cfg.min}
-                        max={cfg.max}
-                        step={cfg.step}
-                        value={val}
-                        onChange={(e) => handleParamChange(cfg.key, e.target.value)}
-                        className="w-full accent-sky-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
-                      />
-                    </div>
-                  );
-                })}
+            {/* Shape Dimensions Sliders or Vector Pen Studio Launcher */}
+            {currentDef.id === 'vectorExtrude' ? (
+              <div className="bg-gradient-to-br from-purple-950/40 via-indigo-950/30 to-slate-950 border border-purple-500/40 rounded-xl p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-purple-400">gesture</span>
+                  <h5 className="text-xs font-bold uppercase tracking-wider text-purple-300">
+                    Photoshop Vector Pen Studio
+                  </h5>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Draw custom vector paths with bezier curve handles. Once the path is connected as a complete/closed face, you can configure depth, bevels, and extrude it into 3D!
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setIsVectorPenOpen(true)}
+                  className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:opacity-95 text-white text-xs font-bold shadow-lg shadow-purple-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-sm">edit</span>
+                  <span>Launch Vector Pen Tool Canvas</span>
+                </button>
               </div>
-            </div>
+            ) : (
+              <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 space-y-3">
+                <h5 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                  Shape Dimensions & Segments
+                </h5>
+
+                <div className="space-y-2.5">
+                  {currentDef.paramConfigs.map((cfg) => {
+                    const val = params[cfg.key] !== undefined ? params[cfg.key] : currentDef.defaultParams[cfg.key];
+                    return (
+                      <div key={cfg.key} className="space-y-1">
+                        <div className="flex justify-between text-xs">
+                          <span className="text-slate-300 font-medium">{cfg.label}</span>
+                          <span className="font-mono text-sky-400 font-semibold">
+                            {cfg.step < 1 ? Number(val).toFixed(2) : val}{cfg.unit || ''}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min={cfg.min}
+                          max={cfg.max}
+                          step={cfg.step}
+                          value={val}
+                          onChange={(e) => handleParamChange(cfg.key, e.target.value)}
+                          className="w-full accent-sky-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Material & Appearance */}
             <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 space-y-3.5">
@@ -328,18 +371,47 @@ export default function AddGeometryModal({
             >
               Cancel
             </button>
-            <button
-              type="button"
-              onClick={() => handleAddGeometry()}
-              className="flex-1 sm:flex-none py-2.5 px-6 rounded-xl bg-gradient-to-r from-sky-600 via-indigo-600 to-fuchsia-600 hover:opacity-95 text-white text-xs font-bold shadow-lg shadow-sky-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
-            >
-              <span className="material-symbols-outlined text-base">add_circle</span>
-              <span>Add 3D {currentDef.name.split('/')[0].trim()} to Scene</span>
-            </button>
+            {selectedGeometryId === 'vectorExtrude' ? (
+              <button
+                type="button"
+                onClick={() => setIsVectorPenOpen(true)}
+                className="flex-1 sm:flex-none py-2.5 px-6 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:opacity-95 text-white text-xs font-bold shadow-lg shadow-purple-500/25 transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+              >
+                <span className="material-symbols-outlined text-base">gesture</span>
+                <span>Open Vector Pen Studio</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleAddGeometry()}
+                className="flex-1 sm:flex-none py-2.5 px-6 rounded-xl bg-gradient-to-r from-sky-600 via-indigo-600 to-fuchsia-600 hover:opacity-95 text-white text-xs font-bold shadow-lg shadow-sky-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+              >
+                <span className="material-symbols-outlined text-base">add_circle</span>
+                <span>Add 3D {currentDef.name.split('/')[0].trim()} to Scene</span>
+              </button>
+            )}
           </div>
         </div>
 
       </div>
+
+      {isVectorPenOpen && (
+        <VectorPenModal
+          isOpen={isVectorPenOpen}
+          onClose={() => setIsVectorPenOpen(false)}
+          initialColor={selectedColor}
+          onExtrude={(payload) => {
+            setIsVectorPenOpen(false);
+            if (typeof onAddGeometry === 'function') {
+              onAddGeometry(payload);
+              onClose();
+            } else if (appInstance && typeof appInstance.addPrimitiveGeometry === 'function') {
+              appInstance.addPrimitiveGeometry(payload.type, payload);
+              onClose();
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

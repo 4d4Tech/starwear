@@ -4,7 +4,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { createPrimitiveMesh } from './geometryHelper.js';
+import { createPrimitiveMesh, createPrimitiveThreeGeometry, createPrimitiveMaterial } from './geometryHelper.js';
 import { create3DTextMesh, loadTypefaceFont } from './text3DHelper.js';
 
 
@@ -4074,6 +4074,7 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
 
       this.lightingGroup = new THREE_LIB.Group();
       this.lightingGroup.name = 'ar_studio_lighting_group';
+      this.lightingGroup.visible = this.data.enabled !== false;
 
       // 1. Ambient Light
       this.ambientLight = new THREE_LIB.AmbientLight(this.data.ambientColor || '#ffffff', Number(this.data.ambientIntensity ?? 1.4));
@@ -4345,23 +4346,17 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
 
       if (!this.rootGroup) return;
 
-      // Clean up previous meshes
-      while (this.rootGroup.children.length > 0) {
-        const child = this.rootGroup.children[0];
-        this.rootGroup.remove(child);
-        if (child.geometry) child.geometry.dispose();
-        if (child.material) {
-          if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
-          else child.material.dispose();
-        }
-      }
-
       let items = [];
       try {
-        let raw = this.data.geometries;
+        let raw = this.data?.geometries || this.data;
         if (typeof raw === 'string') {
-          if (raw.startsWith('%5B') || raw.startsWith('%7B') || raw.includes('%22')) {
-            raw = decodeURIComponent(raw);
+          if (raw.startsWith('geometries:')) {
+            raw = raw.replace(/^geometries:\s*/, '');
+          }
+          raw = raw.trim();
+          if (raw.endsWith(';')) raw = raw.slice(0, -1).trim();
+          if (raw.startsWith('%5B') || raw.startsWith('%7B') || raw.includes('%22') || raw.includes('%7D')) {
+            try { raw = decodeURIComponent(raw); } catch {}
           }
           items = JSON.parse(raw);
         } else if (Array.isArray(raw)) {
@@ -4369,22 +4364,115 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
         }
       } catch (err) {
         console.warn('[ar-additional-geometries] Failed to parse geometries JSON:', err);
-        items = [];
+        return; // Guard: Never destroy scene meshes if JSON attribute parsing encounters a temporary glitch
       }
 
       if (!Array.isArray(items)) items = [];
 
+      const newItemsMap = new Map();
+      items.forEach((item) => {
+        if (item && item.id) newItemsMap.set(item.id, item);
+      });
+
+      // Remove meshes that are no longer in items, and clean up any duplicate meshes sharing the same geometryId
+      const seenIds = new Set();
+      const toRemove = [];
+      for (let i = 0; i < this.rootGroup.children.length; i++) {
+        const child = this.rootGroup.children[i];
+        const id = child.userData?.geometryId;
+        if (!id || !newItemsMap.has(id) || seenIds.has(id)) {
+          toRemove.push(child);
+        } else {
+          seenIds.add(id);
+        }
+      }
+
+      toRemove.forEach((child) => {
+        this.rootGroup.remove(child);
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) {
+          if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+          else child.material.dispose();
+        }
+      });
+
       items.forEach((item) => {
         if (!item) return;
-        const mesh = createPrimitiveMesh(item, THREE_LIB);
-        if (mesh) {
-          mesh.visible = item.visible !== false;
-          mesh.userData = {
+        const existingMesh = this.rootGroup.children.find(
+          (c) => c.userData?.geometryId === item.id
+        );
+
+        if (existingMesh) {
+          // Check if geometry type or dimensions changed
+          const oldParamsJson = existingMesh.userData?._paramsCache;
+          const newParamsJson = JSON.stringify(item.params || {});
+          const typeChanged = existingMesh.userData?.type !== item.type;
+
+          if (typeChanged || oldParamsJson !== newParamsJson) {
+            if (existingMesh.geometry) existingMesh.geometry.dispose();
+            existingMesh.geometry = createPrimitiveThreeGeometry(item.type, item.params, THREE_LIB);
+          }
+
+          // Check if material appearance changed
+          if (
+            existingMesh.userData?.color !== item.color ||
+            existingMesh.userData?.roughness !== item.roughness ||
+            existingMesh.userData?.metalness !== item.metalness ||
+            existingMesh.userData?.emissive !== item.emissive ||
+            existingMesh.userData?.emissiveIntensity !== item.emissiveIntensity ||
+            existingMesh.userData?.wireframe !== item.wireframe
+          ) {
+            if (existingMesh.material) {
+              if (Array.isArray(existingMesh.material)) existingMesh.material.forEach((m) => m.dispose());
+              else existingMesh.material.dispose();
+            }
+            existingMesh.material = createPrimitiveMaterial(item, THREE_LIB);
+          }
+
+          // Update position/rotation/scale only if NOT currently being dragged by user via gizmo
+          const isBeingManipulated = Boolean(
+            window.__isGizmoDragging &&
+            (window.__activeGizmoTarget === existingMesh || window.__activeGizmoTarget?.userData?.geometryId === item.id)
+          );
+          if (!isBeingManipulated) {
+            existingMesh.position.set(
+              Number(item.posX ?? 0),
+              Number(item.posY ?? 0),
+              Number(item.posZ ?? 0)
+            );
+            existingMesh.rotation.set(
+              ((Number(item.rotX ?? 0)) * Math.PI) / 180,
+              ((Number(item.rotY ?? 0)) * Math.PI) / 180,
+              ((Number(item.rotZ ?? 0)) * Math.PI) / 180
+            );
+            const scale = Number(item.scale ?? 1);
+            existingMesh.scale.set(
+              Number(item.scaleX ?? scale),
+              Number(item.scaleY ?? scale),
+              Number(item.scaleZ ?? scale)
+            );
+          }
+
+          existingMesh.visible = item.visible !== false;
+          existingMesh.userData = {
             ...(item || {}),
+            _paramsCache: newParamsJson,
             isAdditionalGeometry: true,
             geometryId: item.id
           };
-          this.rootGroup.add(mesh);
+        } else {
+          // Newly added mesh
+          const mesh = createPrimitiveMesh(item, THREE_LIB);
+          if (mesh) {
+            mesh.visible = item.visible !== false;
+            mesh.userData = {
+              ...(item || {}),
+              _paramsCache: JSON.stringify(item.params || {}),
+              isAdditionalGeometry: true,
+              geometryId: item.id
+            };
+            this.rootGroup.add(mesh);
+          }
         }
       });
 
@@ -4392,7 +4480,7 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
     },
 
     update: function (oldData) {
-      if (oldData && oldData.geometries !== this.data.geometries) {
+      if (!oldData || oldData.geometries !== this.data.geometries) {
         this.rebuildGeometries();
       }
     },
@@ -4434,6 +4522,259 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
       }
     }
   });
+}
+
+// =========================================================================
+// 10.5. AR-CUSTOM-MODELS RIG
+// Renders user-added external 3D models (.glb/.gltf from local file, web URL, or presets)
+// locked into the AR/3D scene with transform gizmo and matrix sync.
+// =========================================================================
+if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
+  AFRAME.registerComponent('ar-custom-models', {
+    schema: {
+      models: { type: 'string', default: '[]' }
+    },
+
+    init: function () {
+      const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE)
+        ? window.AFRAME.THREE
+        : THREE;
+
+      this.rootGroup = new THREE_LIB.Group();
+      this.rootGroup.name = 'ar_custom_models_group';
+      this.el.setObject3D('customModelsRoot', this.rootGroup);
+
+      this.gltfLoader = new GLTFLoader();
+      this.loadedModels = new Map();
+
+      this.onTargetFound = () => {
+        if (this.rootGroup && this.el && this.el.object3D) {
+          this.el.object3D.visible = true;
+          this.rootGroup.visible = true;
+          this.rootGroup.children.forEach((wrapper) => {
+            wrapper.visible = wrapper.userData?.visible !== false;
+          });
+          this.rootGroup.updateMatrixWorld(true);
+        }
+      };
+
+      const sceneEl = this.el.sceneEl;
+      if (sceneEl) {
+        sceneEl.addEventListener('targetFound', this.onTargetFound);
+      }
+
+      this.rebuildModels();
+    },
+
+    rebuildModels: function () {
+      if (!this.rootGroup) return;
+
+      const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE)
+        ? window.AFRAME.THREE
+        : THREE;
+
+      let items = [];
+      try {
+        let raw = this.data.models;
+        if (typeof raw === 'string') {
+          if (raw.startsWith('%5B') || raw.startsWith('%7B') || raw.includes('%22')) {
+            raw = decodeURIComponent(raw);
+          }
+          items = JSON.parse(raw);
+        } else if (Array.isArray(raw)) {
+          items = raw;
+        }
+      } catch (err) {
+        console.warn('[ar-custom-models] Failed to parse models JSON:', err);
+        items = [];
+      }
+
+      if (!Array.isArray(items)) items = [];
+
+      const currentChildren = [...this.rootGroup.children];
+      const newItemsMap = new Map();
+      items.forEach((item) => {
+        if (item && item.id) newItemsMap.set(item.id, item);
+      });
+
+      // Remove models that are no longer in items
+      currentChildren.forEach((child) => {
+        const id = child.userData?.modelId;
+        if (!newItemsMap.has(id)) {
+          this.rootGroup.remove(child);
+          this.loadedModels.delete(id);
+          child.traverse((node) => {
+            if (node.geometry) node.geometry.dispose();
+            if (node.material) {
+              if (Array.isArray(node.material)) node.material.forEach((m) => m.dispose());
+              else node.material.dispose();
+            }
+          });
+        }
+      });
+
+      items.forEach((item) => {
+        if (!item || !item.url) return;
+        const existingWrapper = this.rootGroup.children.find(
+          (c) => c.userData?.modelId === item.id
+        );
+
+        if (existingWrapper) {
+          const isBeingManipulated = Boolean(window.__isGizmoDragging && window.__activeGizmoTarget === existingWrapper);
+          if (!isBeingManipulated) {
+            existingWrapper.position.set(
+              Number(item.posX ?? 0),
+              Number(item.posY ?? 0),
+              Number(item.posZ ?? 0)
+            );
+            existingWrapper.rotation.set(
+              ((Number(item.rotX ?? 0)) * Math.PI) / 180,
+              ((Number(item.rotY ?? 0)) * Math.PI) / 180,
+              ((Number(item.rotZ ?? 0)) * Math.PI) / 180
+            );
+            const scale = Number(item.scale ?? 1);
+            existingWrapper.scale.set(
+              Number(item.scaleX ?? scale),
+              Number(item.scaleY ?? scale),
+              Number(item.scaleZ ?? scale)
+            );
+          }
+          existingWrapper.visible = item.visible !== false;
+          existingWrapper.userData = {
+            ...(item || {}),
+            isCustomModel: true,
+            modelId: item.id
+          };
+        } else {
+          // Load new GLTF/GLB
+          this.gltfLoader.load(
+            item.url,
+            (gltf) => {
+              const modelScene = gltf.scene || gltf.scenes[0];
+              if (!modelScene) return;
+
+              const wrapper = new THREE_LIB.Group();
+              wrapper.name = `custom_model_${item.name || item.id}`;
+              wrapper.userData = {
+                ...(item || {}),
+                isCustomModel: true,
+                modelId: item.id
+              };
+
+              // Auto-center geometry inside wrapper so gizmo activates at the exact center
+              const box = new THREE_LIB.Box3().setFromObject(modelScene);
+              if (!box.isEmpty()) {
+                const center = new THREE_LIB.Vector3();
+                box.getCenter(center);
+                modelScene.position.sub(center);
+              }
+
+              modelScene.traverse((node) => {
+                if (node.isMesh) {
+                  node.castShadow = true;
+                  node.receiveShadow = true;
+                  node.userData.modelId = item.id;
+                  node.userData.isCustomModel = true;
+                }
+              });
+
+              wrapper.add(modelScene);
+
+              wrapper.position.set(
+                Number(item.posX ?? 0),
+                Number(item.posY ?? 0),
+                Number(item.posZ ?? 0)
+              );
+              wrapper.rotation.set(
+                ((Number(item.rotX ?? 0)) * Math.PI) / 180,
+                ((Number(item.rotY ?? 0)) * Math.PI) / 180,
+                ((Number(item.rotZ ?? 0)) * Math.PI) / 180
+              );
+              const scale = Number(item.scale ?? 1);
+              wrapper.scale.set(
+                Number(item.scaleX ?? scale),
+                Number(item.scaleY ?? scale),
+                Number(item.scaleZ ?? scale)
+              );
+              wrapper.visible = item.visible !== false;
+
+              this.rootGroup.add(wrapper);
+              this.loadedModels.set(item.id, wrapper);
+              this.rootGroup.updateMatrixWorld(true);
+
+              // Notify listeners that this custom model has loaded and mounted
+              this.el.emit('custom-model-loaded', { modelId: item.id, wrapper });
+              if (this.el.sceneEl) {
+                this.el.sceneEl.emit('custom-model-loaded', { modelId: item.id, wrapper });
+              }
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('starwear-custom-model-loaded', { detail: { modelId: item.id, wrapper } }));
+              }
+            },
+            undefined,
+            (err) => {
+              console.warn(`[ar-custom-models] Could not load model: ${item.url}`, err);
+            }
+          );
+        }
+      });
+
+      this.rootGroup.updateMatrixWorld(true);
+    },
+
+    update: function (oldData) {
+      if (!oldData || oldData.models !== this.data.models) {
+        if (typeof window !== 'undefined' && window.__isGizmoDragging && window.__activeGizmoTarget?.userData?.isCustomModel) {
+          return;
+        }
+        this.rebuildModels();
+      }
+    },
+
+    tick: function (time, timeDelta) {
+      if (!this.rootGroup || !this.rootGroup.visible) return;
+      const deltaSec = (timeDelta || 16) / 1000;
+
+      for (let i = 0; i < this.rootGroup.children.length; i++) {
+        const wrapper = this.rootGroup.children[i];
+        if (!wrapper || !wrapper.userData) continue;
+        if (wrapper.userData.autoRotate && Number(wrapper.userData.rotationSpeed)) {
+          if (typeof window !== 'undefined' && window.__isGizmoDragging && window.__activeGizmoTarget === wrapper) {
+            continue;
+          }
+          wrapper.rotation.y += ((Number(wrapper.userData.rotationSpeed)) * Math.PI / 180) * deltaSec;
+        }
+      }
+    },
+
+    remove: function () {
+      if (this.rootGroup) {
+        while (this.rootGroup.children.length > 0) {
+          const child = this.rootGroup.children[0];
+          this.rootGroup.remove(child);
+          child.traverse((node) => {
+            if (node.geometry) node.geometry.dispose();
+            if (node.material) {
+              if (Array.isArray(node.material)) node.material.forEach((m) => m.dispose());
+              else node.material.dispose();
+            }
+          });
+        }
+        if (this.el) {
+          if (typeof this.el.removeObject3D === 'function') {
+            this.el.removeObject3D('customModelsRoot');
+          } else if (this.el.object3D) {
+            this.el.object3D.remove(this.rootGroup);
+          }
+        }
+      }
+      const sceneEl = this.el && this.el.sceneEl;
+      if (sceneEl && this.onTargetFound) {
+        sceneEl.removeEventListener('targetFound', this.onTargetFound);
+      }
+    }
+  });
+}
 
   // =========================================================================
   // 11. AR-MARKER-REFERENCE COMPONENT
@@ -5232,6 +5573,17 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
               mesh.visible = mesh.userData?.visible !== false;
             });
             this.rootGroup.updateMatrixWorld(true);
+            if (this.el.sceneEl?.renderer?.renderLists?.dispose) {
+              try { this.el.sceneEl.renderer.renderLists.dispose(); } catch (e) {}
+            }
+            this.rootGroup.traverse((node) => {
+              if (node.isMesh && node.material) {
+                const mats = Array.isArray(node.material) ? node.material : [node.material];
+                mats.forEach((m) => {
+                  m.needsUpdate = true;
+                });
+              }
+            });
           }
         };
 
@@ -5239,6 +5591,7 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
         if (sceneEl) {
           sceneEl.addEventListener('targetFound', this.onTargetFound);
         }
+        document.addEventListener('targetFound', this.onTargetFound, true);
         if (this.el.parentEl) {
           this.el.parentEl.addEventListener('targetFound', this.onTargetFound);
         }
@@ -5297,10 +5650,26 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
         }
 
         this.rootGroup.updateMatrixWorld(true);
+
+        // Force renderer renderLists and material recompile so 3D typography immediately receives scene lights
+        if (this.el?.sceneEl?.renderer?.renderLists?.dispose) {
+          try { this.el.sceneEl.renderer.renderLists.dispose(); } catch (e) {}
+        }
+        this.rootGroup.traverse((node) => {
+          if (node.isMesh && node.material) {
+            const mats = Array.isArray(node.material) ? node.material : [node.material];
+            mats.forEach((m) => {
+              m.needsUpdate = true;
+            });
+          }
+        });
       },
 
       update: function (oldData) {
         if (oldData && oldData.texts !== this.data.texts) {
+          if (typeof window !== 'undefined' && window.__isGizmoDragging && window.__activeGizmoTarget?.userData?.is3DText) {
+            return;
+          }
           this.rebuildTexts();
         }
       },
@@ -5330,6 +5699,13 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
       },
 
       remove: function () {
+        document.removeEventListener('targetFound', this.onTargetFound, true);
+        if (this.el && this.el.sceneEl) {
+          this.el.sceneEl.removeEventListener('targetFound', this.onTargetFound);
+        }
+        if (this.el && this.el.parentEl) {
+          this.el.parentEl.removeEventListener('targetFound', this.onTargetFound);
+        }
         if (this.rootGroup) {
           while (this.rootGroup.children.length > 0) {
             const child = this.rootGroup.children[0];
@@ -5353,12 +5729,14 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
   // 14. AR-CUSTOM-LIGHTS COMPONENT
   // Renders dynamic custom multi-source lighting (Point, Spot, Directional,
   // Hemisphere) in AR/3D space with visual helpers and clickable 3D anchors.
+  // Renders luminous 3D light emitters/bulbs with emissive materials in ARExperience.
   // =========================================================================
   if (!AFRAME.components['ar-custom-lights']) {
     AFRAME.registerComponent('ar-custom-lights', {
       schema: {
         lights: { type: 'string', default: '[]' },
-        showHelpers: { type: 'boolean', default: true }
+        showHelpers: { type: 'boolean', default: false },
+        showBulbs: { type: 'boolean', default: false }
       },
 
       init: function () {
@@ -5371,7 +5749,58 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
         this.el.setObject3D('lightsRoot', this.rootGroup);
         this.helpers = [];
 
+        this.onTargetFound = this.onTargetFound.bind(this);
+        this.refreshSceneMaterials = this.refreshSceneMaterials.bind(this);
+
+        const sceneEl = this.el.sceneEl;
+        if (sceneEl) {
+          sceneEl.addEventListener('targetFound', this.onTargetFound);
+          sceneEl.addEventListener('model-loaded', this.refreshSceneMaterials);
+        }
+        // Capture phase listeners guarantee catching targetFound and model-loaded events anywhere in DOM
+        document.addEventListener('targetFound', this.onTargetFound, true);
+        document.addEventListener('model-loaded', this.refreshSceneMaterials, true);
+        window.addEventListener('starwear-model-loaded', this.refreshSceneMaterials);
+        if (this.el.parentEl) {
+          this.el.parentEl.addEventListener('targetFound', this.onTargetFound);
+        }
+        const targetEl = document.getElementById('target-entity');
+        if (targetEl && targetEl !== this.el.parentEl) {
+          targetEl.addEventListener('targetFound', this.onTargetFound);
+          targetEl.addEventListener('targetUpdate', () => {
+            if (targetEl.object3D) {
+              targetEl.object3D.matrixWorldNeedsUpdate = true;
+              targetEl.object3D.updateMatrixWorld(true);
+            }
+          });
+        }
+
         this.rebuildLights();
+      },
+
+      refreshSceneMaterials: function () {
+        if (!this.el || !this.el.sceneEl) return;
+        const triggerUpdate = () => {
+          if (this.el?.sceneEl?.renderer?.renderLists?.dispose) {
+            try { this.el.sceneEl.renderer.renderLists.dispose(); } catch (e) {}
+          }
+          const sObj = this.el?.sceneEl?.object3D;
+          if (!sObj) return;
+          sObj.traverse((node) => {
+            if (node.isMesh && node.material) {
+              const mats = Array.isArray(node.material) ? node.material : [node.material];
+              mats.forEach((m) => {
+                m.needsUpdate = true;
+              });
+            }
+          });
+        };
+
+        triggerUpdate();
+        requestAnimationFrame(triggerUpdate);
+        setTimeout(triggerUpdate, 80);
+        setTimeout(triggerUpdate, 250);
+        setTimeout(triggerUpdate, 600);
       },
 
       rebuildLights: function () {
@@ -5416,28 +5845,54 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
           if (!item) return;
 
           const color = new THREE_LIB.Color(item.color || '#ffffff');
-          const intensity = item.intensity !== undefined ? Number(item.intensity) : 2.0;
+          const intensity = item.intensity !== undefined ? Number(item.intensity) : 2.5;
           let light = null;
           let helper = null;
 
           switch (item.type) {
             case 'point': {
-              const distance = item.distance !== undefined ? Number(item.distance) : 25;
-              const decay = item.decay !== undefined ? Number(item.decay) : 1.5;
-              light = new THREE_LIB.PointLight(color, intensity, distance, decay);
-              light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 2), Number(item.posZ ?? 2));
+              // In WebAR / MindAR, cutoff distance < 200m causes Three.js to extinguish point lights completely
+              // because camera-to-marker matrix translations can scale up to ~600-1000 units.
+              // Use distance = 0 (infinite cutoff) in AR so the point light is NEVER artificially extinguished.
+              const rawDistance = (item.distance !== undefined && item.distance !== null) ? Number(item.distance) : 0;
+              const distance = rawDistance >= 200 ? rawDistance : 0;
+
+              // In WebAR, inverse-square decay (decay = 2.0) attenuates point lights to near zero
+              // unless decay is 0 (constant illumination) or intensity is boosted to physical lumen scale.
+              // Using decay = 0 and visible intensity (matching DevTool test light) ensures point lights
+              // illuminate the model and 3D typography with high-contrast clarity.
+              const effectiveDecay = 0; // Decay 0 guarantees full visibility across AR viewports
+              const effectiveIntensity = Math.max(intensity * 10.0, 30.0);
+
+              light = new THREE_LIB.PointLight(color, effectiveIntensity, distance, effectiveDecay);
+              light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 0.6), Number(item.posZ ?? 0.8));
               if (this.data.showHelpers && item.showHelper !== false) {
                 helper = new THREE_LIB.PointLightHelper(light, 0.25, color);
+                if (distance > 0) {
+                  const distGeo = new THREE_LIB.SphereGeometry(distance, 16, 8);
+                  const distMat = new THREE_LIB.MeshBasicMaterial({
+                    color: color,
+                    wireframe: true,
+                    transparent: true,
+                    opacity: 0.2,
+                    depthWrite: false
+                  });
+                  const distSphere = new THREE_LIB.Mesh(distGeo, distMat);
+                  distSphere.name = `DistanceSphere_${item.id}`;
+                  helper.add(distSphere);
+                }
               }
               break;
             }
             case 'spot': {
-              const distance = item.distance !== undefined ? Number(item.distance) : 30;
+              const rawDistance = (item.distance !== undefined && item.distance !== null) ? Number(item.distance) : 0;
+              const distance = rawDistance >= 200 ? rawDistance : 0;
               const angleRad = ((Number(item.angle || 45)) * Math.PI) / 180;
               const penumbra = item.penumbra !== undefined ? Number(item.penumbra) : 0.35;
-              const decay = item.decay !== undefined ? Number(item.decay) : 1.5;
-              light = new THREE_LIB.SpotLight(color, intensity, distance, angleRad, penumbra, decay);
-              light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 2.5), Number(item.posZ ?? 2));
+              const effectiveDecay = 0;
+              const effectiveIntensity = Math.max(intensity * 8.0, 25.0);
+              light = new THREE_LIB.SpotLight(color, effectiveIntensity, distance, angleRad, penumbra, effectiveDecay);
+              light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 1.5), Number(item.posZ ?? 1.5));
               light.target.position.set(Number(item.targetX ?? 0), Number(item.targetY ?? 0), Number(item.targetZ ?? 0));
               this.rootGroup.add(light.target);
               if (this.data.showHelpers && item.showHelper !== false) {
@@ -5480,28 +5935,50 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
 
             this.rootGroup.add(light);
 
-            // Add Visual Glowing 3D Light Source Emitter / Bulb (only in editor mode when showHelpers is enabled)
-            if (this.data.showHelpers && item.showHelper !== false) {
+            // Add Visual Glowing 3D Light Source Emitter / Bulb ONLY when showBulbs is explicitly enabled
+            const shouldRenderBulb = (this.data.showBulbs === true) &&
+              (item.showBulb !== false) &&
+              (item.visible !== false);
+
+            if (shouldRenderBulb) {
               const bulbGroup = new THREE_LIB.Group();
               bulbGroup.name = `Bulb_${item.id}`;
 
-              const coreGeo = new THREE_LIB.SphereGeometry(0.06, 16, 16);
+              const bulbSize = item.bulbSize !== undefined ? Number(item.bulbSize) : 0.06;
+              const bulbEmissiveIntensity = item.bulbIntensity !== undefined
+                ? Number(item.bulbIntensity)
+                : (item.emissiveIntensity !== undefined ? Number(item.emissiveIntensity) : 3.0);
+
+              const coreGeo = new THREE_LIB.SphereGeometry(bulbSize, 16, 16);
               const coreMat = new THREE_LIB.MeshStandardMaterial({
                 color: color,
                 emissive: color,
-                emissiveIntensity: 3.0,
+                emissiveIntensity: bulbEmissiveIntensity,
                 roughness: 0.1,
                 metalness: 0.2
               });
               bulbGroup.add(new THREE_LIB.Mesh(coreGeo, coreMat));
 
-              const auraGeo = new THREE_LIB.SphereGeometry(0.09, 12, 12);
-              const auraMat = new THREE_LIB.MeshBasicMaterial({
-                color: color,
-                wireframe: true,
-                transparent: true,
-                opacity: 0.6
-              });
+              // Halo aura
+              const auraGeo = new THREE_LIB.SphereGeometry(bulbSize * 1.5, 16, 16);
+              let auraMat;
+              if (this.data.showHelpers) {
+                auraMat = new THREE_LIB.MeshBasicMaterial({
+                  color: color,
+                  wireframe: true,
+                  transparent: true,
+                  opacity: 0.6
+                });
+              } else {
+                auraMat = new THREE_LIB.MeshBasicMaterial({
+                  color: color,
+                  transparent: true,
+                  opacity: 0.45,
+                  blending: THREE_LIB.AdditiveBlending,
+                  depthWrite: false,
+                  side: THREE_LIB.DoubleSide
+                });
+              }
               bulbGroup.add(new THREE_LIB.Mesh(auraGeo, auraMat));
 
               bulbGroup.position.copy(light.position);
@@ -5543,16 +6020,58 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
         });
 
         this.rootGroup.updateMatrixWorld(true);
+
+        // Force scene model materials to recompile shaders to receive custom lights
+        this.refreshSceneMaterials();
       },
 
       update: function (oldData) {
-        if (oldData && (oldData.lights !== this.data.lights || oldData.showHelpers !== this.data.showHelpers)) {
+        if (oldData && (
+          oldData.lights !== this.data.lights ||
+          oldData.showHelpers !== this.data.showHelpers ||
+          oldData.showBulbs !== this.data.showBulbs
+        )) {
           this.rebuildLights();
         }
       },
 
+      onTargetFound: function () {
+        const targetEl = this.el.closest('#target-entity') || document.getElementById('target-entity');
+        if (targetEl && targetEl.object3D) {
+          targetEl.object3D.visible = true;
+          targetEl.object3D.matrixWorldNeedsUpdate = true;
+          targetEl.object3D.updateMatrixWorld(true);
+        }
+        if (this.rootGroup) {
+          this.rootGroup.visible = true;
+          this.rootGroup.children.forEach((c) => {
+            c.visible = c.userData?.visible !== false;
+          });
+          this.rootGroup.updateMatrixWorld(true);
+        }
+        this.refreshSceneMaterials();
+      },
+
       tick: function () {
         if (!this.rootGroup) return;
+
+        // Force ancestor target-entity to update its matrixWorld with MindAR's camera tracking
+        const targetEl = this.el.closest('#target-entity') || document.getElementById('target-entity');
+        if (targetEl && targetEl.object3D) {
+          targetEl.object3D.matrixWorldNeedsUpdate = true;
+          targetEl.object3D.updateMatrixWorld(true);
+        } else {
+          this.rootGroup.updateMatrixWorld(true);
+        }
+
+        // Keep bulb and anchor positions synced with their light positions in case of gizmo movement
+        for (let i = 0; i < this.rootGroup.children.length; i++) {
+          const child = this.rootGroup.children[i];
+          if (child.userData?.lightRef) {
+            child.position.copy(child.userData.lightRef.position);
+          }
+        }
+
         for (let i = 0; i < this.helpers.length; i++) {
           if (this.helpers[i] && typeof this.helpers[i].update === 'function') {
             this.helpers[i].update();
@@ -5561,6 +6080,17 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
       },
 
       remove: function () {
+        document.removeEventListener('targetFound', this.onTargetFound, true);
+        document.removeEventListener('model-loaded', this.refreshSceneMaterials, true);
+        window.removeEventListener('starwear-model-loaded', this.refreshSceneMaterials);
+        if (this.el && this.el.sceneEl) {
+          this.el.sceneEl.removeEventListener('targetFound', this.onTargetFound);
+          this.el.sceneEl.removeEventListener('model-loaded', this.refreshSceneMaterials);
+        }
+        if (this.el && this.el.parentEl) {
+          this.el.parentEl.removeEventListener('targetFound', this.onTargetFound);
+        }
+
         if (this.rootGroup) {
           while (this.rootGroup.children.length > 0) {
             const child = this.rootGroup.children[0];
@@ -5581,4 +6111,3 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
       }
     });
   }
-}

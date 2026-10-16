@@ -3,9 +3,10 @@ import 'aframe';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import BuyNowButton from '../components/BuyNowButton';
 import { db, storage, functions, analytics } from '../firebase';
-import { doc, getDoc, getDocFromServer, setDoc, collection, getDocs } from 'firebase/firestore';
+import { doc, getDoc, getDocFromServer, setDoc, collection, getDocs, writeBatch } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
 
 if (typeof THREE !== 'undefined' && THREE.Cache) {
@@ -16,9 +17,12 @@ import { httpsCallable } from 'firebase/functions';
 import { logEvent } from 'firebase/analytics';
 import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfaceFrame, purgeAllSceneVideoLayers, PORTAL_PRESETS, PARTICLE_PRESETS } from '../utils/aframe-components';
 import AddGeometryModal from '../components/AddGeometryModal';
+import AddModelModal from '../components/AddModelModal';
+import VectorPenModal from '../components/VectorPenModal';
 import Add3DTextModal from '../components/Add3DTextModal';
+import ARLightDiagnosticsDrawer from '../components/ARLightDiagnosticsDrawer';
 import { AVAILABLE_FONTS, TEXT_MATERIAL_PRESETS } from '../utils/text3DHelper';
-import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES } from '../utils/geometryHelper';
+import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES, createPrimitiveMesh } from '../utils/geometryHelper';
 import { loadMarkerForBatch, createDefaultMarkerDataUrl, getImageDimensions } from '../utils/markerHelper';
 import {
   captureSceneCanvasThumbnail,
@@ -572,6 +576,31 @@ const PositioningDpad = ({
   );
 };
 
+// Utility: Commit Firestore writeBatch with exponential backoff retry on 429 / resource-exhausted
+const safeCommitBatch = async (batchInstance, maxRetries = 3, initialDelayMs = 1000) => {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    try {
+      await batchInstance.commit();
+      return;
+    } catch (err) {
+      attempt++;
+      const isRateLimit =
+        err?.code === 'resource-exhausted' ||
+        err?.message?.includes('resource-exhausted') ||
+        err?.message?.includes('RESOURCE_EXHAUSTED') ||
+        err?.message?.includes('429');
+      if (isRateLimit && attempt < maxRetries) {
+        const delay = initialDelayMs * Math.pow(2, attempt - 1) + Math.random() * 300;
+        console.warn(`[ARTest] Firestore rate limit / resource-exhausted. Backing off ${Math.round(delay)}ms (attempt ${attempt}/${maxRetries})...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      } else {
+        throw err;
+      }
+    }
+  }
+};
+
 // =========================================================================
 // MAIN ARTEST COMPONENT
 // =========================================================================
@@ -580,6 +609,10 @@ const ARTest = () => {
   const [arData, setArData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const sceneRef = useRef(null);
+  const isSavingConfigRef = useRef(false);
+  const lastSaveTimeRef = useRef(0);
+  const [showDiagnosticsDrawer, setShowDiagnosticsDrawer] = useState(false);
 
   // Active Control Panel Tab: 'transform' | 'hierarchy' | 'lighting' | 'materials' | 'scene'
   const [activeTab, setActiveTab] = useState('transform');
@@ -587,6 +620,63 @@ const ARTest = () => {
   // Multi-Mesh & Object Selection State
   const [meshList, setMeshList] = useState([]);
   const [selectedMeshUuid, setSelectedMeshUuid] = useState(null); // null = entire model (root)
+  const [selectedCustomModelId, setSelectedCustomModelId] = useState(null);
+  const [selectedGeometryId, setSelectedGeometryId] = useState(null);
+  const [selectedText3DId, setSelectedText3DId] = useState(null);
+  const [selectedLightId, setSelectedLightId] = useState(null);
+  const [selectedTargetType, setSelectedTargetType] = useState('model'); // 'model' | 'text3d' | 'light' | 'geometry' | 'mesh' | 'customModel' | null
+  const transformControlsRef = useRef(null);
+
+  // Unified Scene Object Selector: guarantees atomic target activation and clears old selection states
+  const selectSceneObject = useCallback((type, idOrUuid = null) => {
+    setSelectedMeshUuid(null);
+    setSelectedGeometryId(null);
+    setSelectedText3DId(null);
+    setSelectedLightId(null);
+    setSelectedCustomModelId(null);
+
+    switch (type) {
+      case 'model':
+        setSelectedTargetType('model');
+        break;
+      case 'mesh':
+        setSelectedMeshUuid(idOrUuid);
+        setSelectedTargetType('mesh');
+        break;
+      case 'geometry':
+        setSelectedGeometryId(idOrUuid);
+        setSelectedTargetType('geometry');
+        break;
+      case 'customModel':
+        setSelectedCustomModelId(idOrUuid);
+        setSelectedTargetType('customModel');
+        break;
+      case 'text3d':
+        setSelectedText3DId(idOrUuid);
+        setSelectedTargetType('text3d');
+        break;
+      case 'light':
+        setSelectedLightId(idOrUuid);
+        setSelectedTargetType('light');
+        break;
+      default:
+        setSelectedTargetType(null);
+        if (transformControlsRef.current) {
+          try {
+            transformControlsRef.current.detach();
+            const helper = transformControlsRef.current.getHelper ? transformControlsRef.current.getHelper() : transformControlsRef.current;
+            if (helper) helper.visible = false;
+          } catch {}
+          window.__activeGizmoTarget = null;
+        }
+        break;
+    }
+  }, []);
+
+  const clearSelectionAndDetachGizmo = useCallback(() => {
+    selectSceneObject(null);
+  }, [selectSceneObject]);
+
   const [searchFilter, setSearchFilter] = useState('');
   const [deletedMeshNames, setDeletedMeshNames] = useState([]);
   const [confirmDeleteUuid, setConfirmDeleteUuid] = useState(null);
@@ -623,7 +713,6 @@ const ARTest = () => {
 
   // Custom Multi-Source Lighting State
   const [customLights, setCustomLights] = useState([]);
-  const [selectedLightId, setSelectedLightId] = useState(null);
   const [showLightHelpers, setShowLightHelpers] = useState(true);
 
   // Material Properties (-1 means preserve GLTF asset PBR settings)
@@ -654,6 +743,101 @@ const ARTest = () => {
     window.addEventListener('starwear-video-mute-status', handleMuteStatus);
     return () => window.removeEventListener('starwear-video-mute-status', handleMuteStatus);
   }, []);
+
+  // WebGL Context Preservation & Clean Resource Teardown
+  useEffect(() => {
+    const sceneEl = sceneRef.current || document.querySelector('a-scene');
+    if (!sceneEl) return;
+
+    let canvas = sceneEl.canvas;
+    let handleContextLost = null;
+    let handleContextRestored = null;
+
+    const setupCanvasListeners = (cvs) => {
+      if (!cvs || cvs.__webgl_handlers_attached) return;
+      cvs.__webgl_handlers_attached = true;
+
+      handleContextLost = (event) => {
+        // Critical: preventDefault informs browser that the app will handle context recovery
+        event.preventDefault();
+        console.warn('[ARTest] WebGL context lost on canvas. Waiting for GPU restoration...');
+      };
+
+      handleContextRestored = () => {
+        console.info('[ARTest] WebGL context successfully restored by browser.');
+        if (sceneEl.renderer && sceneEl.object3D && sceneEl.camera) {
+          try {
+            sceneEl.renderer.render(sceneEl.object3D, sceneEl.camera);
+          } catch (e) {
+            console.warn('[ARTest] Render post-context restore warning:', e);
+          }
+        }
+      };
+
+      cvs.addEventListener('webglcontextlost', handleContextLost, false);
+      cvs.addEventListener('webglcontextrestored', handleContextRestored, false);
+    };
+
+    if (canvas) {
+      setupCanvasListeners(canvas);
+    } else {
+      const onRenderStart = () => {
+        if (sceneEl.canvas) {
+          setupCanvasListeners(sceneEl.canvas);
+        }
+      };
+      sceneEl.addEventListener('renderstart', onRenderStart, { once: true });
+    }
+
+    return () => {
+      try {
+        if (canvas) {
+          if (handleContextLost) canvas.removeEventListener('webglcontextlost', handleContextLost);
+          if (handleContextRestored) canvas.removeEventListener('webglcontextrestored', handleContextRestored);
+          canvas.__webgl_handlers_attached = false;
+        }
+
+        // Deep dispose scene geometries, materials, textures to prevent VRAM leaks
+        if (sceneEl.object3D) {
+          sceneEl.object3D.traverse((child) => {
+            if (child.geometry) {
+              try { child.geometry.dispose(); } catch {}
+            }
+            if (child.material) {
+              const materials = Array.isArray(child.material) ? child.material : [child.material];
+              materials.forEach((mat) => {
+                if (!mat) return;
+                Object.keys(mat).forEach((key) => {
+                  if (mat[key] && typeof mat[key].dispose === 'function') {
+                    try { mat[key].dispose(); } catch {}
+                  }
+                });
+                try { mat.dispose(); } catch {}
+              });
+            }
+          });
+        }
+
+        // Cleanly dispose renderer and free WebGL drawing context
+        if (sceneEl.renderer) {
+          const gl = sceneEl.renderer.getContext();
+          try {
+            sceneEl.renderer.dispose();
+          } catch {}
+          if (gl) {
+            try {
+              const loseContextExt = gl.getExtension('WEBGL_lose_context');
+              if (loseContextExt) {
+                loseContextExt.loseContext();
+              }
+            } catch {}
+          }
+        }
+      } catch (teardownErr) {
+        console.warn('[ARTest] Cleanup warning during scene unmount:', teardownErr);
+      }
+    };
+  }, [batchId]);
 
   // Target Marker Visual Reference States (MindAR Physical Anchor Plane at 0, 0, 0)
   const [markerVisible, setMarkerVisible] = useState(true);
@@ -1057,17 +1241,81 @@ const ARTest = () => {
   };
 
   // =========================================================================
+  // EXTERNAL 3D MODELS STATES & HANDLERS (.glb / .gltf from file, URL, or presets)
+  // =========================================================================
+  const [customModels, setCustomModels] = useState([]);
+  const [isAddModelModalOpen, setIsAddModelModalOpen] = useState(false);
+
+  const handleAddCustomModel = (payload) => {
+    setCustomModels((prev) => [...prev, payload]);
+    selectSceneObject('customModel', payload.id);
+    setActiveTab('hierarchy');
+    setSaveSuccessMsg(`Added external 3D model "${payload.name}" to scene.`);
+    setTimeout(() => setSaveSuccessMsg(''), 4000);
+  };
+
+  const handleUpdateCustomModel = (id, updates) => {
+    setCustomModels((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, ...updates } : m))
+    );
+  };
+
+  const handleDeleteCustomModel = (id) => {
+    setCustomModels((prev) => prev.filter((m) => m.id !== id));
+    if (selectedCustomModelId === id) {
+      selectSceneObject(null);
+    }
+  };
+
+  const handleDuplicateCustomModel = (id) => {
+    const target = customModels.find((m) => m.id === id);
+    if (!target) return;
+    const newId = `model_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    const dup = {
+      ...target,
+      id: newId,
+      name: `${target.name} (Copy)`,
+      posX: Number(((target.posX || 0) + 0.35).toFixed(2)),
+      posZ: Number(((target.posZ || 0) + 0.35).toFixed(2))
+    };
+    setCustomModels((prev) => [...prev, dup]);
+    selectSceneObject('customModel', newId);
+  };
+
+  const handleToggleCustomModelVisibility = (id) => {
+    setCustomModels((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, visible: m.visible === false ? true : false } : m))
+    );
+  };
+
+  const handleSetRootModelFromModal = ({ url, file, name, scale, posX, posY, posZ }) => {
+    if (url) {
+      setLocalGlbUrl(url);
+      setLocalGlbName(name || file?.name || 'External Model');
+      if (file) setSelectedGlbFile(file);
+      if (scale) setModelScale(scale);
+      if (posX !== undefined) setModelPosX(posX);
+      if (posY !== undefined) setModelPosY(posY);
+      if (posZ !== undefined) setModelPosZ(posZ);
+      selectSceneObject('model');
+      setSaveSuccessMsg(`Set "${name || 'External Model'}" as primary scene 3D model.`);
+      setTimeout(() => setSaveSuccessMsg(''), 4000);
+    }
+  };
+
+  // =========================================================================
   // ADDITIONAL 3D PRIMITIVE GEOMETRIES STATES & HANDLERS (Studio4D4 parity)
   // =========================================================================
   const [additionalGeometries, setAdditionalGeometries] = useState([]);
-  const [selectedGeometryId, setSelectedGeometryId] = useState(null);
   const [geometryModalOpen, setGeometryModalOpen] = useState(false);
+  const [vectorPenModalOpen, setVectorPenModalOpen] = useState(false);
+  const [editingVectorGeom, setEditingVectorGeom] = useState(null);
 
   const handleAddGeometry = (payload) => {
     const count = additionalGeometries.length;
     const newId = `geom_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const type = payload.type || 'box';
-    const cleanTypeName = type.charAt(0).toUpperCase() + type.slice(1);
+    const cleanTypeName = type === 'vectorExtrude' ? 'Vector Extrude' : (type.charAt(0).toUpperCase() + type.slice(1));
     const geomName = payload.name || `${cleanTypeName} ${count + 1}`;
     const newGeom = {
       id: newId,
@@ -1078,6 +1326,8 @@ const ARTest = () => {
       preset: payload.preset || 'default',
       roughness: payload.roughness !== undefined ? Number(payload.roughness) : 0.35,
       metalness: payload.metalness !== undefined ? Number(payload.metalness) : 0.15,
+      emissive: payload.emissive || '#000000',
+      emissiveIntensity: payload.emissiveIntensity !== undefined ? Number(payload.emissiveIntensity) : 0,
       wireframe: Boolean(payload.wireframe),
       flatShading: Boolean(payload.flatShading),
       posX: Number(((count % 4 - 1.5) * 0.45).toFixed(2)),
@@ -1094,11 +1344,38 @@ const ARTest = () => {
       visible: true
     };
     setAdditionalGeometries((prev) => [...prev, newGeom]);
-    setSelectedGeometryId(newId);
+    selectSceneObject('geometry', newId);
     setActiveTab('shapes');
     setGeometryModalOpen(false);
     setSaveSuccessMsg(`Added 3D ${cleanTypeName} to scene.`);
     setTimeout(() => setSaveSuccessMsg(''), 4000);
+  };
+
+  const handleCommitVectorExtrude = (payload) => {
+    if (editingVectorGeom) {
+      handleUpdateGeometry(editingVectorGeom.id, {
+        name: payload.name || editingVectorGeom.name,
+        params: {
+          ...(editingVectorGeom.params || {}),
+          ...payload.params
+        },
+        color: payload.color || editingVectorGeom.color,
+        roughness: payload.roughness !== undefined ? payload.roughness : editingVectorGeom.roughness,
+        metalness: payload.metalness !== undefined ? payload.metalness : editingVectorGeom.metalness,
+        emissive: payload.emissive !== undefined ? payload.emissive : editingVectorGeom.emissive,
+        emissiveIntensity: payload.emissiveIntensity !== undefined ? payload.emissiveIntensity : editingVectorGeom.emissiveIntensity,
+        wireframe: payload.wireframe !== undefined ? payload.wireframe : editingVectorGeom.wireframe,
+        flatShading: payload.flatShading !== undefined ? payload.flatShading : editingVectorGeom.flatShading,
+        preset: payload.preset || editingVectorGeom.preset
+      });
+      setSaveSuccessMsg(`Updated 3D Vector Shape: ${payload.name || editingVectorGeom.name}`);
+      setTimeout(() => setSaveSuccessMsg(''), 4000);
+      setEditingVectorGeom(null);
+      setVectorPenModalOpen(false);
+    } else {
+      handleAddGeometry(payload);
+      setVectorPenModalOpen(false);
+    }
   };
 
   const handleUpdateGeometry = (id, updates) => {
@@ -1125,7 +1402,7 @@ const ARTest = () => {
   const handleDeleteGeometry = (id) => {
     setAdditionalGeometries((prev) => prev.filter((g) => g.id !== id));
     if (selectedGeometryId === id) {
-      setSelectedGeometryId(null);
+      selectSceneObject(null);
     }
   };
 
@@ -1141,7 +1418,7 @@ const ARTest = () => {
       posZ: Number((target.posZ + 0.3).toFixed(2))
     };
     setAdditionalGeometries((prev) => [...prev, dup]);
-    setSelectedGeometryId(newId);
+    selectSceneObject('geometry', newId);
   };
 
   const handleToggleGeometryVisibility = (id) => {
@@ -1169,7 +1446,6 @@ const ARTest = () => {
   // 3D TYPOGRAPHY TEXT STATES & HANDLERS
   // =========================================================================
   const [custom3DTexts, setCustom3DTexts] = useState([]);
-  const [selectedText3DId, setSelectedText3DId] = useState(null);
   const [isAddTextModalOpen, setIsAddTextModalOpen] = useState(false);
 
   const handleAdd3DText = (payload) => {
@@ -1209,11 +1485,7 @@ const ARTest = () => {
       visible: true
     };
     setCustom3DTexts((prev) => [...prev, newText]);
-    setSelectedText3DId(newId);
-    setSelectedMeshUuid(null);
-    setSelectedGeometryId(null);
-    setSelectedLightId(null);
-    setSelectedTargetType('text3d');
+    selectSceneObject('text3d', newId);
     setActiveTab('text3d');
     setIsAddTextModalOpen(false);
     setSaveSuccessMsg(`Added 3D Text "${newText.text}" to scene.`);
@@ -1229,8 +1501,7 @@ const ARTest = () => {
   const handleDelete3DText = (id) => {
     setCustom3DTexts((prev) => prev.filter((t) => t.id !== id));
     if (selectedText3DId === id) {
-      setSelectedText3DId(null);
-      if (transformControlsRef.current) transformControlsRef.current.detach();
+      selectSceneObject(null);
     }
   };
 
@@ -1246,11 +1517,7 @@ const ARTest = () => {
       posY: Number((target.posY + 0.15).toFixed(2))
     };
     setCustom3DTexts((prev) => [...prev, dup]);
-    setSelectedText3DId(newId);
-    setSelectedMeshUuid(null);
-    setSelectedGeometryId(null);
-    setSelectedLightId(null);
-    setSelectedTargetType('text3d');
+    selectSceneObject('text3d', newId);
   };
 
   const handleToggle3DTextVisibility = (id) => {
@@ -1311,14 +1578,13 @@ const ARTest = () => {
       targetZ: 0,
       visible: true,
       showHelper: true,
+      showBulb: true,
+      bulbIntensity: 3.0,
+      bulbSize: 0.06,
       castShadow: false
     };
     setCustomLights((prev) => [...prev, newLight]);
-    setSelectedLightId(newId);
-    setSelectedMeshUuid(null);
-    setSelectedGeometryId(null);
-    setSelectedText3DId(null);
-    setSelectedTargetType('light');
+    selectSceneObject('light', newId);
     setActiveTab('lighting');
     setSaveSuccessMsg(`Added ${cleanType} light source to scene.`);
     setTimeout(() => setSaveSuccessMsg(''), 4000);
@@ -1333,8 +1599,7 @@ const ARTest = () => {
   const handleDeleteLight = (id) => {
     setCustomLights((prev) => prev.filter((l) => l.id !== id));
     if (selectedLightId === id) {
-      setSelectedLightId(null);
-      if (transformControlsRef.current) transformControlsRef.current.detach();
+      selectSceneObject(null);
     }
   };
 
@@ -1350,11 +1615,7 @@ const ARTest = () => {
       posZ: Number((target.posZ + 0.4).toFixed(2))
     };
     setCustomLights((prev) => [...prev, dup]);
-    setSelectedLightId(newId);
-    setSelectedMeshUuid(null);
-    setSelectedGeometryId(null);
-    setSelectedText3DId(null);
-    setSelectedTargetType('light');
+    selectSceneObject('light', newId);
   };
 
   const handleToggleLightVisibility = (id) => {
@@ -1377,7 +1638,10 @@ const ARTest = () => {
         posY: 1.5,
         posZ: 1.2,
         visible: true,
-        showHelper: true
+        showHelper: true,
+        showBulb: true,
+        bulbIntensity: 3.5,
+        bulbSize: 0.06
       };
       const l2 = {
         id: `light_cyber_magenta_${Date.now() + 1}`,
@@ -1391,10 +1655,13 @@ const ARTest = () => {
         posY: 1.5,
         posZ: 1.2,
         visible: true,
-        showHelper: true
+        showHelper: true,
+        showBulb: true,
+        bulbIntensity: 3.5,
+        bulbSize: 0.06
       };
       setCustomLights((prev) => [...prev, l1, l2]);
-      setSelectedLightId(l1.id);
+      selectSceneObject('light', l1.id);
       setActiveTab('lighting');
     } else if (presetName === 'stage_spotlight') {
       const spot = {
@@ -1414,10 +1681,13 @@ const ARTest = () => {
         targetY: 0,
         targetZ: 0,
         visible: true,
-        showHelper: true
+        showHelper: true,
+        showBulb: true,
+        bulbIntensity: 3.0,
+        bulbSize: 0.06
       };
       setCustomLights((prev) => [...prev, spot]);
-      setSelectedLightId(spot.id);
+      selectSceneObject('light', spot.id);
       setActiveTab('lighting');
     } else if (presetName === 'warm_golden') {
       const sun = {
@@ -1433,10 +1703,13 @@ const ARTest = () => {
         targetY: 0,
         targetZ: 0,
         visible: true,
-        showHelper: true
+        showHelper: true,
+        showBulb: true,
+        bulbIntensity: 2.5,
+        bulbSize: 0.06
       };
       setCustomLights((prev) => [...prev, sun]);
-      setSelectedLightId(sun.id);
+      selectSceneObject('light', sun.id);
       setActiveTab('lighting');
     }
   };
@@ -1456,21 +1729,113 @@ const ARTest = () => {
   const [gizmoSpace, setGizmoSpace] = useState('world'); // 'world' | 'local'
   const [gizmoSnap, setGizmoSnap] = useState(null); // null | 0.1 | 0.5
   const [isGizmoDragging, setIsGizmoDragging] = useState(false);
-  const [selectedTargetType, setSelectedTargetType] = useState('model'); // 'model' | 'text3d' | 'light' | 'geometry' | 'mesh' | null
-  const transformControlsRef = useRef(null);
+  const [gizmoReady, setGizmoReady] = useState(false);
 
-  const clearSelectionAndDetachGizmo = useCallback(() => {
-    setSelectedMeshUuid(null);
-    setSelectedGeometryId(null);
-    setSelectedText3DId(null);
-    setSelectedLightId(null);
-    setSelectedTargetType(null);
-    if (transformControlsRef.current) {
-      transformControlsRef.current.detach();
-      const helper = transformControlsRef.current.getHelper ? transformControlsRef.current.getHelper() : transformControlsRef.current;
-      if (helper) helper.visible = false;
+  // Export any scene shape, extruded vector, 3D text, or selected mesh as a standard binary .GLB file
+  const handleExportShapeAsGLB = useCallback(async (targetParam = null) => {
+    try {
+      const exporter = new GLTFExporter();
+      let targetMesh = null;
+      let exportFileName = 'shape';
+
+      // 1. Explicit geometry id or object
+      const geomId = typeof targetParam === 'string' ? targetParam : (targetParam?.id || selectedGeometryId);
+      const geomConfig = additionalGeometries.find((g) => g.id === geomId);
+
+      if (geomConfig) {
+        exportFileName = (geomConfig.name || geomConfig.type || 'shape')
+          .toLowerCase()
+          .replace(/[^a-z0-9_-]/g, '_');
+        // Build standalone pristine mesh with geometry and PBR material
+        targetMesh = createPrimitiveMesh(geomConfig, THREE);
+      } else if (selectedMeshUuid) {
+        const modelEl = document.getElementById('ar-model');
+        const model3D = modelEl?.getObject3D('mesh');
+        if (model3D) {
+          model3D.traverse((node) => {
+            if (node.uuid === selectedMeshUuid && node.isMesh) {
+              targetMesh = node.clone();
+              exportFileName = (node.name || 'submesh')
+                .toLowerCase()
+                .replace(/[^a-z0-9_-]/g, '_');
+            }
+          });
+        }
+      } else if (selectedText3DId) {
+        const textAnchor = document.getElementById('ar-3d-texts-anchor');
+        const root = textAnchor?.getObject3D('texts3DRoot') || textAnchor?.object3D;
+        if (root) {
+          root.traverse((node) => {
+            if (node.userData?.textId === selectedText3DId) {
+              targetMesh = node.clone();
+              exportFileName = (node.userData?.text || '3d_text')
+                .toLowerCase()
+                .replace(/[^a-z0-9_-]/g, '_');
+            }
+          });
+        }
+      } else if (selectedCustomModelId) {
+        const customModelsAnchor = document.getElementById('ar-custom-models-anchor');
+        const root = customModelsAnchor?.getObject3D('customModelsRoot') || customModelsAnchor?.object3D;
+        if (root) {
+          root.traverse((node) => {
+            if (node.userData?.modelId === selectedCustomModelId && node.userData?.isCustomModel && node.isGroup) {
+              targetMesh = node.clone();
+              exportFileName = (node.userData?.name || 'custom_model')
+                .toLowerCase()
+                .replace(/[^a-z0-9_-]/g, '_');
+            }
+          });
+        }
+      } else if (additionalGeometries.length > 0) {
+        const firstGeom = additionalGeometries[0];
+        targetMesh = createPrimitiveMesh(firstGeom, THREE);
+        exportFileName = (firstGeom.name || firstGeom.type || 'shape')
+          .toLowerCase()
+          .replace(/[^a-z0-9_-]/g, '_');
+      }
+
+      if (!targetMesh) {
+        alert('Please select a 3D shape or mesh in the scene to export as .GLB.');
+        return;
+      }
+
+      // Center geometry / position at (0,0,0) for clean asset export
+      targetMesh.position.set(0, 0, 0);
+      targetMesh.updateMatrixWorld(true);
+
+      const exportScene = new THREE.Scene();
+      exportScene.add(targetMesh);
+
+      exporter.parse(
+        exportScene,
+        (result) => {
+          try {
+            const blob = new Blob([result], { type: 'model/gltf-binary' });
+            const url = URL.createObjectURL(blob);
+            const downloadLink = document.createElement('a');
+            downloadLink.href = url;
+            downloadLink.download = `${exportFileName}.glb`;
+            document.body.appendChild(downloadLink);
+            downloadLink.click();
+            document.body.removeChild(downloadLink);
+            setTimeout(() => URL.revokeObjectURL(url), 2000);
+          } catch (err) {
+            console.error('[ARTest] Failed to create or download GLB blob:', err);
+            alert('Failed to download exported GLB: ' + err.message);
+          }
+        },
+        (error) => {
+          console.error('[ARTest] GLTFExporter error:', error);
+          alert('Error exporting .GLB: ' + (error?.message || error));
+        },
+        { binary: true, embedImages: true }
+      );
+    } catch (err) {
+      console.error('[ARTest] Could not initialize GLTFExporter:', err);
+      alert('Could not export shape to .GLB: ' + err.message);
     }
-  }, []);
+  }, [selectedGeometryId, selectedMeshUuid, selectedText3DId, selectedCustomModelId, additionalGeometries, customModels]);
 
   const handleGizmoObjectChange = useCallback((obj) => {
     if (!obj) return;
@@ -1546,6 +1911,32 @@ const ARTest = () => {
       return;
     }
 
+    // C.5) External Custom 3D Model
+    if (obj.userData?.isCustomModel || obj.userData?.modelId) {
+      const modelId = obj.userData.modelId;
+      setCustomModels((prev) =>
+        prev.map((m) => {
+          if (m.id === modelId) {
+            return {
+              ...m,
+              posX: Number(obj.position.x.toFixed(3)),
+              posY: Number(obj.position.y.toFixed(3)),
+              posZ: Number(obj.position.z.toFixed(3)),
+              rotX: Number(THREE.MathUtils.radToDeg(obj.rotation.x).toFixed(1)),
+              rotY: Number(THREE.MathUtils.radToDeg(obj.rotation.y).toFixed(1)),
+              rotZ: Number(THREE.MathUtils.radToDeg(obj.rotation.z).toFixed(1)),
+              scale: Number(obj.scale.x.toFixed(3)),
+              scaleX: Number(obj.scale.x.toFixed(3)),
+              scaleY: Number(obj.scale.y.toFixed(3)),
+              scaleZ: Number(obj.scale.z.toFixed(3))
+            };
+          }
+          return m;
+        })
+      );
+      return;
+    }
+
     // D) Root 3D Model
     const modelEl = document.getElementById('ar-model');
     if (obj === modelEl?.object3D || obj === modelEl?.getObject3D('mesh')) {
@@ -1616,6 +2007,15 @@ const ARTest = () => {
   }, [transitionCamera]);
 
   const currentSelectedObjectInfo = useMemo(() => {
+    if (selectedCustomModelId) {
+      const modelItem = customModels.find((m) => m.id === selectedCustomModelId);
+      return {
+        type: 'customModel',
+        id: selectedCustomModelId,
+        name: modelItem ? modelItem.name : 'External 3D Model',
+        icon: 'view_in_ar'
+      };
+    }
     if (selectedText3DId) {
       const textItem = custom3DTexts.find((t) => t.id === selectedText3DId);
       return {
@@ -1661,7 +2061,7 @@ const ARTest = () => {
       };
     }
     return null;
-  }, [selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, selectedTargetType, custom3DTexts, customLights, additionalGeometries, meshList]);
+  }, [selectedCustomModelId, selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, selectedTargetType, customModels, custom3DTexts, customLights, additionalGeometries, meshList]);
 
   // Staged Local Files for Portal
   const [selectedPortalSkyboxFile, setSelectedPortalSkyboxFile] = useState(null);
@@ -2088,6 +2488,11 @@ const ARTest = () => {
         cameraTransitionIdRef.current = null;
       }
       if (e.button !== undefined && e.button !== 0) return;
+      // Ignore clicks on HTML toolbars, controls, buttons, or modals
+      if (e.target && e.target.tagName !== 'CANVAS') {
+        pointerDownPos = null;
+        return;
+      }
       pointerDownPos = { x: e.clientX, y: e.clientY };
     };
 
@@ -2096,14 +2501,14 @@ const ARTest = () => {
       const dist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
       pointerDownPos = null;
 
-      if (dist > 6) return; // Drag/orbit gesture
-
-      if (isGizmoDragging) return; // Prevent raycasting right after dragging gizmo
+      if (dist > 6) return; // Orbit/drag gesture: do not raycast or deselect
+      if (e.target && e.target.tagName !== 'CANVAS') return; // Ignore releases on HTML toolbars/buttons
+      if (isGizmoDragging || window.__isGizmoDragging) return;
 
       const sceneEl = document.querySelector('a-scene');
-      if (!sceneEl || !sceneEl.camera) return;
-      const canvas = sceneEl.canvas;
-      if (!canvas) return;
+      const camera = sceneEl?.camera || (typeof window !== 'undefined' && window.__arOrbitCamera);
+      const canvas = sceneEl?.canvas;
+      if (!sceneEl || !camera || !canvas) return;
 
       const rect = canvas.getBoundingClientRect();
       if (
@@ -2117,89 +2522,112 @@ const ARTest = () => {
       );
 
       const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(mouse, sceneEl.camera);
+      raycaster.setFromCamera(mouse, camera);
 
-      // 1. Check 3D Extruded Text Objects
+      // 0. Check Transform Gizmo Helper First!
+      // If user clicked or released on a gizmo axis/plane/handle, DO NOT CLEAR SELECTION!
+      const tc = transformControlsRef.current;
+      if (tc && tc.object) {
+        if (tc.axis !== null || tc.dragging) return;
+        const helper = tc.getHelper ? tc.getHelper() : tc;
+        if (helper) {
+          const gizmoHits = raycaster.intersectObject(helper, true);
+          if (gizmoHits.length > 0) return;
+        }
+      }
+
+      // Unified Multi-Object Single Pass Raycasting (Depth-Sorted)
+      const candidates = [];
+
+      const customModelsEl = document.getElementById('ar-custom-models-anchor');
+      const customModelsGroup = customModelsEl?.getObject3D('customModelsRoot') || customModelsEl?.object3D;
+      if (customModelsGroup) candidates.push(customModelsGroup);
+
+      const geomEl = document.getElementById('ar-additional-geometries-anchor');
+      const geomGroup = geomEl?.getObject3D('additionalGeometriesRoot') || geomEl?.object3D;
+      if (geomGroup) candidates.push(geomGroup);
+
       const textEl = document.getElementById('ar-3d-texts-anchor');
       const textGroup = textEl?.getObject3D('texts3DRoot') || textEl?.object3D;
-      if (textGroup) {
-        const textIntersects = raycaster.intersectObject(textGroup, true);
-        if (textIntersects.length > 0) {
-          const hitText = textIntersects[0].object;
-          const textId = hitText?.userData?.textId;
-          if (textId) {
-            setSelectedText3DId(textId);
-            setSelectedMeshUuid(null);
-            setSelectedGeometryId(null);
-            setSelectedLightId(null);
-            setSelectedTargetType('text3d');
+      if (textGroup) candidates.push(textGroup);
+
+      const lightsEl = document.getElementById('ar-custom-lights-anchor');
+      const lightsGroup = lightsEl?.getObject3D('lightsRoot') || lightsEl?.object3D;
+      if (lightsGroup) candidates.push(lightsGroup);
+
+      const modelEl = document.getElementById('ar-model');
+      const model3D = modelEl?.getObject3D('mesh');
+      if (model3D) candidates.push(model3D);
+
+      const allIntersects = raycaster.intersectObjects(candidates, true);
+      // Filter out invisible objects, helpers, and gizmo pickers
+      const validHit = allIntersects.find((intersect) => {
+        const obj = intersect.object;
+        if (!obj || obj.visible === false) return false;
+        if (obj.name && /helper|picker|gizmo|starwear-transform/i.test(obj.name)) return false;
+        let p = obj.parent;
+        while (p) {
+          if (p.visible === false) return false;
+          p = p.parent;
+        }
+        return true;
+      });
+
+      if (validHit) {
+        let curr = validHit.object;
+
+        // 1. Check for 3D Extruded Typography Text
+        while (curr) {
+          if (curr.userData?.textId) {
+            selectSceneObject('text3d', curr.userData.textId);
             setActiveTab('text3d');
             return;
           }
+          curr = curr.parent;
         }
-      }
 
-      // 2. Check Custom Lighting Anchors & Helpers
-      const lightsEl = document.getElementById('ar-custom-lights-anchor');
-      const lightsGroup = lightsEl?.getObject3D('lightsRoot') || lightsEl?.object3D;
-      if (lightsGroup) {
-        const lightIntersects = raycaster.intersectObject(lightsGroup, true);
-        if (lightIntersects.length > 0) {
-          const hitLight = lightIntersects[0].object;
-          const lightId = hitLight?.userData?.lightId;
-          if (lightId) {
-            setSelectedLightId(lightId);
-            setSelectedMeshUuid(null);
-            setSelectedGeometryId(null);
-            setSelectedText3DId(null);
-            setSelectedTargetType('light');
+        // 2. Check for Custom Light Source
+        curr = validHit.object;
+        while (curr) {
+          if (curr.userData?.lightId) {
+            selectSceneObject('light', curr.userData.lightId);
             setActiveTab('lighting');
             return;
           }
+          curr = curr.parent;
         }
-      }
 
-      // 3. Check Additional 3D Primitive Geometries
-      const geomEl = document.getElementById('ar-additional-geometries-anchor');
-      const geomGroup = geomEl?.getObject3D('additionalGeometriesRoot') || geomEl?.object3D;
-      if (geomGroup) {
-        const geomIntersects = raycaster.intersectObject(geomGroup, true);
-        if (geomIntersects.length > 0) {
-          const hitGeom = geomIntersects[0].object;
-          const geomId = hitGeom?.userData?.geometryId || hitGeom?.userData?.id;
-          if (geomId) {
-            setSelectedGeometryId(geomId);
-            setSelectedMeshUuid(null);
-            setSelectedText3DId(null);
-            setSelectedLightId(null);
-            setSelectedTargetType('geometry');
+        // 3. Check for Primitive 3D Geometry
+        curr = validHit.object;
+        while (curr) {
+          const gId = curr.userData?.geometryId || curr.userData?.id;
+          if (gId && (curr.userData?.isAdditionalGeometry || curr.userData?.type)) {
+            selectSceneObject('geometry', gId);
             setActiveTab('shapes');
             return;
           }
+          curr = curr.parent;
         }
-      }
 
-      // 4. Check Center 3D Model
-      const modelEl = document.getElementById('ar-model');
-      if (modelEl) {
-        const model3D = modelEl.getObject3D('mesh');
-        if (model3D) {
-          const intersects = raycaster.intersectObject(model3D, true);
-          if (intersects.length > 0) {
-            const hit = intersects[0].object;
-            if (hit && hit.isMesh) {
-              setSelectedMeshUuid(hit.uuid);
-              setSelectedGeometryId(null);
-              setSelectedText3DId(null);
-              setSelectedLightId(null);
-              setSelectedTargetType('mesh');
-              return;
-            }
+        // 4. Check for External Custom 3D Model
+        curr = validHit.object;
+        while (curr) {
+          if (curr.userData?.modelId && (curr.userData?.isCustomModel || curr.userData?.url)) {
+            selectSceneObject('customModel', curr.userData.modelId);
+            setActiveTab('hierarchy');
+            return;
           }
+          curr = curr.parent;
+        }
+
+        // 5. Center Model Submesh
+        if (validHit.object.isMesh && validHit.object.uuid) {
+          selectSceneObject('mesh', validHit.object.uuid);
+          return;
         }
       }
 
-      // 5. Empty space clicked: Clear selection and detach gizmo
+      // 6. Empty space clicked: Clear selection and detach gizmo
       clearSelectionAndDetachGizmo();
     };
 
@@ -2209,30 +2637,37 @@ const ARTest = () => {
       sceneContainer.addEventListener('pointerup', handlePointerUp);
     }
 
+    const handleGlobalPointerUp = () => {
+      window.__isGizmoDragging = false;
+      setIsGizmoDragging(false);
+    };
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+
     return () => {
       if (sceneContainer) {
         sceneContainer.removeEventListener('pointerdown', handlePointerDown);
         sceneContainer.removeEventListener('pointerup', handlePointerUp);
       }
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
-  }, [meshList, isGizmoDragging, clearSelectionAndDetachGizmo]);
+  }, [meshList, isGizmoDragging, clearSelectionAndDetachGizmo, selectSceneObject]);
 
   // =========================================================================
   // TRANSFORM CONTROLS GIZMO LIFECYCLE IN AFRAME/THREE.JS
   // =========================================================================
   useEffect(() => {
     let checkInterval = null;
-    const sceneContainer = document.getElementById('ar-scene-container');
-    const sceneEl = sceneContainer?.querySelector('a-scene');
-    if (!sceneEl) return;
 
     const setupGizmo = () => {
+      const sceneEl = document.querySelector('a-scene');
+      if (!sceneEl) return false;
+
       const camera = sceneEl.camera;
       const canvas = sceneEl.canvas;
       const threeScene = sceneEl.object3D;
-      if (!camera || !canvas || !threeScene) return;
+      if (!camera || !canvas || !threeScene) return false;
 
-      if (transformControlsRef.current) return;
+      if (transformControlsRef.current) return true;
 
       try {
         const tc = new TransformControls(camera, canvas);
@@ -2241,10 +2676,17 @@ const ARTest = () => {
         tc.setSpace(gizmoSpace);
 
         tc.addEventListener('dragging-changed', (event) => {
-          setIsGizmoDragging(Boolean(event.value));
+          const isDragging = Boolean(event.value);
+          setIsGizmoDragging(isDragging);
+          window.__isGizmoDragging = isDragging;
+          if (tc.object) {
+            window.__activeGizmoTarget = tc.object;
+          } else {
+            window.__activeGizmoTarget = null;
+          }
           const orbit = window.__arOrbitControls;
           if (orbit) {
-            orbit.enabled = !event.value;
+            orbit.enabled = !isDragging;
           }
         });
 
@@ -2258,28 +2700,37 @@ const ARTest = () => {
         helper.name = 'starwear-transform-gizmo-helper';
         threeScene.add(helper);
         transformControlsRef.current = tc;
-        if (checkInterval) clearInterval(checkInterval);
+        setGizmoReady(true);
+        return true;
       } catch (err) {
         console.warn('[ARTest] Could not initialize TransformControls:', err);
+        return false;
       }
     };
 
-    if (sceneEl.hasLoaded && sceneEl.canvas && sceneEl.camera) {
-      setupGizmo();
-    } else {
-      checkInterval = setInterval(setupGizmo, 100);
-      sceneEl.addEventListener('loaded', setupGizmo, { once: true });
+    if (!setupGizmo()) {
+      checkInterval = setInterval(() => {
+        if (setupGizmo()) {
+          clearInterval(checkInterval);
+          checkInterval = null;
+        }
+      }, 150);
     }
 
     return () => {
       if (checkInterval) clearInterval(checkInterval);
       if (transformControlsRef.current) {
         try {
-          const helper = transformControlsRef.current.getHelper ? transformControlsRef.current.getHelper() : transformControlsRef.current;
-          if (helper && sceneEl.object3D) sceneEl.object3D.remove(helper);
-          transformControlsRef.current.dispose();
+          const tc = transformControlsRef.current;
+          const helper = tc.getHelper ? tc.getHelper() : tc;
+          const sceneEl = document.querySelector('a-scene');
+          if (helper && sceneEl?.object3D) sceneEl.object3D.remove(helper);
+          tc.dispose();
         } catch {}
         transformControlsRef.current = null;
+        setGizmoReady(false);
+        window.__isGizmoDragging = false;
+        window.__activeGizmoTarget = null;
       }
     };
   }, [handleGizmoObjectChange]);
@@ -2301,62 +2752,190 @@ const ARTest = () => {
     } catch {}
   }, [gizmoMode, gizmoSpace, gizmoSnap]);
 
-  // Dynamically Attach/Detach TransformControls to Active Target Object
+  // Dynamically Attach/Detach TransformControls to Active Target Object with Async Resilience
   useEffect(() => {
     const tc = transformControlsRef.current;
     if (!tc) return;
 
-    let targetObj = null;
+    // Do NOT re-attach while actively dragging to prevent jitter / losing axis handle
+    if (isGizmoDragging || window.__isGizmoDragging) return;
 
-    if (selectedText3DId) {
-      const textAnchor = document.getElementById('ar-3d-texts-anchor');
-      const root = textAnchor?.getObject3D('texts3DRoot') || textAnchor?.object3D;
-      if (root) {
-        root.traverse((node) => {
-          if (node.userData?.textId === selectedText3DId) targetObj = node;
-        });
+    let cancelled = false;
+    let retryInterval = null;
+
+    const resolveTargetObject = () => {
+      if (selectedTargetType === 'text3d' && selectedText3DId) {
+        const textAnchor = document.getElementById('ar-3d-texts-anchor');
+        const root = textAnchor?.getObject3D('texts3DRoot') || textAnchor?.object3D;
+        if (root) {
+          let found = null;
+          root.traverse((node) => {
+            if (!found && node.userData?.textId === selectedText3DId) found = node;
+          });
+          if (found) return found;
+        }
+      } else if (selectedTargetType === 'light' && selectedLightId) {
+        const lightsAnchor = document.getElementById('ar-custom-lights-anchor');
+        const root = lightsAnchor?.getObject3D('lightsRoot') || lightsAnchor?.object3D;
+        if (root) {
+          let found = null;
+          root.traverse((node) => {
+            if (!found && node.userData?.lightId === selectedLightId) {
+              found = node.userData.lightRef || node;
+            }
+          });
+          if (found) return found;
+        }
+      } else if (selectedTargetType === 'customModel' && selectedCustomModelId) {
+        const customModelsAnchor = document.getElementById('ar-custom-models-anchor');
+        const root = customModelsAnchor?.getObject3D('customModelsRoot') || customModelsAnchor?.object3D;
+        if (root) {
+          // Direct child wrapper group from ar-custom-models
+          const wrapper = root.children?.find((c) => c.userData?.modelId === selectedCustomModelId);
+          if (wrapper) return wrapper;
+          let found = null;
+          root.traverse((node) => {
+            if (!found && node.userData?.modelId === selectedCustomModelId && node.userData?.isCustomModel && node.isGroup) {
+              found = node;
+            }
+          });
+          if (found) return found;
+        }
+      } else if (selectedTargetType === 'geometry' && selectedGeometryId) {
+        const geomAnchor = document.getElementById('ar-additional-geometries-anchor');
+        const root = geomAnchor?.getObject3D('additionalGeometriesRoot') || geomAnchor?.object3D;
+        if (root) {
+          let found = null;
+          root.traverse((node) => {
+            if (!found && node.userData?.geometryId === selectedGeometryId) found = node;
+          });
+          if (found) return found;
+        }
+      } else if (selectedTargetType === 'mesh' && selectedMeshUuid) {
+        const modelEl = document.getElementById('ar-model');
+        const model3D = modelEl?.getObject3D('mesh');
+        if (model3D) {
+          let found = null;
+          model3D.traverse((node) => {
+            if (!found && node.uuid === selectedMeshUuid && node.isMesh) found = node;
+          });
+          if (found) return found;
+        }
+      } else if (selectedTargetType === 'model') {
+        const modelEl = document.getElementById('ar-model');
+        const obj = modelEl?.object3D;
+        if (obj) return obj;
       }
-    } else if (selectedLightId) {
-      const lightsAnchor = document.getElementById('ar-custom-lights-anchor');
-      const root = lightsAnchor?.getObject3D('lightsRoot') || lightsAnchor?.object3D;
-      if (root) {
-        root.traverse((node) => {
-          if (node.userData?.lightId === selectedLightId) {
-            targetObj = node.userData.lightRef || node;
+      return null;
+    };
+
+    const applyAttachment = (targetObj) => {
+      if (cancelled || !targetObj) return;
+
+      // Keep camera synchronized with scene camera
+      const sceneEl = document.querySelector('a-scene');
+      const cam = sceneEl?.camera || (typeof window !== 'undefined' && window.__arOrbitCamera);
+      if (cam && tc.camera !== cam) {
+        tc.camera = cam;
+      }
+
+      // Ensure geometry center strictly for center model submeshes if needed
+      if (
+        selectedTargetType === 'mesh' &&
+        targetObj.isMesh &&
+        targetObj.geometry &&
+        !targetObj.userData?.__isCentered &&
+        !targetObj.userData?.isAdditionalGeometry &&
+        !targetObj.userData?.is3DText &&
+        !targetObj.userData?.isCustomModel
+      ) {
+        targetObj.geometry.computeBoundingBox();
+        const geomBox = targetObj.geometry.boundingBox;
+        if (geomBox) {
+          const centerOffset = new THREE.Vector3();
+          geomBox.getCenter(centerOffset);
+          if (centerOffset.lengthSq() > 0.000001) {
+            targetObj.geometry.center();
+            targetObj.position.add(centerOffset.clone().multiply(targetObj.scale));
+            targetObj.updateMatrixWorld(true);
           }
-        });
+          targetObj.userData.__isCentered = true;
+        }
       }
-    } else if (selectedGeometryId) {
-      const geomAnchor = document.getElementById('ar-additional-geometries-anchor');
-      const root = geomAnchor?.getObject3D('additionalGeometriesRoot') || geomAnchor?.object3D;
-      if (root) {
-        root.traverse((node) => {
-          if (node.userData?.geometryId === selectedGeometryId) targetObj = node;
-        });
-      }
-    } else if (selectedMeshUuid) {
-      const modelEl = document.getElementById('ar-model');
-      const model3D = modelEl?.getObject3D('mesh');
-      if (model3D) {
-        model3D.traverse((node) => {
-          if (node.uuid === selectedMeshUuid && node.isMesh) targetObj = node;
-        });
-      }
-    } else if (selectedTargetType === 'model') {
-      const modelEl = document.getElementById('ar-model');
-      targetObj = modelEl?.object3D;
-    }
 
-    if (targetObj) {
       tc.attach(targetObj);
+      window.__activeGizmoTarget = targetObj;
       const helper = tc.getHelper ? tc.getHelper() : tc;
-      if (helper) helper.visible = true;
+      if (helper) {
+        helper.visible = true;
+        helper.updateMatrixWorld(true);
+      }
+    };
+
+    const initialTarget = resolveTargetObject();
+    if (initialTarget) {
+      applyAttachment(initialTarget);
+    } else if (selectedTargetType) {
+      // Target object might be loading asynchronously (e.g. GLTF / font / geometry mount)
+      let attempts = 0;
+      const maxAttempts = 60; // 60 * 50ms = 3000ms
+      retryInterval = setInterval(() => {
+        if (cancelled) {
+          clearInterval(retryInterval);
+          return;
+        }
+        attempts++;
+        const candidate = resolveTargetObject();
+        if (candidate) {
+          clearInterval(retryInterval);
+          retryInterval = null;
+          applyAttachment(candidate);
+        } else if (attempts >= maxAttempts) {
+          clearInterval(retryInterval);
+          retryInterval = null;
+          tc.detach();
+          window.__activeGizmoTarget = null;
+          const helper = tc.getHelper ? tc.getHelper() : tc;
+          if (helper) helper.visible = false;
+        }
+      }, 50);
     } else {
       tc.detach();
+      window.__activeGizmoTarget = null;
       const helper = tc.getHelper ? tc.getHelper() : tc;
       if (helper) helper.visible = false;
     }
-  }, [selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, selectedTargetType, custom3DTexts, customLights, additionalGeometries]);
+
+    // Also listen for immediate model loaded events
+    const onModelLoadedEvent = () => {
+      if (cancelled) return;
+      const t = resolveTargetObject();
+      if (t) {
+        if (retryInterval) {
+          clearInterval(retryInterval);
+          retryInterval = null;
+        }
+        applyAttachment(t);
+      }
+    };
+
+    const sceneEl = document.querySelector('a-scene');
+    if (sceneEl) {
+      sceneEl.addEventListener('model-loaded', onModelLoadedEvent);
+      sceneEl.addEventListener('custom-model-loaded', onModelLoadedEvent);
+    }
+    window.addEventListener('starwear-custom-model-loaded', onModelLoadedEvent);
+
+    return () => {
+      cancelled = true;
+      if (retryInterval) clearInterval(retryInterval);
+      if (sceneEl) {
+        sceneEl.removeEventListener('model-loaded', onModelLoadedEvent);
+        sceneEl.removeEventListener('custom-model-loaded', onModelLoadedEvent);
+      }
+      window.removeEventListener('starwear-custom-model-loaded', onModelLoadedEvent);
+    };
+  }, [gizmoReady, selectedTargetType, selectedCustomModelId, selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, customModels, custom3DTexts, customLights, additionalGeometries]);
 
   // Visual 3D Selection Box Helper on the selected mesh
   useEffect(() => {
@@ -2793,8 +3372,8 @@ const ARTest = () => {
     transitionCamera(cameraPos, worldCenter, 350);
 
     // Select the mesh so the user sees it highlighted and auto-spin pauses
-    setSelectedMeshUuid(uuid);
-  }, [transitionCamera]);
+    selectSceneObject('mesh', uuid);
+  }, [transitionCamera, selectSceneObject]);
 
   // Studio4D4 & AR Keyboard Shortcuts:
   // W: Translate mode, E: Rotate mode, R: Scale mode, Q: Cycle mode, Esc: Deselect, F: Frame, M: Toggle Marker
@@ -3092,7 +3671,7 @@ const ARTest = () => {
     setMeshList((prev) => prev.filter((m) => m.uuid !== uuid && m.name !== meshName));
 
     if (selectedMeshUuid === uuid) {
-      setSelectedMeshUuid(null);
+      selectSceneObject('model');
       const sceneEl = document.querySelector('a-scene');
       const threeScene = sceneEl?.object3D;
       const oldHelper = threeScene?.getObjectByName('mesh-selection-helper');
@@ -3107,7 +3686,7 @@ const ARTest = () => {
     }
 
     setConfirmDeleteUuid(null);
-  }, [selectedMeshUuid, videoTargetMesh]);
+  }, [selectedMeshUuid, videoTargetMesh, selectSceneObject]);
 
   const handleRestoreMesh = useCallback((nameOrUuid) => {
     let restoredEntry = null;
@@ -3337,10 +3916,10 @@ const ARTest = () => {
           }
         };
 
-        await Promise.all([
-          setDoc(doc(db, 'batches', bId), meshOverridePayload, { merge: true }),
-          setDoc(doc(db, 'assets', bId), meshOverridePayload, { merge: true })
-        ]);
+        const texBatch = writeBatch(db);
+        texBatch.set(doc(db, 'batches', bId), meshOverridePayload, { merge: true });
+        texBatch.set(doc(db, 'assets', bId), meshOverridePayload, { merge: true });
+        await safeCommitBatch(texBatch);
         console.log(`[ARTest] Persisted texture override for ${mesh.name} to Firestore`);
       } else {
         // Queue for saving when batch ID is entered
@@ -3522,10 +4101,10 @@ const ARTest = () => {
             }
           }
         };
-        await Promise.all([
-          setDoc(doc(db, 'batches', bId), clearPayload, { merge: true }),
-          setDoc(doc(db, 'assets', bId), clearPayload, { merge: true })
-        ]);
+        const clearBatch = writeBatch(db);
+        clearBatch.set(doc(db, 'batches', bId), clearPayload, { merge: true });
+        clearBatch.set(doc(db, 'assets', bId), clearPayload, { merge: true });
+        await safeCommitBatch(clearBatch);
         console.log(`[ARTest] Removed texture override in Firestore for ${targetName}`);
       } catch (fsErr) {
         console.warn('[ARTest] Firestore texture removal warning:', fsErr);
@@ -3638,7 +4217,7 @@ const ARTest = () => {
       lastFramedModelKeyRef.current = '';
       setLocalGlbUrl(url);
       setLocalGlbName(file.name);
-      setSelectedMeshUuid(null);
+      selectSceneObject('model');
       setArData((prev) => ({
         ...(prev || {}),
         arExperience: {
@@ -3827,10 +4406,10 @@ const ARTest = () => {
             video_file_path: ''
           }
         };
-        await Promise.all([
-          setDoc(doc(db, 'batches', bId), clearPayload, { merge: true }),
-          setDoc(doc(db, 'assets', bId), clearPayload, { merge: true })
-        ]);
+        const vidBatch = writeBatch(db);
+        vidBatch.set(doc(db, 'batches', bId), clearPayload, { merge: true });
+        vidBatch.set(doc(db, 'assets', bId), clearPayload, { merge: true });
+        await safeCommitBatch(vidBatch);
         console.log('[ARTest] Persisted video removal to Firestore for batch:', bId);
       } catch (fsErr) {
         console.warn('[ARTest] Firestore video removal warning:', fsErr);
@@ -3858,7 +4437,7 @@ const ARTest = () => {
     setLocalGlbName('');
     setSelectedVideoFile(null);
     setSelectedGlbFile(null);
-    setSelectedMeshUuid(null);
+    clearSelectionAndDetachGizmo();
     lastFramedModelKeyRef.current = '';
 
     try {
@@ -4148,6 +4727,14 @@ const ARTest = () => {
         setCustomLights([]);
       }
 
+      // Populate Custom External 3D Models if configured on batch
+      const loadedModels = cfg.customModels || data.customModels || data.arExperience?.customModels || null;
+      if (Array.isArray(loadedModels)) {
+        setCustomModels(loadedModels);
+      } else {
+        setCustomModels([]);
+      }
+
       if (cfg && cfg.meshOverrides) {
         const loadedDeleted = Object.entries(cfg.meshOverrides)
           .filter(([_, ovr]) => ovr && ovr.deleted)
@@ -4402,6 +4989,7 @@ const ARTest = () => {
         twinkle: Boolean(particleTwinkle)
       },
       additionalGeometries: additionalGeometries || [],
+      customModels: (customModels || []).map(({ file, ...rest }) => rest),
       custom3DTexts: custom3DTexts || [],
       customLights: customLights || [],
       updatedAt: new Date().toISOString()
@@ -4429,12 +5017,16 @@ const ARTest = () => {
         const syncPayload = {
           ar_config: currentConfig,
           portalConfig: currentConfig.portalConfig,
-          particleConfig: currentConfig.particleConfig
+          particleConfig: currentConfig.particleConfig,
+          customModels: currentConfig.customModels || [],
+          additionalGeometries: currentConfig.additionalGeometries || [],
+          custom3DTexts: currentConfig.custom3DTexts || [],
+          customLights: currentConfig.customLights || []
         };
-        await Promise.allSettled([
-          setDoc(batchRef, syncPayload, { merge: true }),
-          setDoc(assetRef, syncPayload, { merge: true })
-        ]);
+        const launchBatch = writeBatch(db);
+        launchBatch.set(batchRef, syncPayload, { merge: true });
+        launchBatch.set(assetRef, syncPayload, { merge: true });
+        await safeCommitBatch(launchBatch);
       } catch (fsErr) {
         console.warn('[ARTest] Background Firestore sync failed:', fsErr);
       }
@@ -4455,6 +5047,14 @@ const ARTest = () => {
       alert('Please enter a Batch ID in the input above before saving.');
       return;
     }
+
+    const now = Date.now();
+    if (isSavingConfigRef.current || (now - lastSaveTimeRef.current < 1500)) {
+      console.warn('[ARTest] handleSaveConfig throttled or already running, ignoring duplicate invocation');
+      return;
+    }
+    isSavingConfigRef.current = true;
+    lastSaveTimeRef.current = now;
 
     setSavingConfig(true);
     setSaveSuccessMsg('');
@@ -4557,6 +5157,39 @@ const ARTest = () => {
         stagedMarkerFileRef.current = null;
       }
 
+      // 2e. Upload any staged custom external 3D model files (.glb/.gltf) to Firebase Storage
+      let cleanedCustomModels = [];
+      if (Array.isArray(customModels) && customModels.length > 0) {
+        setUploadProgress('Uploading external 3D models to Storage...');
+        cleanedCustomModels = await Promise.all(
+          customModels.map(async (m) => {
+            let finalUrl = m.url;
+            if (m.file) {
+              setUploadProgress(`Uploading 3D model ${m.name || m.fileName || 'model'} to Storage...`);
+              const cleanFileName = (m.fileName || `${m.id}.glb`).replace(/[^a-zA-Z0-9._-]/g, '_');
+              const storagePath = `assets/${batchId.trim()}/custom_models/${m.id}_${cleanFileName}`;
+              const modelRef = ref(storage, storagePath);
+              await uploadBytes(modelRef, m.file, {
+                contentType: 'model/gltf-binary',
+                customMetadata: {
+                  batchId: batchId.trim(),
+                  modelId: m.id,
+                  originalName: m.fileName || m.name || ''
+                }
+              });
+              finalUrl = await getDownloadURL(modelRef);
+            }
+            // Strip non-serializable File object so Firestore setDoc does not throw
+            const { file, ...cleanModel } = m;
+            return {
+              ...cleanModel,
+              url: finalUrl
+            };
+          })
+        );
+        // Synchronize local state with permanent download URLs
+        setCustomModels(cleanedCustomModels);
+      }
 
       setUploadProgress('Saving batch configuration to Firestore...');
 
@@ -4775,6 +5408,7 @@ const ARTest = () => {
           mindFilePath: markerInfo?.mindFilePath || ''
         },
         additionalGeometries: additionalGeometries || [],
+        customModels: cleanedCustomModels,
         custom3DTexts: custom3DTexts || [],
         customLights: customLights || [],
         updatedAt: new Date().toISOString()
@@ -4840,25 +5474,47 @@ const ARTest = () => {
         particleConfig: arConfigPayload.particleConfig,
         websiteLayer: arConfigPayload.websiteLayer,
         additionalGeometries: additionalGeometries || [],
+        customModels: cleanedCustomModels,
         custom3DTexts: custom3DTexts || [],
-        customLights: customLights || []
+        customLights: customLights || [],
+        ambientColor,
+        ambientIntensity,
+        dir1Color,
+        dir1Intensity,
+        dir1Position,
+        dir2Color,
+        dir2Intensity,
+        dir2Position,
+        rimColor,
+        rimIntensity,
+        rimPosition,
+        modelScale,
+        modelPosition: `${modelPosX} ${modelPosY} ${modelPosZ}`,
+        modelRotation: `${modelRotX} ${modelRotY} ${modelRotZ}`,
+        modelRotX,
+        modelRotY,
+        modelRotZ,
+        modelPosX,
+        modelPosY,
+        modelPosZ,
+        modelRotSpeed,
+        meshOverrides
       };
 
-      // Save to both batches and assets collections with merge: true to guarantee persistence
+      // Save to both batches and assets collections with writeBatch and safe retry
       const batchRef = doc(db, 'batches', batchId.trim());
       const assetRef = doc(db, 'assets', batchId.trim());
 
-      const savePromises = [
-        setDoc(batchRef, payload, { merge: true }),
-        setDoc(assetRef, payload, { merge: true })
-      ];
+      const firestoreBatch = writeBatch(db);
+      firestoreBatch.set(batchRef, payload, { merge: true });
+      firestoreBatch.set(assetRef, payload, { merge: true });
 
       const altAssetId = arData?.asset_id || arData?.assetId || arData?.product_id || arData?.productId;
       if (altAssetId && typeof altAssetId === 'string' && altAssetId.trim() !== batchId.trim()) {
-        savePromises.push(setDoc(doc(db, 'assets', altAssetId.trim()), payload, { merge: true }));
+        firestoreBatch.set(doc(db, 'assets', altAssetId.trim()), payload, { merge: true });
       }
 
-      await Promise.all(savePromises);
+      await safeCommitBatch(firestoreBatch);
 
       // Save to localStorage for instant preview sync
       try {
@@ -4878,13 +5534,15 @@ const ARTest = () => {
         video_file_path: videoFilePath,
         gltf_file_path: gltfFilePath || prev?.gltf_file_path,
         config: arConfigPayload,
+        customModels: cleanedCustomModels,
         arExperience: {
           ...(prev?.arExperience || {}),
           thumbnailUrl: freshThumbnailUrl || prev?.arExperience?.thumbnailUrl,
           thumbnail_url: freshThumbnailUrl || prev?.arExperience?.thumbnail_url,
           modelUrl: finalGltfUrl || prev?.arExperience?.modelUrl,
           videoUrl: finalVideoUrl,
-          config: arConfigPayload
+          config: arConfigPayload,
+          customModels: cleanedCustomModels
         }
       }));
 
@@ -4903,6 +5561,7 @@ const ARTest = () => {
     } finally {
       setSavingConfig(false);
       setUploadProgress('');
+      isSavingConfigRef.current = false;
     }
   };
 
@@ -5017,22 +5676,29 @@ const ARTest = () => {
         // 1. Save global defaults document to settings/tracking
         await setDoc(doc(db, 'settings', 'tracking'), trackingPayload, { merge: true });
 
-        // 2. Propagate to all existing batch and asset documents in Firestore
+        // 2. Propagate to all existing batch and asset documents in Firestore using chunked writeBatches
         let updatedCount = 0;
         try {
           const batchesSnap = await getDocs(collection(db, 'batches'));
-          const updatePromises = [];
-          batchesSnap.forEach((bDoc) => {
+          const CHUNK_SIZE = 200; // max 500 per batch in Firestore, keep comfortably under limit
+          let currentBatch = writeBatch(db);
+          let opCount = 0;
+
+          for (const bDoc of batchesSnap.docs) {
             updatedCount++;
-            updatePromises.push(
-              setDoc(doc(db, 'batches', bDoc.id), { ar_config: { trackingConfig: trackingPayload } }, { merge: true })
-            );
-            updatePromises.push(
-              setDoc(doc(db, 'assets', bDoc.id), { ar_config: { trackingConfig: trackingPayload } }, { merge: true })
-            );
-          });
-          if (updatePromises.length > 0) {
-            await Promise.all(updatePromises);
+            currentBatch.set(doc(db, 'batches', bDoc.id), { ar_config: { trackingConfig: trackingPayload } }, { merge: true });
+            currentBatch.set(doc(db, 'assets', bDoc.id), { ar_config: { trackingConfig: trackingPayload } }, { merge: true });
+            opCount += 2;
+
+            if (opCount >= CHUNK_SIZE) {
+              await safeCommitBatch(currentBatch);
+              await new Promise((r) => setTimeout(r, 120)); // pacing delay to respect Firestore rate limits
+              currentBatch = writeBatch(db);
+              opCount = 0;
+            }
+          }
+          if (opCount > 0) {
+            await safeCommitBatch(currentBatch);
           }
         } catch (propagateErr) {
           console.warn('Batch propagation warning:', propagateErr);
@@ -5052,10 +5718,10 @@ const ARTest = () => {
         const batchRef = doc(db, 'batches', bId);
         const assetRef = doc(db, 'assets', bId);
 
-        await Promise.all([
-          setDoc(batchRef, { ar_config: { trackingConfig: trackingPayload } }, { merge: true }),
-          setDoc(assetRef, { ar_config: { trackingConfig: trackingPayload } }, { merge: true })
-        ]);
+        const singleBatch = writeBatch(db);
+        singleBatch.set(batchRef, { ar_config: { trackingConfig: trackingPayload } }, { merge: true });
+        singleBatch.set(assetRef, { ar_config: { trackingConfig: trackingPayload } }, { merge: true });
+        await safeCommitBatch(singleBatch);
 
         const timeStr = new Date().toLocaleTimeString();
         setTrackingSuccessMsg(`Saved tracking settings for batch "${bId}" at ${timeStr}!`);
@@ -5202,6 +5868,16 @@ const ARTest = () => {
 
           {/* Quick Local GLB Loader & Save Action */}
           <div className="mt-2.5 pt-2.5 border-t border-neutral-800/80 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsAddModelModalOpen(true)}
+              className="px-2.5 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-purple-950/40 cursor-pointer shrink-0"
+              title="Add External 3D Model (.glb / .gltf from local file, remote URL, or 3D library)"
+            >
+              <span className="material-symbols-outlined text-[15px]">view_in_ar</span>
+              <span>+ Add Model</span>
+            </button>
+
             <label className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 hover:border-neutral-500 rounded text-xs font-medium cursor-pointer transition-colors text-neutral-200 truncate">
               <span className="material-symbols-outlined text-[15px] text-indigo-400">folder_open</span>
               <span className="truncate">{localGlbName ? `3D: ${localGlbName}` : 'Test Local GLB Model'}</span>
@@ -5291,32 +5967,43 @@ const ARTest = () => {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-400">Active Target:</span>
-              <span className={`text-xs font-bold px-2 py-0.5 rounded flex items-center gap-1 border ${selectedMesh
-                ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40 shadow-sm'
-                : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+              <span className={`text-xs font-bold px-2 py-0.5 rounded flex items-center gap-1 border ${
+                selectedTargetType === 'mesh'
+                  ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40 shadow-sm'
+                  : selectedTargetType === 'customModel'
+                  ? 'bg-purple-500/20 text-purple-300 border-purple-500/40 shadow-sm'
+                  : selectedTargetType === 'geometry'
+                  ? 'bg-teal-500/20 text-teal-300 border-teal-500/40 shadow-sm'
+                  : selectedTargetType === 'text3d'
+                  ? 'bg-sky-500/20 text-sky-300 border-sky-500/40 shadow-sm'
+                  : selectedTargetType === 'light'
+                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-sm'
+                  : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                 }`}>
                 <span className="material-symbols-outlined text-xs">
-                  {selectedMesh ? 'interests' : 'language'}
+                  {currentSelectedObjectInfo?.icon || 'language'}
                 </span>
                 <span className="truncate max-w-[170px]">
-                  {selectedMesh ? selectedMesh.name : 'Entire 3D Model (Root)'}
+                  {currentSelectedObjectInfo?.name || 'Entire 3D Model (Root)'}
                 </span>
               </span>
             </div>
 
-            {selectedMesh && (
+            {selectedTargetType !== 'model' && (
               <div className="flex items-center gap-1.5">
+                {selectedMesh && (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteMesh(selectedMesh.uuid, selectedMesh.name)}
+                    className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-500/40 hover:text-white transition-colors flex items-center gap-1 cursor-pointer"
+                    title="Delete this mesh from the scene"
+                  >
+                    <span className="material-symbols-outlined text-xs">delete</span> Delete
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => handleDeleteMesh(selectedMesh.uuid, selectedMesh.name)}
-                  className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-500/40 hover:text-white transition-colors flex items-center gap-1 cursor-pointer"
-                  title="Delete this mesh from the scene"
-                >
-                  <span className="material-symbols-outlined text-xs">delete</span> Delete
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedMeshUuid(null)}
+                  onClick={() => selectSceneObject('model')}
                   className="text-[10px] font-mono px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border border-neutral-700 hover:text-white transition-colors cursor-pointer"
                   title="Switch back to Root Model settings"
                 >
@@ -5774,6 +6461,15 @@ const ARTest = () => {
                   )}
                   <button
                     type="button"
+                    onClick={() => setIsAddModelModalOpen(true)}
+                    className="px-2 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shadow-xs border border-purple-500 transition-colors"
+                    title="Add External 3D Model (.glb / .gltf from file, URL, or sample library)"
+                  >
+                    <span className="material-symbols-outlined text-xs">view_in_ar</span>
+                    <span>+ Model</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setGeometryModalOpen(true)}
                     className="px-2 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shadow-xs border border-sky-500 transition-colors"
                     title="Add 3D Primitives (Cube, Sphere, Cylinder, Torus, etc.)"
@@ -5810,20 +6506,20 @@ const ARTest = () => {
 
               {/* Root Selection Card */}
               <div
-                onClick={() => setSelectedMeshUuid(null)}
-                className={`p-3 rounded-lg border cursor-pointer transition-all flex items-center justify-between ${!selectedMeshUuid
+                onClick={() => selectSceneObject('model')}
+                className={`p-3 rounded-lg border cursor-pointer transition-all flex items-center justify-between ${selectedTargetType === 'model'
                   ? 'bg-emerald-950/40 border-emerald-500 shadow-md ring-1 ring-emerald-500/50'
                   : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700'
                   }`}
               >
                 <div className="flex items-center gap-2.5">
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${!selectedMeshUuid ? 'bg-emerald-500/20 text-emerald-400' : 'bg-neutral-800 text-neutral-400'}`}>
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${selectedTargetType === 'model' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-neutral-800 text-neutral-400'}`}>
                     <span className="material-symbols-outlined text-lg">language</span>
                   </div>
                   <div>
                     <h3 className="text-xs font-bold text-white flex items-center gap-1.5">
                       Entire 3D Model (Root Anchor)
-                      {!selectedMeshUuid && <span className="text-[9px] bg-emerald-500/30 text-emerald-300 px-1.5 py-0.2 rounded font-mono">ACTIVE</span>}
+                      {selectedTargetType === 'model' && <span className="text-[9px] bg-emerald-500/30 text-emerald-300 px-1.5 py-0.2 rounded font-mono">ACTIVE</span>}
                       {Boolean(activeVideoUrl) && videoTargetMesh === 'all' && (
                         <span className="text-[8px] bg-red-500/30 text-red-300 border border-red-500/50 px-1 py-0.2 rounded font-mono font-bold flex items-center gap-0.5">
                           <span className="material-symbols-outlined text-[10px]">movie</span>
@@ -5862,7 +6558,7 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => {
-                      setSelectedMeshUuid(null);
+                      selectSceneObject('model');
                       setCameraView('front');
                     }}
                     className="w-7 h-7 rounded flex items-center justify-center text-cyan-400 hover:text-cyan-200 hover:bg-cyan-950/60 border border-cyan-500/30 transition-colors cursor-pointer"
@@ -5892,7 +6588,7 @@ const ARTest = () => {
                   return (
                     <div
                       key={mesh.uuid}
-                      onClick={() => setSelectedMeshUuid(mesh.uuid)}
+                      onClick={() => selectSceneObject('mesh', mesh.uuid)}
                       className={`p-2.5 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${isSelected
                         ? 'bg-indigo-950/50 border-indigo-500 shadow-md ring-1 ring-indigo-500/50'
                         : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700'
@@ -6158,8 +6854,7 @@ const ARTest = () => {
                         <div
                           key={geom.id}
                           onClick={() => {
-                            setSelectedGeometryId(geom.id);
-                            setSelectedMeshUuid(null);
+                            selectSceneObject('geometry', geom.id);
                             setActiveTab('shapes');
                           }}
                           className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${isSelected
@@ -6182,6 +6877,14 @@ const ARTest = () => {
                             </div>
                           </div>
                           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => handleExportShapeAsGLB(geom.id)}
+                              className="w-6 h-6 rounded flex items-center justify-center text-teal-400 hover:text-teal-300 hover:bg-teal-950/40 transition-colors cursor-pointer"
+                              title="Export shape as .GLB"
+                            >
+                              <span className="material-symbols-outlined text-xs">download</span>
+                            </button>
                             <button
                               type="button"
                               onClick={() => handleToggleGeometryVisibility(geom.id)}
@@ -6210,6 +6913,328 @@ const ARTest = () => {
                   </div>
                 )}
               </div>
+
+              {/* External 3D Models Section */}
+              <div className="pt-3 border-t border-neutral-800">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-purple-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-purple-400">view_in_ar</span>
+                    External 3D Models ({customModels.length})
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddModelModalOpen(true)}
+                    className="text-[10px] bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 border border-purple-500/40 rounded px-2 py-0.5 font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-xs">add</span>
+                    Add Model
+                  </button>
+                </div>
+
+                {customModels.length === 0 ? (
+                  <div className="p-3 bg-neutral-900/40 rounded-xl border border-neutral-800 text-center space-y-1.5">
+                    <p className="text-[11px] text-neutral-400">
+                      No external 3D models added to the scene yet.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddModelModalOpen(true)}
+                      className="text-xs text-purple-400 hover:text-purple-300 font-bold underline cursor-pointer inline-flex items-center gap-1"
+                    >
+                      <span className="material-symbols-outlined text-xs">upload_file</span>
+                      Upload .GLB or Choose from 3D Library
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {customModels.map((model) => {
+                      const isSelected = selectedCustomModelId === model.id;
+                      return (
+                        <div
+                          key={model.id}
+                          onClick={() => selectSceneObject('customModel', model.id)}
+                          className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${isSelected
+                            ? 'bg-purple-950/50 border-purple-500 shadow-md ring-1 ring-purple-500/50'
+                            : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-7 h-7 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center justify-center shrink-0">
+                              <span className="material-symbols-outlined text-sm">view_in_ar</span>
+                            </div>
+                            <div className="min-w-0">
+                              <span className="text-xs font-bold text-neutral-200 truncate block">
+                                {model.name}
+                              </span>
+                              <span className="text-[9px] text-purple-400 font-mono truncate block">
+                                {model.fileName || '3D Model'} • {model.scale || 1}x {model.autoRotate ? '• ⟳ Auto' : ''}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => handleExportShapeAsGLB(model.id)}
+                              className="w-6 h-6 rounded flex items-center justify-center text-purple-400 hover:text-purple-300 hover:bg-purple-950/40 transition-colors cursor-pointer"
+                              title="Export external model as .GLB"
+                            >
+                              <span className="material-symbols-outlined text-xs">download</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDuplicateCustomModel(model.id)}
+                              className="w-6 h-6 rounded flex items-center justify-center text-sky-400 hover:text-sky-300 hover:bg-sky-950/40 transition-colors cursor-pointer"
+                              title="Duplicate model in scene"
+                            >
+                              <span className="material-symbols-outlined text-xs">content_copy</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleCustomModelVisibility(model.id)}
+                              className={`w-6 h-6 rounded flex items-center justify-center transition-colors cursor-pointer ${model.visible !== false
+                                ? 'text-neutral-400 hover:text-white'
+                                : 'text-neutral-600 hover:text-neutral-400'
+                              }`}
+                              title={model.visible !== false ? 'Hide model' : 'Show model'}
+                            >
+                              <span className="material-symbols-outlined text-xs">
+                                {model.visible !== false ? 'visibility' : 'visibility_off'}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCustomModel(model.id)}
+                              className="w-6 h-6 rounded flex items-center justify-center text-red-400 hover:text-red-300 hover:bg-red-950/40 transition-colors cursor-pointer"
+                              title="Delete model from scene"
+                            >
+                              <span className="material-symbols-outlined text-xs">delete</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Selected External Model Inspector */}
+                {(() => {
+                  const currentModel = customModels.find((m) => m.id === selectedCustomModelId);
+                  if (!currentModel) return null;
+
+                  return (
+                    <div className="mt-3 p-3.5 bg-neutral-900/80 rounded-xl border border-purple-500/30 space-y-3.5 shadow-sm">
+                      <div className="flex items-center justify-between border-b border-neutral-800 pb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="material-symbols-outlined text-purple-400 text-base">tune</span>
+                          <div>
+                            <h4 className="text-xs font-bold text-white truncate max-w-[180px]">
+                              {currentModel.name}
+                            </h4>
+                            <span className="text-[9px] text-purple-400 font-mono">
+                              External 3D Model Inspector
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={focusCameraOnSelectedObject}
+                            className="px-2 py-1 bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 border border-purple-500/40 rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Focus 3D camera on this model"
+                          >
+                            <span className="material-symbols-outlined text-xs">filter_center_focus</span>
+                            Focus
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleExportShapeAsGLB(currentModel.id)}
+                            className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Export model as standalone .GLB"
+                          >
+                            <span className="material-symbols-outlined text-xs">download</span>
+                            GLB
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Model Name Input */}
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                          Model Display Name
+                        </label>
+                        <input
+                          type="text"
+                          value={currentModel.name}
+                          onChange={(e) => handleUpdateCustomModel(currentModel.id, { name: e.target.value })}
+                          className="w-full px-2.5 py-1.5 bg-black/60 border border-neutral-800 rounded text-xs text-neutral-200 focus:outline-none focus:border-purple-500"
+                        />
+                      </div>
+
+                      {/* Transform: Position X, Y, Z */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                          <span>Position (X, Y, Z meters)</span>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateCustomModel(currentModel.id, { posX: 0, posY: 0, posZ: 0 })}
+                            className="text-[9px] text-purple-400 hover:underline cursor-pointer"
+                          >
+                            Reset (0,0,0)
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <NumberSliderInput
+                            label="X"
+                            value={currentModel.posX ?? 0}
+                            onChange={(val) => handleUpdateCustomModel(currentModel.id, { posX: val })}
+                            min={-10}
+                            max={10}
+                            step={0.05}
+                            color="rose"
+                            showRange={false}
+                            stepButtons={false}
+                          />
+                          <NumberSliderInput
+                            label="Y"
+                            value={currentModel.posY ?? 0}
+                            onChange={(val) => handleUpdateCustomModel(currentModel.id, { posY: val })}
+                            min={-10}
+                            max={10}
+                            step={0.05}
+                            color="emerald"
+                            showRange={false}
+                            stepButtons={false}
+                          />
+                          <NumberSliderInput
+                            label="Z"
+                            value={currentModel.posZ ?? 0}
+                            onChange={(val) => handleUpdateCustomModel(currentModel.id, { posZ: val })}
+                            min={-10}
+                            max={10}
+                            step={0.05}
+                            color="sky"
+                            showRange={false}
+                            stepButtons={false}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Transform: Rotation X, Y, Z */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                          <span>Rotation (Degrees)</span>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateCustomModel(currentModel.id, { rotX: 0, rotY: 0, rotZ: 0 })}
+                            className="text-[9px] text-purple-400 hover:underline cursor-pointer"
+                          >
+                            Reset
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <NumberSliderInput
+                            label="Rot X"
+                            value={currentModel.rotX ?? 0}
+                            onChange={(val) => handleUpdateCustomModel(currentModel.id, { rotX: val })}
+                            min={-180}
+                            max={180}
+                            step={5}
+                            color="rose"
+                            showRange={false}
+                            stepButtons={false}
+                          />
+                          <NumberSliderInput
+                            label="Rot Y"
+                            value={currentModel.rotY ?? 0}
+                            onChange={(val) => handleUpdateCustomModel(currentModel.id, { rotY: val })}
+                            min={-180}
+                            max={180}
+                            step={5}
+                            color="emerald"
+                            showRange={false}
+                            stepButtons={false}
+                          />
+                          <NumberSliderInput
+                            label="Rot Z"
+                            value={currentModel.rotZ ?? 0}
+                            onChange={(val) => handleUpdateCustomModel(currentModel.id, { rotZ: val })}
+                            min={-180}
+                            max={180}
+                            step={5}
+                            color="sky"
+                            showRange={false}
+                            stepButtons={false}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Transform: Scale */}
+                      <div className="space-y-1">
+                        <NumberSliderInput
+                          label="Scale Multiplier"
+                          value={currentModel.scale ?? 1}
+                          onChange={(val) => handleUpdateCustomModel(currentModel.id, { scale: val, scaleX: val, scaleY: val, scaleZ: val })}
+                          min={0.01}
+                          max={20}
+                          step={0.05}
+                          precision={2}
+                          color="purple"
+                          description="Scale size of the external 3D model"
+                        />
+                      </div>
+
+                      {/* Auto-Rotate Option */}
+                      <div className="p-2.5 rounded-lg bg-black/40 border border-neutral-800 space-y-2">
+                        <label className="flex items-center justify-between cursor-pointer">
+                          <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+                            <span className="material-symbols-outlined text-sm text-purple-400">autorenew</span>
+                            Auto-Rotate in Scene
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(currentModel.autoRotate)}
+                            onChange={(e) => handleUpdateCustomModel(currentModel.id, { autoRotate: e.target.checked })}
+                            className="rounded bg-neutral-900 border-neutral-700 text-purple-500 focus:ring-purple-400"
+                          />
+                        </label>
+
+                        {currentModel.autoRotate && (
+                          <NumberSliderInput
+                            label="Rotation Speed (deg/s)"
+                            value={currentModel.rotationSpeed ?? 25}
+                            onChange={(val) => handleUpdateCustomModel(currentModel.id, { rotationSpeed: val })}
+                            min={-180}
+                            max={180}
+                            step={5}
+                            color="purple"
+                            showRange={false}
+                          />
+                        )}
+                      </div>
+
+                      {/* Quick Actions */}
+                      <div className="flex items-center justify-between pt-1 border-t border-neutral-800 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => handleDuplicateCustomModel(currentModel.id)}
+                          className="px-2.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                        >
+                          <span className="material-symbols-outlined text-xs">content_copy</span>
+                          Duplicate
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCustomModel(currentModel.id)}
+                          className="px-2.5 py-1.5 bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-500/30 rounded text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                        >
+                          <span className="material-symbols-outlined text-xs">delete</span>
+                          Delete Model
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
           )}
 
@@ -6229,15 +7254,38 @@ const ARTest = () => {
                     Add primitive 3D geometries (Cube, Sphere, Cylinder, Torus, etc.) locked to your scene
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setGeometryModalOpen(true)}
-                  className="px-3 py-1.5 bg-gradient-to-r from-teal-600 to-sky-600 hover:from-teal-500 hover:to-sky-500 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-teal-950/40 transition-all cursor-pointer"
-                  title="Add new 3D primitive geometry"
-                >
-                  <span className="material-symbols-outlined text-sm">add_box</span>
-                  <span>+ Add Shape</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddModelModalOpen(true)}
+                    className="px-2.5 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-purple-950/40 transition-all cursor-pointer"
+                    title="Add External 3D Model (.glb / .gltf from file, URL, or sample library)"
+                  >
+                    <span className="material-symbols-outlined text-sm">view_in_ar</span>
+                    <span>+ Add Model</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingVectorGeom(null);
+                      setVectorPenModalOpen(true);
+                    }}
+                    className="px-2.5 py-1.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:opacity-95 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-purple-950/40 transition-all cursor-pointer"
+                    title="Draw custom vector shape using Photoshop-style pen tool and extrude into 3D"
+                  >
+                    <span className="material-symbols-outlined text-sm">gesture</span>
+                    <span>+ Pen Tool</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGeometryModalOpen(true)}
+                    className="px-3 py-1.5 bg-gradient-to-r from-teal-600 to-sky-600 hover:from-teal-500 hover:to-sky-500 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-teal-950/40 transition-all cursor-pointer"
+                    title="Add new 3D primitive geometry"
+                  >
+                    <span className="material-symbols-outlined text-sm">add_box</span>
+                    <span>+ Add Shape</span>
+                  </button>
+                </div>
               </div>
 
               {/* Zero Geometries Empty State */}
@@ -6249,17 +7297,30 @@ const ARTest = () => {
                   <div className="space-y-1">
                     <h3 className="text-xs font-bold text-neutral-200">No Custom Geometries in Scene</h3>
                     <p className="text-[11px] text-neutral-400 max-w-sm mx-auto">
-                      Add 3D primitives like cubes, spheres, cylinders, cones, torus rings, capsules, or polyhedra to compose your AR experience alongside your base 3D model.
+                      Draw custom vector paths with the Photoshop-style Pen Tool or add 3D primitives (cubes, spheres, cylinders, cones, torus rings) to compose your AR experience.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setGeometryModalOpen(true)}
-                    className="px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer shadow-md"
-                  >
-                    <span className="material-symbols-outlined text-sm">add</span>
-                    <span>Add First 3D Geometry</span>
-                  </button>
+                  <div className="flex items-center justify-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingVectorGeom(null);
+                        setVectorPenModalOpen(true);
+                      }}
+                      className="px-3.5 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-90 text-white font-bold text-xs rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer shadow-md"
+                    >
+                      <span className="material-symbols-outlined text-sm">gesture</span>
+                      <span>Draw with Pen Tool</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGeometryModalOpen(true)}
+                      className="px-3.5 py-2 bg-teal-600 hover:bg-teal-500 text-white font-bold text-xs rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer shadow-md"
+                    >
+                      <span className="material-symbols-outlined text-sm">add</span>
+                      <span>Add 3D Shape</span>
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <>
@@ -6274,7 +7335,7 @@ const ARTest = () => {
                         return (
                           <div
                             key={g.id}
-                            onClick={() => setSelectedGeometryId(g.id)}
+                            onClick={() => selectSceneObject('geometry', g.id)}
                             className={`p-2 rounded-lg border text-left cursor-pointer transition-all flex items-center justify-between group ${isSelected
                               ? 'bg-teal-950/60 border-teal-400 ring-1 ring-teal-500/50 shadow'
                               : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700'
@@ -6294,19 +7355,32 @@ const ARTest = () => {
                                 </span>
                               </div>
                             </div>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleToggleGeometryVisibility(g.id);
-                              }}
-                              className={`p-1 rounded transition-colors ${g.visible !== false ? 'text-neutral-400 hover:text-white' : 'text-neutral-600 hover:text-neutral-300'}`}
-                              title={g.visible !== false ? 'Hide' : 'Show'}
-                            >
-                              <span className="material-symbols-outlined text-xs">
-                                {g.visible !== false ? 'visibility' : 'visibility_off'}
-                              </span>
-                            </button>
+                            <div className="flex items-center gap-0.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleExportShapeAsGLB(g.id);
+                                }}
+                                className="p-1 rounded text-neutral-400 hover:text-teal-300 hover:bg-teal-950/40 transition-colors cursor-pointer"
+                                title="Export shape as .GLB"
+                              >
+                                <span className="material-symbols-outlined text-xs">download</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleGeometryVisibility(g.id);
+                                }}
+                                className={`p-1 rounded transition-colors ${g.visible !== false ? 'text-neutral-400 hover:text-white' : 'text-neutral-600 hover:text-neutral-300'}`}
+                                title={g.visible !== false ? 'Hide' : 'Show'}
+                              >
+                                <span className="material-symbols-outlined text-xs">
+                                  {g.visible !== false ? 'visibility' : 'visibility_off'}
+                                </span>
+                              </button>
+                            </div>
                           </div>
                         );
                       })}
@@ -6338,7 +7412,16 @@ const ARTest = () => {
                               {currentGeom.type}
                             </span>
                           </div>
-                          <div className="flex items-center gap-1 shrink-0">
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleExportShapeAsGLB(currentGeom.id)}
+                              className="h-7 px-2.5 rounded bg-teal-950/60 hover:bg-teal-900 border border-teal-500/40 text-teal-300 flex items-center gap-1 text-xs font-semibold transition-colors cursor-pointer"
+                              title="Export Shape as .GLB File"
+                            >
+                              <span className="material-symbols-outlined text-xs">download</span>
+                              <span>Export .GLB</span>
+                            </button>
                             <button
                               type="button"
                               onClick={() => handleDuplicateGeometry(currentGeom.id)}
@@ -6357,6 +7440,35 @@ const ARTest = () => {
                             </button>
                           </div>
                         </div>
+
+                        {/* Vector Path Info & Edit in Pen Studio */}
+                        {currentGeom.type === 'vectorExtrude' && (
+                          <div className="p-3 bg-gradient-to-r from-purple-950/40 via-indigo-950/30 to-neutral-900 border border-purple-500/40 rounded-lg space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-purple-300 flex items-center gap-1.5">
+                                <span className="material-symbols-outlined text-sm">gesture</span>
+                                Vector Pen Path
+                              </span>
+                              <span className="text-[10px] text-purple-400 font-mono bg-purple-950/60 px-2 py-0.5 rounded border border-purple-500/30">
+                                {currentGeom.params?.points?.length || 0} anchor points
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-neutral-300">
+                              Photoshop-style vector face. You can adjust anchor points, handles, bevels, and depth in the interactive 2D canvas.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingVectorGeom(currentGeom);
+                                setVectorPenModalOpen(true);
+                              }}
+                              className="w-full py-2 px-3 bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:opacity-95 text-white font-bold text-xs rounded-lg transition-all flex items-center justify-center gap-1.5 shadow-md shadow-purple-950/50 cursor-pointer"
+                            >
+                              <span className="material-symbols-outlined text-sm">edit</span>
+                              <span>Edit Vector Path in Pen Studio</span>
+                            </button>
+                          </div>
+                        )}
 
                         {/* Material Presets Quick Select */}
                         <div className="space-y-1.5">
@@ -6723,13 +7835,7 @@ const ARTest = () => {
                       return (
                         <div
                           key={textItem.id}
-                          onClick={() => {
-                            setSelectedText3DId(textItem.id);
-                            setSelectedMeshUuid(null);
-                            setSelectedGeometryId(null);
-                            setSelectedLightId(null);
-                            setSelectedTargetType('text3d');
-                          }}
+                          onClick={() => selectSceneObject('text3d', textItem.id)}
                           className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer transition-all ${
                             isSelected
                               ? 'bg-pink-950/40 border-pink-500/60 text-white shadow-sm'
@@ -7159,15 +8265,26 @@ const ARTest = () => {
                       Dynamic Light Sources ({customLights.length})
                     </h2>
                   </div>
-                  <label className="text-[10px] font-mono text-neutral-400 flex items-center gap-1 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={showLightHelpers}
-                      onChange={(e) => setShowLightHelpers(e.target.checked)}
-                      className="rounded accent-amber-500 cursor-pointer"
-                    />
-                    Show 3D Bulbs/Gizmos
-                  </label>
+                  <div className="flex items-center gap-2">
+                    <label className="text-[10px] font-mono text-neutral-400 flex items-center gap-1 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={showLightHelpers}
+                        onChange={(e) => setShowLightHelpers(e.target.checked)}
+                        className="rounded accent-amber-500 cursor-pointer"
+                      />
+                      Show Bulbs
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowDiagnosticsDrawer(true)}
+                      className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-[10px] font-mono text-amber-300 font-bold flex items-center gap-1 transition-all"
+                      title="Open Real-Time Point Light Diagnostics & DevTools Drawer"
+                    >
+                      <span className="material-symbols-outlined text-xs">tune</span>
+                      DevTools
+                    </button>
+                  </div>
                 </div>
 
                 {/* Add Light Buttons */}
@@ -7247,13 +8364,7 @@ const ARTest = () => {
                       return (
                         <div
                           key={l.id}
-                          onClick={() => {
-                            setSelectedLightId(l.id);
-                            setSelectedMeshUuid(null);
-                            setSelectedGeometryId(null);
-                            setSelectedText3DId(null);
-                            setSelectedTargetType('light');
-                          }}
+                          onClick={() => selectSceneObject('light', l.id)}
                           className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer transition-all ${
                             isSelected
                               ? 'bg-amber-950/40 border-amber-500/60 text-white shadow-sm'
@@ -7464,6 +8575,51 @@ const ARTest = () => {
                           />
                         </div>
                       )}
+
+                      {/* Visual Light Source Emitter / Bulb Appearance */}
+                      <div className="space-y-2 p-2.5 rounded-lg bg-neutral-900/60 border border-neutral-800">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+                            <span className="material-symbols-outlined text-xs text-amber-400">lightbulb</span>
+                            Luminous Emitter Glow
+                          </span>
+                          <label className="text-[11px] font-mono text-neutral-400 flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={selectedLight.showBulb !== false}
+                              onChange={(e) => handleUpdateLight(selectedLight.id, { showBulb: e.target.checked })}
+                              className="rounded accent-amber-500 cursor-pointer"
+                            />
+                            Show in Scene & AR
+                          </label>
+                        </div>
+                        {selectedLight.showBulb !== false && (
+                          <div className="grid grid-cols-2 gap-2 pt-1">
+                            <NumberSliderInput
+                              label="Emission Glow"
+                              value={selectedLight.bulbIntensity !== undefined ? selectedLight.bulbIntensity : 3.0}
+                              onChange={(val) => handleUpdateLight(selectedLight.id, { bulbIntensity: val })}
+                              min={0.1}
+                              max={10.0}
+                              step={0.1}
+                              unit="x"
+                              color="amber"
+                              precision={1}
+                            />
+                            <NumberSliderInput
+                              label="Bulb Radius"
+                              value={selectedLight.bulbSize !== undefined ? selectedLight.bulbSize : 0.06}
+                              onChange={(val) => handleUpdateLight(selectedLight.id, { bulbSize: val })}
+                              min={0.02}
+                              max={0.3}
+                              step={0.01}
+                              unit="m"
+                              color="amber"
+                              precision={2}
+                            />
+                          </div>
+                        )}
+                      </div>
 
                       {/* Position 3D Coordinates */}
                       <div className="space-y-1.5 pt-1">
@@ -7699,7 +8855,7 @@ const ARTest = () => {
                 </span>
                 <select
                   value={selectedMeshUuid || ''}
-                  onChange={(e) => setSelectedMeshUuid(e.target.value || null)}
+                  onChange={(e) => e.target.value ? selectSceneObject('mesh', e.target.value) : selectSceneObject('model')}
                   className="bg-neutral-800 text-xs text-white border border-neutral-700 rounded px-2 py-1 focus:outline-none focus:border-indigo-500 max-w-[210px] truncate cursor-pointer"
                 >
                   <option value="">Global / Entire Model</option>
@@ -11765,6 +12921,15 @@ const ARTest = () => {
                 </div>
                 <button
                   type="button"
+                  onClick={() => handleExportShapeAsGLB()}
+                  title="Export Selected Object as .GLB"
+                  className="p-1 px-2 rounded-lg bg-teal-950/80 hover:bg-teal-900 border border-teal-500/40 text-teal-300 hover:text-white transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-sm">download</span>
+                  <span className="hidden sm:inline">.GLB</span>
+                </button>
+                <button
+                  type="button"
                   onClick={focusCameraOnSelectedObject}
                   title="Focus Camera on Selected Object (F)"
                   className="p-1 rounded-lg bg-black/60 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-indigo-300 transition-colors"
@@ -11784,9 +12949,10 @@ const ARTest = () => {
           </div>
         </div>
 
-        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0 || custom3DTexts.length > 0 || customLights.length > 0 || (markerVisible && markerImageUrl) || (websiteEnabled && websiteUrl)) ? (
+        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0 || customModels.length > 0 || custom3DTexts.length > 0 || customLights.length > 0 || (markerVisible && markerImageUrl) || (websiteEnabled && websiteUrl)) ? (
           <a-scene
-            key={batchId || localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || (portalEnabled ? 'portal-active' : '') || (particleSystemEnabled ? 'particles-active' : '') || (additionalGeometries.length > 0 ? 'geoms-active' : '') || (custom3DTexts.length > 0 ? 'text-active' : '') || (customLights.length > 0 ? 'lights-active' : '') || (markerImageUrl ? 'marker-active' : '') || (websiteEnabled ? 'website-active' : '') || 'ar-portal-scene'}
+            ref={sceneRef}
+            key={batchId || 'ar-portal-scene'}
             embedded
             color-space="sRGB"
             renderer="colorManagement: true; antialias: true; stencil: true; preserveDrawingBuffer: true;"
@@ -11834,7 +13000,7 @@ const ARTest = () => {
             {customLights.length > 0 && (
               <a-entity
                 id="ar-custom-lights-anchor"
-                ar-custom-lights={`lights: ${encodeURIComponent(JSON.stringify(customLights))}; showHelpers: ${showLightHelpers};`}
+                ar-custom-lights={`lights: ${encodeURIComponent(JSON.stringify(customLights))}; showHelpers: ${showLightHelpers}; showBulbs: ${showLightHelpers};`}
               ></a-entity>
             )}
 
@@ -11857,7 +13023,7 @@ const ARTest = () => {
                   scale={`${modelScale} ${modelScale} ${modelScale}`}
                   rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
                   visible={!(portalEnabled && portalHideOutsideModel)}
-                  {...(modelRotSpeed > 0 && !selectedMeshUuid
+                  {...(modelRotSpeed > 0 && selectedTargetType !== 'model' && !isGizmoDragging && !selectedMeshUuid
                     ? {
                       animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${modelRotY + 360
                         } ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;`
@@ -11893,6 +13059,14 @@ const ARTest = () => {
               <a-entity
                 id="ar-additional-geometries-anchor"
                 ar-additional-geometries={`geometries: ${encodeURIComponent(JSON.stringify(additionalGeometries))};`}
+              ></a-entity>
+            )}
+
+            {/* Custom External 3D Models Anchor */}
+            {customModels.length > 0 && (
+              <a-entity
+                id="ar-custom-models-anchor"
+                ar-custom-models={`models: ${encodeURIComponent(JSON.stringify(customModels))};`}
               ></a-entity>
             )}
 
@@ -11975,11 +13149,34 @@ const ARTest = () => {
               {mediaMuted ? 'volume_off' : 'volume_up'}
             </span>
           </button>
+
+          <button
+            onClick={() => setShowDiagnosticsDrawer((prev) => !prev)}
+            style={{
+              backgroundColor: showDiagnosticsDrawer ? 'rgba(245, 158, 11, 0.95)' : 'rgba(0, 0, 0, 0.75)',
+              color: showDiagnosticsDrawer ? '#000000' : '#f59e0b',
+              border: '1px solid rgba(245, 158, 11, 0.4)',
+              borderRadius: '50%',
+              width: '46px',
+              height: '46px',
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+              backdropFilter: 'blur(8px)'
+            }}
+            title="AR Point Light Diagnostics & Live DevTool Drawer"
+          >
+            <span className="material-symbols-outlined text-xl">
+              tune
+            </span>
+          </button>
         </div>
 
         {/* Floating Active Target HUD Indicator */}
         {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
-          <div className="absolute top-5 left-[132px] z-40 pointer-events-none">
+          <div className="absolute top-5 left-[184px] z-40 pointer-events-none">
             <div className="px-3 py-1.5 rounded-full bg-black/80 backdrop-blur-md border border-neutral-700 text-xs font-medium text-neutral-200 shadow-xl flex items-center gap-2">
               <span className={`w-2 h-2 rounded-full ${selectedMesh ? 'bg-indigo-400 animate-ping' : 'bg-emerald-400 animate-pulse'}`}></span>
               <span>
@@ -12116,6 +13313,20 @@ const ARTest = () => {
           isOpen={geometryModalOpen}
           onClose={() => setGeometryModalOpen(false)}
           onAddGeometry={handleAddGeometry}
+          onOpenAddModelModal={() => {
+            setGeometryModalOpen(false);
+            setIsAddModelModalOpen(true);
+          }}
+        />
+      )}
+
+      {/* External 3D Model Modal */}
+      {isAddModelModalOpen && (
+        <AddModelModal
+          isOpen={isAddModelModalOpen}
+          onClose={() => setIsAddModelModalOpen(false)}
+          onAddModel={handleAddCustomModel}
+          onSetRootModel={handleSetRootModelFromModal}
         />
       )}
 
@@ -12127,6 +13338,31 @@ const ARTest = () => {
           onAddText={handleAdd3DText}
         />
       )}
+
+      {/* Photoshop-Style Vector Pen Studio Modal */}
+      {vectorPenModalOpen && (
+        <VectorPenModal
+          isOpen={vectorPenModalOpen}
+          onClose={() => {
+            setVectorPenModalOpen(false);
+            setEditingVectorGeom(null);
+          }}
+          onExtrude={handleCommitVectorExtrude}
+          initialPoints={editingVectorGeom?.params?.points || null}
+          initialParams={editingVectorGeom?.params || null}
+          initialColor={editingVectorGeom?.color || '#38bdf8'}
+          initialName={editingVectorGeom?.name || 'Extruded Vector Shape'}
+        />
+      )}
+
+      {/* Real-Time AR Light Diagnostics & DevTools Drawer */}
+      <ARLightDiagnosticsDrawer
+        isOpen={showDiagnosticsDrawer}
+        onClose={() => setShowDiagnosticsDrawer(false)}
+        sceneRef={sceneRef}
+        trackingStatus="STUDIO_VIEW"
+        cameraEnabled={false}
+      />
     </div>
   );
 };

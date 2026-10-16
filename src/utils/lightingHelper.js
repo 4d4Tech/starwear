@@ -24,40 +24,53 @@ export function createCustomLightsGroup(lightsList, THREE_LIB = THREE, options =
     const intensity = item.intensity !== undefined ? Number(item.intensity) : 2.5;
     let light = null;
     let bulbMesh = null;
+    const shouldRenderBulb = showVisualBulb && (item.showBulb !== false);
 
     switch (item.type) {
       case 'point': {
-        const distance = item.distance !== undefined ? Number(item.distance) : 25;
-        const decay = item.decay !== undefined ? Number(item.decay) : 1.5;
-        light = new THREE_LIB.PointLight(color, intensity, distance, decay);
+        const distance = (item.distance !== undefined && item.distance !== null && Number(item.distance) > 0)
+          ? Number(item.distance)
+          : 0;
+        const userDecay = item.decay !== undefined ? Number(item.decay) : 1.0;
+        const effectiveDecay = userDecay > 1.2 ? 1.0 : Math.max(0, userDecay);
+        const effectiveIntensity = intensity * (userDecay >= 1.5 ? 2.5 : 1.5);
+
+        light = new THREE_LIB.PointLight(color, effectiveIntensity, distance, effectiveDecay);
         light.position.set(
           Number(item.posX ?? 0),
           Number(item.posY ?? 2),
           Number(item.posZ ?? 2)
         );
 
-        if (showVisualBulb && item.showHelper !== false) {
+        if (shouldRenderBulb) {
           const bulbGroup = new THREE_LIB.Group();
           bulbGroup.name = `Bulb_${item.id || 'point'}`;
 
+          const bulbSize = item.bulbSize !== undefined ? Number(item.bulbSize) : 0.06;
+          const bulbIntensity = item.bulbIntensity !== undefined
+            ? Number(item.bulbIntensity)
+            : (item.emissiveIntensity !== undefined ? Number(item.emissiveIntensity) : 3.0);
+
           // Glowing luminous core
-          const coreGeo = new THREE_LIB.SphereGeometry(0.06, 16, 16);
+          const coreGeo = new THREE_LIB.SphereGeometry(bulbSize, 16, 16);
           const coreMat = new THREE_LIB.MeshStandardMaterial({
             color: color,
             emissive: color,
-            emissiveIntensity: 3.0,
+            emissiveIntensity: bulbIntensity,
             roughness: 0.1,
             metalness: 0.2
           });
           bulbGroup.add(new THREE_LIB.Mesh(coreGeo, coreMat));
 
-          // Soft wireframe halo / aura
-          const auraGeo = new THREE_LIB.SphereGeometry(0.09, 12, 12);
+          // Soft luminous aura
+          const auraGeo = new THREE_LIB.SphereGeometry(bulbSize * 1.5, 16, 16);
           const auraMat = new THREE_LIB.MeshBasicMaterial({
             color: color,
-            wireframe: true,
             transparent: true,
-            opacity: 0.6
+            opacity: 0.45,
+            blending: THREE_LIB.AdditiveBlending,
+            depthWrite: false,
+            side: THREE_LIB.DoubleSide
           });
           bulbGroup.add(new THREE_LIB.Mesh(auraGeo, auraMat));
 
@@ -68,11 +81,16 @@ export function createCustomLightsGroup(lightsList, THREE_LIB = THREE, options =
       }
 
       case 'spot': {
-        const distance = item.distance !== undefined ? Number(item.distance) : 30;
+        const distance = (item.distance !== undefined && item.distance !== null && Number(item.distance) > 0)
+          ? Number(item.distance)
+          : 0;
         const angleRad = ((Number(item.angle || 45)) * Math.PI) / 180;
         const penumbra = item.penumbra !== undefined ? Number(item.penumbra) : 0.35;
-        const decay = item.decay !== undefined ? Number(item.decay) : 1.5;
-        light = new THREE_LIB.SpotLight(color, intensity, distance, angleRad, penumbra, decay);
+        const userDecay = item.decay !== undefined ? Number(item.decay) : 1.0;
+        const effectiveDecay = userDecay > 1.2 ? 1.0 : Math.max(0, userDecay);
+        const effectiveIntensity = intensity * (userDecay >= 1.5 ? 2.5 : 1.5);
+
+        light = new THREE_LIB.SpotLight(color, effectiveIntensity, distance, angleRad, penumbra, effectiveDecay);
         light.position.set(
           Number(item.posX ?? 0),
           Number(item.posY ?? 2.5),
@@ -85,7 +103,7 @@ export function createCustomLightsGroup(lightsList, THREE_LIB = THREE, options =
         );
         group.add(light.target);
 
-        if (showVisualBulb && item.showHelper !== false) {
+        if (shouldRenderBulb) {
           const coneGeo = new THREE_LIB.ConeGeometry(0.08, 0.16, 16);
           const coneMat = new THREE_LIB.MeshStandardMaterial({
             color: color,
@@ -118,7 +136,7 @@ export function createCustomLightsGroup(lightsList, THREE_LIB = THREE, options =
         );
         group.add(light.target);
 
-        if (showVisualBulb && item.showHelper !== false) {
+        if (shouldRenderBulb) {
           const octGeo = new THREE_LIB.OctahedronGeometry(0.08);
           const octMat = new THREE_LIB.MeshStandardMaterial({
             color: color,

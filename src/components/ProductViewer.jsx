@@ -433,12 +433,21 @@ function SceneContent({
     return fallback;
   };
 
-  const dir1Pos = parsePos(config.dir1Position, [2, 4, 3]);
-  const dir2Pos = parsePos(config.dir2Position, [-2, -1, -2]);
-  const rimPos = parsePos(config.rimPosition, [0, 3, -3]);
+  const normCfg = useMemo(() => {
+    return {
+      ...(config?.ar_config || {}),
+      ...(config?.config || {}),
+      ...(config?.arExperience?.config || {}),
+      ...(config || {})
+    };
+  }, [config]);
+
+  const dir1Pos = parsePos(normCfg.dir1Position, [2, 4, 3]);
+  const dir2Pos = parsePos(normCfg.dir2Position, [-2, -1, -2]);
+  const rimPos = parsePos(normCfg.rimPosition, [0, 3, -3]);
 
   // Portal & Particle System Configuration
-  const portalCfg = config?.portalConfig || config?.portal;
+  const portalCfg = normCfg?.portalConfig || normCfg?.portal;
   const isPortalEnabled = !!(
     portalCfg &&
     (portalCfg.enabled === true ||
@@ -452,7 +461,7 @@ function SceneContent({
   );
   const portalHideOutsideModel = isPortalEnabled && !!portalCfg?.hideOutsideModel;
 
-  const particleCfg = config?.particleConfig || config?.particle;
+  const particleCfg = normCfg?.particleConfig || normCfg?.particle;
   const isParticleEnabled = !!(
     particleCfg &&
     (particleCfg.enabled === true ||
@@ -487,7 +496,7 @@ function SceneContent({
     };
   }, [particleInstance]);
 
-  const additionalGeometries = config?.additionalGeometries || [];
+  const additionalGeometries = normCfg?.additionalGeometries || [];
   const geometriesGroup = useMemo(() => {
     if (!Array.isArray(additionalGeometries) || additionalGeometries.length === 0) return null;
     return createGeometriesGroup(additionalGeometries, THREE);
@@ -508,7 +517,8 @@ function SceneContent({
   }, [geometriesGroup]);
 
   // Custom Multi-Source Lighting
-  const customLights = config?.customLights || config?.ar_config?.customLights || [];
+  const customLights = normCfg?.customLights || [];
+  const hasCustomLights = Array.isArray(customLights) && customLights.some((l) => l && l.visible !== false);
   const customLightsGroup = useMemo(() => {
     if (!Array.isArray(customLights) || customLights.length === 0) return null;
     return createCustomLightsGroup(customLights, THREE, { showVisualBulb: false });
@@ -530,7 +540,7 @@ function SceneContent({
   }, [customLightsGroup]);
 
   // Extruded 3D Typography Texts
-  const custom3DTexts = config?.custom3DTexts || config?.ar_config?.custom3DTexts || [];
+  const custom3DTexts = normCfg?.custom3DTexts || [];
   const [texts3DGroup, setTexts3DGroup] = useState(null);
 
   useEffect(() => {
@@ -558,6 +568,24 @@ function SceneContent({
       }
     };
   }, [JSON.stringify(custom3DTexts)]);
+
+  // Ensure model, geometries, and 3D text materials recompile shader programs to receive custom lights illumination
+  useEffect(() => {
+    const updateMaterials = (group) => {
+      if (!group) return;
+      group.traverse((child) => {
+        if (child.isMesh && child.material) {
+          const mats = Array.isArray(child.material) ? child.material : [child.material];
+          mats.forEach((m) => {
+            m.needsUpdate = true;
+          });
+        }
+      });
+    };
+    updateMaterials(modelGroup);
+    updateMaterials(geometriesGroup);
+    updateMaterials(texts3DGroup);
+  }, [modelGroup, geometriesGroup, texts3DGroup, customLightsGroup]);
 
   useFrame((state, delta) => {
     if (portalInstance) {
@@ -599,23 +627,39 @@ function SceneContent({
 
       {/* Lighting Setup */}
       <ambientLight
-        color={config.ambientColor || 0xffffff}
-        intensity={config.ambientIntensity !== undefined ? config.ambientIntensity : 1.4}
+        color={normCfg.ambientColor || 0xffffff}
+        intensity={
+          normCfg.ambientIntensity !== undefined
+            ? (hasCustomLights ? Number(normCfg.ambientIntensity) * 0.5 : Number(normCfg.ambientIntensity))
+            : (hasCustomLights ? 0.6 : 1.4)
+        }
       />
       <directionalLight
         position={dir1Pos}
-        color={config.dir1Color || 0xffffff}
-        intensity={config.dir1Intensity !== undefined ? config.dir1Intensity : 2.2}
+        color={normCfg.dir1Color || 0xffffff}
+        intensity={
+          normCfg.dir1Intensity !== undefined
+            ? (hasCustomLights ? Number(normCfg.dir1Intensity) * 0.45 : Number(normCfg.dir1Intensity))
+            : (hasCustomLights ? 0.9 : 2.2)
+        }
       />
       <directionalLight
         position={dir2Pos}
-        color={config.dir2Color || 0xffffff}
-        intensity={config.dir2Intensity !== undefined ? config.dir2Intensity : 1.2}
+        color={normCfg.dir2Color || 0xffffff}
+        intensity={
+          normCfg.dir2Intensity !== undefined
+            ? (hasCustomLights ? Number(normCfg.dir2Intensity) * 0.45 : Number(normCfg.dir2Intensity))
+            : (hasCustomLights ? 0.5 : 1.2)
+        }
       />
       <directionalLight
         position={rimPos}
-        color={config.rimColor || 0x818cf8}
-        intensity={config.rimIntensity !== undefined ? config.rimIntensity : 1.0}
+        color={normCfg.rimColor || 0x818cf8}
+        intensity={
+          normCfg.rimIntensity !== undefined
+            ? (hasCustomLights ? Number(normCfg.rimIntensity) * 0.45 : Number(normCfg.rimIntensity))
+            : (hasCustomLights ? 0.4 : 1.0)
+        }
       />
 
       {/* Custom Multi-Source Scene Lights */}
@@ -898,17 +942,54 @@ export default function ProductViewer({
         const size = box.getSize(new THREE.Vector3());
         const maxDim = Math.max(size.x, size.y, size.z) || 1;
 
+        const normCfg = {
+          ...(config?.ar_config || {}),
+          ...(config?.config || {}),
+          ...(config?.arExperience?.config || {}),
+          ...(config || {})
+        };
+
         // Center the model at origin
         model.position.x = -center.x;
         model.position.y = -center.y;
         model.position.z = -center.z;
 
+        // Apply custom model rotation if configured
+        const rotX = normCfg.modelRotX !== undefined ? Number(normCfg.modelRotX) : null;
+        const rotY = normCfg.modelRotY !== undefined ? Number(normCfg.modelRotY) : null;
+        const rotZ = normCfg.modelRotZ !== undefined ? Number(normCfg.modelRotZ) : null;
+        if (rotX !== null || rotY !== null || rotZ !== null) {
+          model.rotation.set(
+            THREE.MathUtils.degToRad(rotX || 0),
+            THREE.MathUtils.degToRad(rotY || 0),
+            THREE.MathUtils.degToRad(rotZ || 0)
+          );
+        } else if (normCfg.modelRotation) {
+          const r = parsePos(normCfg.modelRotation, [0, 0, 0]);
+          model.rotation.set(
+            THREE.MathUtils.degToRad(r[0]),
+            THREE.MathUtils.degToRad(r[1]),
+            THREE.MathUtils.degToRad(r[2])
+          );
+        }
+
+        // Apply fine-tuned position offset
+        const posX = normCfg.modelPosX !== undefined ? Number(normCfg.modelPosX) : null;
+        const posY = normCfg.modelPosY !== undefined ? Number(normCfg.modelPosY) : null;
+        const posZ = normCfg.modelPosZ !== undefined ? Number(normCfg.modelPosZ) : null;
+        if (posX !== null || posY !== null || posZ !== null) {
+          model.position.x += (posX || 0);
+          model.position.y += (posY || 0);
+          model.position.z += (posZ || 0);
+        }
+
         const anchorGroup = new THREE.Group();
+        anchorGroup.name = 'product_anchor_group';
         anchorGroup.add(model);
 
         // Apply materials, video textures & overrides
         const { totalMeshes, detectedTargetNode, ytId: discoveredYtId, resolvedUrl } =
-          applyMeshStyling(model, config, effectiveVideoUrl, videoTexture);
+          applyMeshStyling(model, normCfg, effectiveVideoUrl, videoTexture);
 
         if (discoveredYtId) {
           setActiveVideoType('youtube');
@@ -939,9 +1020,14 @@ export default function ProductViewer({
           });
         }
 
+        const framedBox = new THREE.Box3().setFromObject(anchorGroup);
+        const framedCenter = framedBox.getCenter(new THREE.Vector3());
+        const framedSize = framedBox.getSize(new THREE.Vector3());
+        const framedMaxDim = Math.max(framedSize.x, framedSize.y, framedSize.z) || 1;
+
         modelRef.current = anchorGroup;
         setModelGroup(anchorGroup);
-        setModelBoundingData({ center, size, maxDim });
+        setModelBoundingData({ center: framedCenter, size: framedSize, maxDim: framedMaxDim });
         setMeshCount(totalMeshes);
         setLoading(false);
       },
@@ -1017,10 +1103,16 @@ export default function ProductViewer({
               event.preventDefault();
               setWebglUnavailable(true);
               setLoadError(
-                'WebGL graphics context was lost and blocked by the browser. Please reload the tab.'
+                'WebGL graphics context was temporarily lost. Waiting for browser restoration...'
               );
             };
+            const handleContextRestored = () => {
+              console.info('[ProductViewer] WebGL context successfully restored.');
+              setWebglUnavailable(false);
+              setLoadError(null);
+            };
             gl.domElement.addEventListener('webglcontextlost', handleContextLost, false);
+            gl.domElement.addEventListener('webglcontextrestored', handleContextRestored, false);
           }}
           className="w-full h-full"
         >

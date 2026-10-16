@@ -1996,7 +1996,12 @@ export default function Studio4D4() {
         this.helpers = [];
         this.selectedObject = null;
         this.fabricMaterialManager = new FabricMaterialManager();
-        this.clock = new THREE.Clock();
+        if (typeof THREE.Timer !== 'undefined') {
+          this.timer = new THREE.Timer();
+          if (typeof document !== 'undefined') this.timer.connect(document);
+        } else {
+          this.clock = new THREE.Clock();
+        }
         this.characterAnimationManager = new CharacterAnimationManager(this);
         this.facePickModeActive = false;
         this.onFacePickCallback = null;
@@ -4604,7 +4609,13 @@ export default function Studio4D4() {
       animate() {
         this.animationId = requestAnimationFrame(() => this.animate());
         if (this.orbit) this.orbit.update();
-        const delta = this.clock ? this.clock.getDelta() : 0.016;
+        let delta = 0.016;
+        if (this.timer) {
+          this.timer.update();
+          delta = Math.min(this.timer.getDelta(), 0.1);
+        } else if (this.clock) {
+          delta = Math.min(this.clock.getDelta(), 0.1);
+        }
         if (this.characterAnimationManager) {
           this.characterAnimationManager.update(delta);
         }
@@ -4623,6 +4634,9 @@ export default function Studio4D4() {
 
       destroy() {
         if (this.animationId) cancelAnimationFrame(this.animationId);
+        if (this.timer && typeof this.timer.dispose === 'function') {
+          this.timer.dispose();
+        }
         if (this.resizeObserver) this.resizeObserver.disconnect();
         if (this.keydownHandler) window.removeEventListener('keydown', this.keydownHandler);
         if (this.orbit) this.orbit.dispose();

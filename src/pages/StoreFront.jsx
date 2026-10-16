@@ -268,58 +268,56 @@ export default function StoreFront() {
                   <ProductViewer
                     modelUrl={featuredModelUrl}
                     videoUrl={featuredVideoUrl}
-                    config={{
-                      ...(featuredAsset?.config || {}),
-                      ...(featuredAsset?.arExperience?.config || {}),
-                      ...(featuredAsset?.ar_config || {}),
-                      ...(featuredBatchConfig?.config || {}),
-                      ...(featuredBatchConfig?.arExperience?.config || {}),
-                      ...(featuredBatchConfig?.ar_config || {}),
-                      ...(featuredAsset?.lighting || {}),
-                      ...(featuredAsset?.lightingConfig || {}),
-                      ...(featuredBatchConfig?.lighting || {}),
-                      ...(featuredBatchConfig?.lightingConfig || {}),
-                      ...(featuredAsset?.portalConfig ? { portalConfig: featuredAsset.portalConfig } : {}),
-                      ...(featuredAsset?.particleConfig ? { particleConfig: featuredAsset.particleConfig } : {}),
-                      ...(featuredBatchConfig?.portalConfig ? { portalConfig: featuredBatchConfig.portalConfig } : {}),
-                      ...(featuredBatchConfig?.particleConfig ? { particleConfig: featuredBatchConfig.particleConfig } : {}),
-                      ...(featuredAsset?.ar_config?.portalConfig ? { portalConfig: featuredAsset.ar_config.portalConfig } : {}),
-                      ...(featuredAsset?.ar_config?.particleConfig ? { particleConfig: featuredAsset.ar_config.particleConfig } : {}),
-                      ...(featuredBatchConfig?.ar_config?.portalConfig ? { portalConfig: featuredBatchConfig.ar_config.portalConfig } : {}),
-                      ...(featuredBatchConfig?.ar_config?.particleConfig ? { particleConfig: featuredBatchConfig.ar_config.particleConfig } : {}),
-                      ...(featuredAsset?.ambientColor ? { ambientColor: featuredAsset.ambientColor } : {}),
-                      ...(featuredAsset?.ambientIntensity !== undefined ? { ambientIntensity: featuredAsset.ambientIntensity } : {}),
-                      ...(featuredAsset?.dir1Color ? { dir1Color: featuredAsset.dir1Color } : {}),
-                      ...(featuredAsset?.dir1Intensity !== undefined ? { dir1Intensity: featuredAsset.dir1Intensity } : {}),
-                      ...(featuredAsset?.dir1Position ? { dir1Position: featuredAsset.dir1Position } : {}),
-                      ...(featuredAsset?.dir2Color ? { dir2Color: featuredAsset.dir2Color } : {}),
-                      ...(featuredAsset?.dir2Intensity !== undefined ? { dir2Intensity: featuredAsset.dir2Intensity } : {}),
-                      ...(featuredAsset?.dir2Position ? { dir2Position: featuredAsset.dir2Position } : {}),
-                      ...(featuredAsset?.rimColor ? { rimColor: featuredAsset.rimColor } : {}),
-                      ...(featuredAsset?.rimIntensity !== undefined ? { rimIntensity: featuredAsset.rimIntensity } : {}),
-                      ...(featuredAsset?.rimPosition ? { rimPosition: featuredAsset.rimPosition } : {}),
-                      additionalGeometries: (Array.isArray(featuredBatchConfig?.additionalGeometries) && featuredBatchConfig.additionalGeometries.length > 0)
-                        ? featuredBatchConfig.additionalGeometries
-                        : (Array.isArray(featuredBatchConfig?.ar_config?.additionalGeometries) && featuredBatchConfig.ar_config.additionalGeometries.length > 0)
-                        ? featuredBatchConfig.ar_config.additionalGeometries
-                        : (Array.isArray(featuredAsset?.additionalGeometries) && featuredAsset.additionalGeometries.length > 0)
-                        ? featuredAsset.additionalGeometries
-                        : (Array.isArray(featuredAsset?.ar_config?.additionalGeometries) ? featuredAsset.ar_config.additionalGeometries : []),
-                      custom3DTexts: (Array.isArray(featuredBatchConfig?.custom3DTexts) && featuredBatchConfig.custom3DTexts.length > 0)
-                        ? featuredBatchConfig.custom3DTexts
-                        : (Array.isArray(featuredBatchConfig?.ar_config?.custom3DTexts) && featuredBatchConfig.ar_config.custom3DTexts.length > 0)
-                        ? featuredBatchConfig.ar_config.custom3DTexts
-                        : (Array.isArray(featuredAsset?.custom3DTexts) && featuredAsset.custom3DTexts.length > 0)
-                        ? featuredAsset.custom3DTexts
-                        : (Array.isArray(featuredAsset?.ar_config?.custom3DTexts) ? featuredAsset.ar_config.custom3DTexts : []),
-                      customLights: (Array.isArray(featuredBatchConfig?.customLights) && featuredBatchConfig.customLights.length > 0)
+                    config={(() => {
+                      const pCfg = featuredAsset?.ar_config || featuredAsset?.config || featuredAsset?.arExperience?.config || {};
+                      const bCfg = featuredBatchConfig?.ar_config || featuredBatchConfig?.config || featuredBatchConfig?.arExperience?.config || {};
+                      const res = {
+                        ...pCfg,
+                        ...(featuredAsset || {}),
+                        ...bCfg,
+                        ...(featuredBatchConfig || {})
+                      };
+                      const keys = [
+                        'ambientColor', 'ambientIntensity',
+                        'dir1Color', 'dir1Intensity', 'dir1Position',
+                        'dir2Color', 'dir2Intensity', 'dir2Position',
+                        'rimColor', 'rimIntensity', 'rimPosition',
+                        'modelScale', 'modelPosition', 'modelRotation',
+                        'modelRotX', 'modelRotY', 'modelRotZ',
+                        'modelPosX', 'modelPosY', 'modelPosZ', 'modelRotSpeed',
+                        'matMetalness', 'matRoughness', 'matEmissive', 'matEmissiveIntensity',
+                        'matWireframe', 'matOpacity', 'meshOverrides',
+                        'portalConfig', 'particleConfig'
+                      ];
+                      keys.forEach((k) => {
+                        if (bCfg[k] !== undefined && bCfg[k] !== null) res[k] = bCfg[k];
+                        else if (featuredBatchConfig?.[k] !== undefined && featuredBatchConfig?.[k] !== null) res[k] = featuredBatchConfig[k];
+                        else if (pCfg[k] !== undefined && pCfg[k] !== null) res[k] = pCfg[k];
+                        else if (featuredAsset?.[k] !== undefined && featuredAsset?.[k] !== null) res[k] = featuredAsset[k];
+                      });
+                      res.customLights = (Array.isArray(bCfg.customLights) && bCfg.customLights.length > 0)
+                        ? bCfg.customLights
+                        : (Array.isArray(featuredBatchConfig?.customLights) && featuredBatchConfig.customLights.length > 0)
                         ? featuredBatchConfig.customLights
-                        : (Array.isArray(featuredBatchConfig?.ar_config?.customLights) && featuredBatchConfig.ar_config.customLights.length > 0)
-                        ? featuredBatchConfig.ar_config.customLights
-                        : (Array.isArray(featuredAsset?.customLights) && featuredAsset.customLights.length > 0)
-                        ? featuredAsset.customLights
-                        : (Array.isArray(featuredAsset?.ar_config?.customLights) ? featuredAsset.ar_config.customLights : [])
-                    }}
+                        : (Array.isArray(pCfg.customLights) && pCfg.customLights.length > 0)
+                        ? pCfg.customLights
+                        : (Array.isArray(featuredAsset?.customLights) ? featuredAsset.customLights : []);
+                      res.custom3DTexts = (Array.isArray(bCfg.custom3DTexts) && bCfg.custom3DTexts.length > 0)
+                        ? bCfg.custom3DTexts
+                        : (Array.isArray(featuredBatchConfig?.custom3DTexts) && featuredBatchConfig.custom3DTexts.length > 0)
+                        ? featuredBatchConfig.custom3DTexts
+                        : (Array.isArray(pCfg.custom3DTexts) && pCfg.custom3DTexts.length > 0)
+                        ? pCfg.custom3DTexts
+                        : (Array.isArray(featuredAsset?.custom3DTexts) ? featuredAsset.custom3DTexts : []);
+                      res.additionalGeometries = (Array.isArray(bCfg.additionalGeometries) && bCfg.additionalGeometries.length > 0)
+                        ? bCfg.additionalGeometries
+                        : (Array.isArray(featuredBatchConfig?.additionalGeometries) && featuredBatchConfig.additionalGeometries.length > 0)
+                        ? featuredBatchConfig.additionalGeometries
+                        : (Array.isArray(pCfg.additionalGeometries) && pCfg.additionalGeometries.length > 0)
+                        ? pCfg.additionalGeometries
+                        : (Array.isArray(featuredAsset?.additionalGeometries) ? featuredAsset.additionalGeometries : []);
+                      return res;
+                    })()}
                     assetName={featuredAsset?.name || featuredAsset?.id || 'Featured Digital Asset'}
                     assetId={featuredAsset?.id || ''}
                   />

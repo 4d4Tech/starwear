@@ -296,24 +296,29 @@ export async function captureModelThumbnail(modelUrlOrFile, customConfig = null)
       if (!gl) return null;
 
       // Apply dynamic studio lighting matching ProductViewer/ARTest/ARExperience
+      const normConfig = {
+        ...(customConfig?.ar_config || {}),
+        ...(customConfig?.config || {}),
+        ...(customConfig || {})
+      };
       if (customConfig && gl.lights) {
         const { ambientLight, keyLight, fillLight, rimLight } = gl.lights;
-        if (customConfig.ambientColor) ambientLight.color.set(customConfig.ambientColor);
-        if (customConfig.ambientIntensity !== undefined) ambientLight.intensity = Number(customConfig.ambientIntensity);
+        if (normConfig.ambientColor) ambientLight.color.set(normConfig.ambientColor);
+        if (normConfig.ambientIntensity !== undefined) ambientLight.intensity = Number(normConfig.ambientIntensity);
 
-        if (customConfig.dir1Color) keyLight.color.set(customConfig.dir1Color);
-        if (customConfig.dir1Intensity !== undefined) keyLight.intensity = Number(customConfig.dir1Intensity);
-        const p1 = parseVec3(customConfig.dir1Position, [2, 4, 3]);
+        if (normConfig.dir1Color) keyLight.color.set(normConfig.dir1Color);
+        if (normConfig.dir1Intensity !== undefined) keyLight.intensity = Number(normConfig.dir1Intensity);
+        const p1 = parseVec3(normConfig.dir1Position, [2, 4, 3]);
         keyLight.position.set(p1[0], p1[1], p1[2]);
 
-        if (customConfig.dir2Color) fillLight.color.set(customConfig.dir2Color);
-        if (customConfig.dir2Intensity !== undefined) fillLight.intensity = Number(customConfig.dir2Intensity);
-        const p2 = parseVec3(customConfig.dir2Position, [-2, -1, -2]);
+        if (normConfig.dir2Color) fillLight.color.set(normConfig.dir2Color);
+        if (normConfig.dir2Intensity !== undefined) fillLight.intensity = Number(normConfig.dir2Intensity);
+        const p2 = parseVec3(normConfig.dir2Position, [-2, -1, -2]);
         fillLight.position.set(p2[0], p2[1], p2[2]);
 
-        if (customConfig.rimColor) rimLight.color.set(customConfig.rimColor);
-        if (customConfig.rimIntensity !== undefined) rimLight.intensity = Number(customConfig.rimIntensity);
-        const pRim = parseVec3(customConfig.rimPosition, [0, 3, -3]);
+        if (normConfig.rimColor) rimLight.color.set(normConfig.rimColor);
+        if (normConfig.rimIntensity !== undefined) rimLight.intensity = Number(normConfig.rimIntensity);
+        const pRim = parseVec3(normConfig.rimPosition, [0, 3, -3]);
         rimLight.position.set(pRim[0], pRim[1], pRim[2]);
       } else if (gl.lights) {
         gl.lights.ambientLight.color.set(0xffffff);
@@ -470,11 +475,21 @@ export async function captureModelThumbnail(modelUrlOrFile, customConfig = null)
       }
 
       // Support Custom Multi-Source Lighting
-      const customLights = customConfig?.customLights || customConfig?.ar_config?.customLights || [];
+      const customLights = normConfig?.customLights || [];
       let customLightsGroup = null;
       if (Array.isArray(customLights) && customLights.length > 0) {
         customLightsGroup = createCustomLightsGroup(customLights, THREE, { showVisualBulb: false });
-        if (customLightsGroup) gl.scene.add(customLightsGroup);
+        if (customLightsGroup) {
+          gl.scene.add(customLightsGroup);
+          model.traverse((node) => {
+            if (node.isMesh && node.material) {
+              const mats = Array.isArray(node.material) ? node.material : [node.material];
+              mats.forEach((m) => {
+                m.needsUpdate = true;
+              });
+            }
+          });
+        }
       }
 
       // Support Extruded 3D Typography Texts
