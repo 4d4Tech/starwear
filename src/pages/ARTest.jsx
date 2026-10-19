@@ -604,6 +604,24 @@ const PositioningDpad = ({
   );
 };
 
+// Utility: Recursively strip 'undefined' fields and invalid values for Firestore compatibility
+const sanitizeForFirestore = (val) => {
+  if (val === undefined) return null;
+  if (val === null || typeof val !== 'object') return val;
+  if (Array.isArray(val)) {
+    return val
+      .filter((item) => item !== undefined)
+      .map((item) => sanitizeForFirestore(item));
+  }
+  const clean = {};
+  for (const [k, v] of Object.entries(val)) {
+    if (v !== undefined) {
+      clean[k] = sanitizeForFirestore(v);
+    }
+  }
+  return clean;
+};
+
 // Utility: Commit Firestore writeBatch with exponential backoff retry on 429 / resource-exhausted
 const safeCommitBatch = async (batchInstance, maxRetries = 3, initialDelayMs = 1000) => {
   let attempt = 0;
@@ -6855,7 +6873,7 @@ const ARTest = () => {
       if (Array.isArray(additionalGeometries) && additionalGeometries.length > 0) {
         cleanedAdditionalGeometries = await Promise.all(
           additionalGeometries.map(async (g) => {
-            let finalTexUrl = g.textureUrl;
+            let finalTexUrl = g.textureUrl || '';
             let finalStoragePath = g.textureStoragePath || '';
             const pending = pendingShapeTexturesRef.current?.get(g.id);
             if (pending?.file) {
@@ -6866,13 +6884,23 @@ const ARTest = () => {
               await uploadBytes(shapeTexRef, pending.file);
               finalTexUrl = await getDownloadURL(shapeTexRef);
               finalStoragePath = storagePath;
+            } else if (typeof finalTexUrl === 'string' && finalTexUrl.startsWith('blob:')) {
+              finalTexUrl = '';
             }
-            const { texturePreviewUrl, ...cleanGeom } = g;
-            return {
-              ...cleanGeom,
-              textureUrl: finalTexUrl,
-              textureStoragePath: finalStoragePath
-            };
+
+            const cleanGeom = { ...g };
+            delete cleanGeom.texturePreviewUrl;
+
+            if (finalTexUrl) {
+              cleanGeom.textureUrl = finalTexUrl;
+              cleanGeom.textureStoragePath = finalStoragePath;
+            } else {
+              delete cleanGeom.textureUrl;
+              delete cleanGeom.textureStoragePath;
+              delete cleanGeom.textureFileName;
+            }
+
+            return cleanGeom;
           })
         );
         pendingShapeTexturesRef.current?.clear();
@@ -7120,7 +7148,7 @@ const ARTest = () => {
         portalConfig: arConfigPayload.portalConfig,
         particleConfig: arConfigPayload.particleConfig,
         websiteLayer: arConfigPayload.websiteLayer,
-        additionalGeometries: additionalGeometries || [],
+        additionalGeometries: cleanedAdditionalGeometries || [],
         customModels: cleanedCustomModels,
         custom3DTexts: custom3DTexts || [],
         customLights: customLights || [],
@@ -7149,17 +7177,20 @@ const ARTest = () => {
         meshOverrides
       };
 
+      // Recursively sanitize payload so that NO undefined fields exist anywhere in the document tree
+      const sanitizedPayload = sanitizeForFirestore(payload);
+
       // Save to both batches and assets collections with writeBatch and safe retry
       const batchRef = doc(db, 'batches', batchId.trim());
       const assetRef = doc(db, 'assets', batchId.trim());
 
       const firestoreBatch = writeBatch(db);
-      firestoreBatch.set(batchRef, payload, { merge: true });
-      firestoreBatch.set(assetRef, payload, { merge: true });
+      firestoreBatch.set(batchRef, sanitizedPayload, { merge: true });
+      firestoreBatch.set(assetRef, sanitizedPayload, { merge: true });
 
       const altAssetId = arData?.asset_id || arData?.assetId || arData?.product_id || arData?.productId;
       if (altAssetId && typeof altAssetId === 'string' && altAssetId.trim() !== batchId.trim()) {
-        firestoreBatch.set(doc(db, 'assets', altAssetId.trim()), payload, { merge: true });
+        firestoreBatch.set(doc(db, 'assets', altAssetId.trim()), sanitizedPayload, { merge: true });
       }
 
       await safeCommitBatch(firestoreBatch);

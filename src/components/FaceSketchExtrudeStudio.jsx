@@ -1055,7 +1055,7 @@ export default function FaceSketchExtrudeStudio({
         bevelSegments: 3,
         taper,
         parentFaceInfo: {
-          parentName,
+          parentName: parentName || objectName || 'parent_object',
           normal: [Number(normal.x.toFixed(4)), Number(normal.y.toFixed(4)), Number(normal.z.toFixed(4))]
         }
       },
