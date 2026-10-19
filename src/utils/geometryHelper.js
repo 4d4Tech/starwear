@@ -622,19 +622,43 @@ export function createPrimitiveThreeGeometry(type, params, THREE_LIB = THREE) {
     geom.computeVertexNormals();
   }
 
+  // Ensure UV coordinates exist for texture mapping across all geometry types
+  if (geom && !geom.attributes.uv && geom.attributes.position) {
+    try {
+      if (!geom.boundingBox) geom.computeBoundingBox();
+      const bb = geom.boundingBox;
+      const rangeX = (bb.max.x - bb.min.x) || 1;
+      const rangeY = (bb.max.y - bb.min.y) || 1;
+      const pos = geom.attributes.position;
+      const uvs = new Float32Array(pos.count * 2);
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i);
+        const y = pos.getY(i);
+        uvs[i * 2] = (x - bb.min.x) / rangeX;
+        uvs[i * 2 + 1] = (y - bb.min.y) / rangeY;
+      }
+      geom.setAttribute('uv', new THREE_LIB.BufferAttribute(uvs, 2));
+    } catch (e) {
+      console.warn('[geometryHelper] Auto UV generation fallback failed:', e);
+    }
+  }
+
   return geom;
 }
 
 export function createPrimitiveMaterial(options = {}, THREE_LIB = THREE) {
-  const color = options.color || '#38bdf8';
+  const hasTexture = Boolean(options.textureUrl);
+  const color = options.color || (hasTexture ? '#ffffff' : '#38bdf8');
   const roughness = options.roughness !== undefined ? Number(options.roughness) : 0.35;
   const metalness = options.metalness !== undefined ? Number(options.metalness) : 0.15;
   const emissive = options.emissive || '#000000';
   const emissiveIntensity = options.emissiveIntensity !== undefined ? Number(options.emissiveIntensity) : 0.0;
   const wireframe = Boolean(options.wireframe);
   const flatShading = Boolean(options.flatShading);
+  const opacity = options.opacity !== undefined ? Number(options.opacity) : 1.0;
+  const transparent = Boolean(options.transparent) || opacity < 1.0;
 
-  return new THREE_LIB.MeshStandardMaterial({
+  const mat = new THREE_LIB.MeshStandardMaterial({
     color: new THREE_LIB.Color(color),
     roughness,
     metalness,
@@ -642,8 +666,57 @@ export function createPrimitiveMaterial(options = {}, THREE_LIB = THREE) {
     emissiveIntensity,
     wireframe,
     flatShading,
+    opacity,
+    transparent,
     side: THREE_LIB.DoubleSide
   });
+
+  if (hasTexture && typeof options.textureUrl === 'string') {
+    try {
+      const loader = new THREE_LIB.TextureLoader();
+      const applyTexProps = (tex) => {
+        if (!tex) return;
+        if (THREE_LIB.SRGBColorSpace !== undefined) {
+          tex.colorSpace = THREE_LIB.SRGBColorSpace;
+        }
+        tex.wrapS = THREE_LIB.RepeatWrapping;
+        tex.wrapT = THREE_LIB.RepeatWrapping;
+        if (tex.center) tex.center.set(0.5, 0.5);
+
+        const repX = options.textureRepeatX !== undefined && options.textureRepeatX !== null ? Number(options.textureRepeatX) : 1.0;
+        const repY = options.textureRepeatY !== undefined && options.textureRepeatY !== null ? Number(options.textureRepeatY) : 1.0;
+        const flipX = Boolean(options.textureFlipX);
+        const flipY = Boolean(options.textureFlipY);
+        const offX = options.textureOffsetX !== undefined && options.textureOffsetX !== null ? Number(options.textureOffsetX) : 0.0;
+        const offY = options.textureOffsetY !== undefined && options.textureOffsetY !== null ? Number(options.textureOffsetY) : 0.0;
+        const rotDeg = options.textureRotation !== undefined && options.textureRotation !== null ? Number(options.textureRotation) : 0.0;
+
+        if (tex.repeat) tex.repeat.set(flipX ? -repX : repX, flipY ? -repY : repY);
+        if (tex.offset) tex.offset.set(offX, offY);
+        tex.rotation = (rotDeg * Math.PI) / 180;
+        tex.needsUpdate = true;
+      };
+
+      const texture = loader.load(
+        options.textureUrl,
+        (loadedTex) => {
+          applyTexProps(loadedTex);
+          mat.needsUpdate = true;
+        },
+        undefined,
+        (err) => {
+          console.warn('[geometryHelper] Texture failed to load:', options.textureUrl, err);
+        }
+      );
+
+      applyTexProps(texture);
+      mat.map = texture;
+    } catch (err) {
+      console.warn('[geometryHelper] TextureLoader error:', err);
+    }
+  }
+
+  return mat;
 }
 
 export function createPrimitiveMesh(geomConfig, THREE_LIB = THREE) {

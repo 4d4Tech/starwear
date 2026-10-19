@@ -4292,20 +4292,78 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
             existingMesh.geometry = createPrimitiveThreeGeometry(item.type, item.params, THREE_LIB);
           }
 
-          // Check if material appearance changed
-          if (
+          // Check if material appearance or texture changed
+          const textureUrlChanged = existingMesh.userData?.textureUrl !== item.textureUrl;
+          const textureTransformChanged = (
+            existingMesh.userData?.textureRepeatX !== item.textureRepeatX ||
+            existingMesh.userData?.textureRepeatY !== item.textureRepeatY ||
+            existingMesh.userData?.textureOffsetX !== item.textureOffsetX ||
+            existingMesh.userData?.textureOffsetY !== item.textureOffsetY ||
+            existingMesh.userData?.textureRotation !== item.textureRotation ||
+            existingMesh.userData?.textureFlipX !== item.textureFlipX ||
+            existingMesh.userData?.textureFlipY !== item.textureFlipY
+          );
+          const matSurfaceChanged = (
             existingMesh.userData?.color !== item.color ||
             existingMesh.userData?.roughness !== item.roughness ||
             existingMesh.userData?.metalness !== item.metalness ||
             existingMesh.userData?.emissive !== item.emissive ||
             existingMesh.userData?.emissiveIntensity !== item.emissiveIntensity ||
-            existingMesh.userData?.wireframe !== item.wireframe
-          ) {
+            existingMesh.userData?.wireframe !== item.wireframe ||
+            existingMesh.userData?.flatShading !== item.flatShading ||
+            existingMesh.userData?.opacity !== item.opacity ||
+            existingMesh.userData?.transparent !== item.transparent
+          );
+
+          if (textureUrlChanged || (matSurfaceChanged && !existingMesh.material)) {
             if (existingMesh.material) {
-              if (Array.isArray(existingMesh.material)) existingMesh.material.forEach((m) => m.dispose());
-              else existingMesh.material.dispose();
+              if (Array.isArray(existingMesh.material)) {
+                existingMesh.material.forEach((m) => {
+                  if (m.map) m.map.dispose();
+                  m.dispose();
+                });
+              } else {
+                if (existingMesh.material.map) existingMesh.material.map.dispose();
+                existingMesh.material.dispose();
+              }
             }
             existingMesh.material = createPrimitiveMaterial(item, THREE_LIB);
+          } else if (existingMesh.material) {
+            const mats = Array.isArray(existingMesh.material) ? existingMesh.material : [existingMesh.material];
+            if (matSurfaceChanged) {
+              mats.forEach((m) => {
+                if (item.color && m.color) m.color.set(item.color);
+                if (item.roughness !== undefined) m.roughness = Number(item.roughness);
+                if (item.metalness !== undefined) m.metalness = Number(item.metalness);
+                if (item.wireframe !== undefined) m.wireframe = Boolean(item.wireframe);
+                if (item.flatShading !== undefined) m.flatShading = Boolean(item.flatShading);
+                if (item.opacity !== undefined) {
+                  m.opacity = Number(item.opacity);
+                  m.transparent = Boolean(item.transparent) || Number(item.opacity) < 1.0;
+                }
+                m.needsUpdate = true;
+              });
+            }
+            if (textureTransformChanged) {
+              mats.forEach((m) => {
+                if (m.map) {
+                  const tex = m.map;
+                  const repX = item.textureRepeatX !== undefined && item.textureRepeatX !== null ? Number(item.textureRepeatX) : 1.0;
+                  const repY = item.textureRepeatY !== undefined && item.textureRepeatY !== null ? Number(item.textureRepeatY) : 1.0;
+                  const flipX = Boolean(item.textureFlipX);
+                  const flipY = Boolean(item.textureFlipY);
+                  const offX = item.textureOffsetX !== undefined && item.textureOffsetX !== null ? Number(item.textureOffsetX) : 0.0;
+                  const offY = item.textureOffsetY !== undefined && item.textureOffsetY !== null ? Number(item.textureOffsetY) : 0.0;
+                  const rotDeg = item.textureRotation !== undefined && item.textureRotation !== null ? Number(item.textureRotation) : 0.0;
+
+                  if (tex.repeat) tex.repeat.set(flipX ? -repX : repX, flipY ? -repY : repY);
+                  if (tex.offset) tex.offset.set(offX, offY);
+                  tex.rotation = (rotDeg * Math.PI) / 180;
+                  tex.needsUpdate = true;
+                  m.needsUpdate = true;
+                }
+              });
+            }
           }
 
           // Update position/rotation/scale only if NOT currently being dragged by user via gizmo

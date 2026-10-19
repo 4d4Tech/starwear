@@ -33,6 +33,33 @@ import {
   batchUpdateAllAssetThumbnails
 } from '../utils/modelThumbnailRenderer';
 
+const SHAPE_TEXTURE_SAMPLES = [
+  {
+    id: 'uv_grid',
+    name: 'UV Grid',
+    repeat: 1,
+    url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><rect width="256" height="256" fill="%2318181b"/><rect width="128" height="128" fill="%230284c7"/><rect x="128" y="128" width="128" height="128" fill="%230284c7"/><circle cx="64" cy="64" r="26" fill="%23ffffff"/><circle cx="192" cy="192" r="26" fill="%23ffffff"/><text x="128" y="68" font-family="sans-serif" font-weight="900" font-size="20" fill="%23ffffff" text-anchor="middle">STAR weAR</text><text x="128" y="196" font-family="sans-serif" font-weight="900" font-size="20" fill="%2318181b" text-anchor="middle">UV TEST</text></svg>'
+  },
+  {
+    id: 'carbon_weave',
+    name: 'Carbon',
+    repeat: 3,
+    url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" fill="%2318181b"/><path d="M0 0 L32 32 L64 0 L64 32 L32 64 L0 32 Z" fill="%2327272a" opacity="0.7"/><path d="M0 32 L32 0 L64 32 L32 64 Z" fill="%233f3f46" opacity="0.4"/></svg>'
+  },
+  {
+    id: 'cyber_hex',
+    name: 'Cyber Hex',
+    repeat: 2,
+    url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="60" height="104" viewBox="0 0 60 104"><rect width="60" height="104" fill="%23090d16"/><path d="M30 0 L60 17 L60 52 L30 69 L0 52 L0 17 Z M30 52 L60 69 L60 104 L30 121 L0 104 L0 69 Z" fill="none" stroke="%2314b8a6" stroke-width="2.5"/><circle cx="30" cy="52" r="6" fill="%2306b6d4"/></svg>'
+  },
+  {
+    id: 'hazard_stripes',
+    name: 'Hazard',
+    repeat: 3,
+    url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60"><rect width="60" height="60" fill="%23eab308"/><path d="M0 60 L60 0 L30 0 L0 30 Z M30 60 L60 30 L60 60 Z" fill="%2318181b"/></svg>'
+  }
+];
+
 // =========================================================================
 // 1. REUSABLE TYPED SLIDER CONTROL WITH DUAL-WAY DATA BINDING
 // =========================================================================
@@ -756,6 +783,9 @@ const ARTest = () => {
   const deletedNodesRef = useRef(new Map()); // uuid -> { node, parent, name }
   const [textureUploadingUuid, setTextureUploadingUuid] = useState(null);
   const pendingTextureFilesRef = useRef(new Map()); // meshName -> { meshUuid, meshName, file, previewUrl }
+  const pendingShapeTexturesRef = useRef(new Map()); // geomId -> { file, previewUrl }
+  const shapeTextureInputRef = useRef(null);
+  const [shapeTextureUploadingId, setShapeTextureUploadingId] = useState(null);
 
   // Global Model Transform States (for entire model root)
   const [modelScale, setModelScale] = useState(0.4);
@@ -2473,6 +2503,156 @@ const ARTest = () => {
       );
     }
   }, []);
+
+  // Handler: Import image texture and map onto a 3D shape
+  const handleShapeTextureUpload = useCallback(async (geomId, file) => {
+    if (!file || !geomId) return;
+    try {
+      setShapeTextureUploadingId(geomId);
+      const previewUrl = URL.createObjectURL(file);
+      const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      let finalUrl = previewUrl;
+      let storagePath = '';
+
+      const bId = (batchId || '').trim();
+      if (bId) {
+        setUploadProgress(`Uploading texture ${file.name} to Cloud Storage...`);
+        storagePath = `assets/${bId}/textures/shapes/${geomId}_${Date.now()}_${cleanFileName}`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, file);
+        finalUrl = await getDownloadURL(storageRef);
+        setUploadProgress(null);
+      } else {
+        pendingShapeTexturesRef.current.set(geomId, { file, previewUrl });
+      }
+
+      const isPng = file.type === 'image/png' || file.name.toLowerCase().endsWith('.png');
+
+      handleUpdateGeometry(geomId, {
+        textureUrl: finalUrl,
+        texturePreviewUrl: previewUrl,
+        textureFileName: file.name,
+        textureStoragePath: storagePath,
+        textureRepeatX: 1,
+        textureRepeatY: 1,
+        textureOffsetX: 0,
+        textureOffsetY: 0,
+        textureRotation: 0,
+        textureFlipX: false,
+        textureFlipY: false,
+        color: '#ffffff',
+        opacity: 1.0,
+        transparent: isPng
+      });
+
+      // Instantly update live Three.js mesh in scene if mounted
+      const liveObj = findThreeObject('geometry', geomId);
+      if (liveObj && liveObj.isMesh) {
+        const loader = new THREE.TextureLoader();
+        loader.load(finalUrl, (tex) => {
+          if (THREE.SRGBColorSpace !== undefined) {
+            tex.colorSpace = THREE.SRGBColorSpace;
+          }
+          tex.wrapS = THREE.RepeatWrapping;
+          tex.wrapT = THREE.RepeatWrapping;
+          if (tex.center) tex.center.set(0.5, 0.5);
+          tex.needsUpdate = true;
+          if (liveObj.material) {
+            liveObj.material.map = tex;
+            if (liveObj.material.color) liveObj.material.color.set(0xffffff);
+            if (isPng) {
+              liveObj.material.transparent = true;
+            }
+            liveObj.material.needsUpdate = true;
+          }
+        });
+      }
+
+      setSaveSuccessMsg(`Applied texture "${file.name}" to shape.`);
+      setTimeout(() => setSaveSuccessMsg(''), 4000);
+    } catch (err) {
+      console.error('[ARTest] Failed to import shape texture:', err);
+      alert('Failed to import texture: ' + (err?.message || err));
+      setUploadProgress(null);
+    } finally {
+      setShapeTextureUploadingId(null);
+    }
+  }, [batchId, findThreeObject]);
+
+  // Handler: Remove texture map from shape and reset surface
+  const handleRemoveShapeTexture = useCallback((geomId) => {
+    if (!geomId) return;
+    pendingShapeTexturesRef.current.delete(geomId);
+    handleUpdateGeometry(geomId, {
+      textureUrl: null,
+      texturePreviewUrl: null,
+      textureFileName: null,
+      textureStoragePath: null,
+      textureRepeatX: 1,
+      textureRepeatY: 1,
+      textureOffsetX: 0,
+      textureOffsetY: 0,
+      textureRotation: 0,
+      textureFlipX: false,
+      textureFlipY: false,
+      color: '#38bdf8'
+    });
+
+    const liveObj = findThreeObject('geometry', geomId);
+    if (liveObj && liveObj.isMesh && liveObj.material) {
+      if (liveObj.material.map) {
+        try { liveObj.material.map.dispose(); } catch {}
+        liveObj.material.map = null;
+      }
+      if (liveObj.material.color) liveObj.material.color.set('#38bdf8');
+      liveObj.material.needsUpdate = true;
+    }
+    setSaveSuccessMsg('Removed texture from shape.');
+    setTimeout(() => setSaveSuccessMsg(''), 3000);
+  }, [findThreeObject]);
+
+  // Handler: Apply quick built-in vector pattern texture to shape
+  const handleApplyShapeTexturePreset = useCallback((geomId, preset) => {
+    if (!geomId || !preset) return;
+    pendingShapeTexturesRef.current.delete(geomId);
+    handleUpdateGeometry(geomId, {
+      textureUrl: preset.url,
+      texturePreviewUrl: preset.url,
+      textureFileName: preset.name,
+      textureStoragePath: null,
+      textureRepeatX: preset.repeat || 1,
+      textureRepeatY: preset.repeat || 1,
+      textureOffsetX: 0,
+      textureOffsetY: 0,
+      textureRotation: 0,
+      textureFlipX: false,
+      textureFlipY: false,
+      color: '#ffffff',
+      opacity: 1.0,
+      transparent: false
+    });
+
+    const liveObj = findThreeObject('geometry', geomId);
+    if (liveObj && liveObj.isMesh) {
+      const loader = new THREE.TextureLoader();
+      loader.load(preset.url, (tex) => {
+        if (THREE.SRGBColorSpace !== undefined) tex.colorSpace = THREE.SRGBColorSpace;
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        if (tex.center) tex.center.set(0.5, 0.5);
+        if (preset.repeat) tex.repeat.set(preset.repeat, preset.repeat);
+        tex.needsUpdate = true;
+        if (liveObj.material) {
+          liveObj.material.map = tex;
+          if (liveObj.material.color) liveObj.material.color.set(0xffffff);
+          liveObj.material.needsUpdate = true;
+        }
+      });
+    }
+
+    setSaveSuccessMsg(`Applied "${preset.name}" pattern texture.`);
+    setTimeout(() => setSaveSuccessMsg(''), 3000);
+  }, [findThreeObject]);
 
   // Batch commit member transforms from Three.js nodes to React states
   const commitMemberTransformsToState = useCallback((members) => {
@@ -6670,6 +6850,35 @@ const ARTest = () => {
         setCustomModels(cleanedCustomModels);
       }
 
+      // 2f. Upload any staged custom shape textures to Firebase Storage
+      let cleanedAdditionalGeometries = additionalGeometries || [];
+      if (Array.isArray(additionalGeometries) && additionalGeometries.length > 0) {
+        cleanedAdditionalGeometries = await Promise.all(
+          additionalGeometries.map(async (g) => {
+            let finalTexUrl = g.textureUrl;
+            let finalStoragePath = g.textureStoragePath || '';
+            const pending = pendingShapeTexturesRef.current?.get(g.id);
+            if (pending?.file) {
+              setUploadProgress(`Uploading shape texture for ${g.name || g.id} to Storage...`);
+              const cleanFileName = (pending.file.name || `${g.id}.png`).replace(/[^a-zA-Z0-9._-]/g, '_');
+              const storagePath = `assets/${batchId.trim()}/textures/shapes/${g.id}_${Date.now()}_${cleanFileName}`;
+              const shapeTexRef = ref(storage, storagePath);
+              await uploadBytes(shapeTexRef, pending.file);
+              finalTexUrl = await getDownloadURL(shapeTexRef);
+              finalStoragePath = storagePath;
+            }
+            const { texturePreviewUrl, ...cleanGeom } = g;
+            return {
+              ...cleanGeom,
+              textureUrl: finalTexUrl,
+              textureStoragePath: finalStoragePath
+            };
+          })
+        );
+        pendingShapeTexturesRef.current?.clear();
+        setAdditionalGeometries(cleanedAdditionalGeometries);
+      }
+
       setUploadProgress('Saving batch configuration to Firestore...');
 
       // 3. Build meshOverrides dictionary
@@ -6886,7 +7095,7 @@ const ARTest = () => {
           source: markerInfo?.source,
           mindFilePath: markerInfo?.mindFilePath || ''
         },
-        additionalGeometries: additionalGeometries || [],
+        additionalGeometries: cleanedAdditionalGeometries || [],
         customModels: cleanedCustomModels,
         custom3DTexts: custom3DTexts || [],
         customLights: customLights || [],
@@ -10458,10 +10667,323 @@ const ARTest = () => {
                           </div>
                         </div>
 
+                        {/* Texture & Material Mapping */}
+                        <div className="p-3 bg-neutral-950/80 rounded-xl border border-neutral-800 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-1.5">
+                              <span className="material-symbols-outlined text-sm text-teal-400">texture</span>
+                              <span className="text-xs font-bold text-neutral-200">Texture & Surface Map</span>
+                            </div>
+                            {currentGeom.textureUrl ? (
+                              <span className="text-[10px] font-mono uppercase bg-teal-500/20 text-teal-300 px-1.5 py-0.5 rounded font-bold">
+                                UV Mapped
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-neutral-500 font-medium">
+                                Solid Material
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Hidden File Input */}
+                          <input
+                            type="file"
+                            ref={shapeTextureInputRef}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleShapeTextureUpload(currentGeom.id, file);
+                              e.target.value = '';
+                            }}
+                            accept="image/*"
+                            className="hidden"
+                          />
+
+                          {!currentGeom.textureUrl ? (
+                            <div className="space-y-2.5">
+                              {/* Drag & Drop Import Box */}
+                              <div
+                                onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                onDrop={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  const file = e.dataTransfer.files?.[0];
+                                  if (file && file.type.startsWith('image/')) {
+                                    handleShapeTextureUpload(currentGeom.id, file);
+                                  }
+                                }}
+                                onClick={() => shapeTextureInputRef.current?.click()}
+                                className="border border-dashed border-teal-500/40 hover:border-teal-400 bg-neutral-900/60 hover:bg-teal-950/20 rounded-xl p-3.5 text-center cursor-pointer transition-all group flex flex-col items-center justify-center gap-2"
+                              >
+                                <div className="w-9 h-9 rounded-lg bg-teal-500/10 group-hover:bg-teal-500/20 text-teal-400 flex items-center justify-center transition-all shadow-inner">
+                                  {shapeTextureUploadingId === currentGeom.id ? (
+                                    <span className="material-symbols-outlined text-lg animate-spin">progress_activity</span>
+                                  ) : (
+                                    <span className="material-symbols-outlined text-lg">add_photo_alternate</span>
+                                  )}
+                                </div>
+                                <div>
+                                  <span className="text-xs font-bold text-neutral-200 group-hover:text-teal-300 block">
+                                    {shapeTextureUploadingId === currentGeom.id ? 'Importing Texture...' : 'Import Image Texture'}
+                                  </span>
+                                  <span className="text-[10px] text-neutral-400 block mt-0.5">
+                                    Click or drag PNG, JPG, WEBP, or SVG to map onto this 3D shape
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Quick Built-in Pattern Presets */}
+                              <div className="space-y-1">
+                                <span className="text-[9px] text-neutral-500 uppercase font-bold tracking-wider block">
+                                  Quick Test Patterns
+                                </span>
+                                <div className="grid grid-cols-4 gap-1">
+                                  {SHAPE_TEXTURE_SAMPLES.map((sample) => (
+                                    <button
+                                      key={sample.id}
+                                      type="button"
+                                      onClick={() => handleApplyShapeTexturePreset(currentGeom.id, sample)}
+                                      className="px-1.5 py-1 rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 text-neutral-300 text-[10px] font-semibold transition-all cursor-pointer flex items-center justify-center gap-1 truncate"
+                                      title={`Apply ${sample.name} pattern`}
+                                    >
+                                      <span className="material-symbols-outlined text-xs text-teal-400">grid_on</span>
+                                      <span className="truncate">{sample.name}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                              {/* Active Texture Info & Actions */}
+                              <div className="flex items-center gap-2.5 p-2 bg-neutral-900 rounded-lg border border-neutral-800">
+                                <div
+                                  className="w-12 h-12 rounded-lg border border-neutral-700 overflow-hidden bg-neutral-950 shrink-0 relative flex items-center justify-center"
+                                  style={{
+                                    backgroundImage:
+                                      'linear-gradient(45deg, #262626 25%, transparent 25%), linear-gradient(-45deg, #262626 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #262626 75%), linear-gradient(-45deg, transparent 75%, #262626 75%)',
+                                    backgroundSize: '10px 10px',
+                                    backgroundPosition: '0 0, 0 5px, 5px -5px, -5px 0px'
+                                  }}
+                                >
+                                  <img
+                                    src={currentGeom.textureUrl}
+                                    alt="Texture Preview"
+                                    className="w-full h-full object-cover"
+                                  />
+                                </div>
+                                <div className="flex-1 min-w-0 space-y-0.5">
+                                  <div className="text-xs font-semibold text-neutral-200 truncate">
+                                    {currentGeom.textureFileName || 'Custom Texture Map'}
+                                  </div>
+                                  <div className="text-[10px] text-teal-400 flex items-center gap-1 font-mono">
+                                    <span className="material-symbols-outlined text-xs">check_circle</span>
+                                    <span>UV mapped to mesh</span>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => shapeTextureInputRef.current?.click()}
+                                    className="p-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white transition-colors cursor-pointer"
+                                    title="Replace Image Texture"
+                                  >
+                                    <span className="material-symbols-outlined text-xs">sync</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveShapeTexture(currentGeom.id)}
+                                    className="p-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-500/30 text-red-300 hover:text-red-200 transition-colors cursor-pointer"
+                                    title="Remove Texture Map"
+                                  >
+                                    <span className="material-symbols-outlined text-xs">delete</span>
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Tiling (Repeat) */}
+                              <div className="space-y-1.5 pt-1 border-t border-neutral-800/80">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
+                                    Tiling (Repeat)
+                                  </span>
+                                  <div className="flex items-center gap-1">
+                                    {[1, 2, 3, 4].map((rep) => (
+                                      <button
+                                        key={rep}
+                                        type="button"
+                                        onClick={() =>
+                                          handleUpdateGeometry(currentGeom.id, {
+                                            textureRepeatX: rep,
+                                            textureRepeatY: rep
+                                          })
+                                        }
+                                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${
+                                          (currentGeom.textureRepeatX ?? 1) === rep && (currentGeom.textureRepeatY ?? 1) === rep
+                                            ? 'bg-teal-500 text-white shadow-sm'
+                                            : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-400'
+                                        }`}
+                                      >
+                                        {rep}x
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <NumberSliderInput
+                                    label="Repeat X"
+                                    value={currentGeom.textureRepeatX ?? 1.0}
+                                    onChange={(val) => handleUpdateGeometry(currentGeom.id, { textureRepeatX: val })}
+                                    min={0.1}
+                                    max={8.0}
+                                    step={0.1}
+                                    color="teal"
+                                  />
+                                  <NumberSliderInput
+                                    label="Repeat Y"
+                                    value={currentGeom.textureRepeatY ?? 1.0}
+                                    onChange={(val) => handleUpdateGeometry(currentGeom.id, { textureRepeatY: val })}
+                                    min={0.1}
+                                    max={8.0}
+                                    step={0.1}
+                                    color="teal"
+                                  />
+                                </div>
+                              </div>
+
+                              {/* UV Offset & Rotation */}
+                              <div className="space-y-2 pt-1 border-t border-neutral-800/80">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">
+                                    UV Offset & Rotation
+                                  </span>
+                                  {((currentGeom.textureOffsetX ?? 0) !== 0 ||
+                                    (currentGeom.textureOffsetY ?? 0) !== 0 ||
+                                    (currentGeom.textureRotation ?? 0) !== 0 ||
+                                    currentGeom.textureFlipX ||
+                                    currentGeom.textureFlipY) && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleUpdateGeometry(currentGeom.id, {
+                                          textureOffsetX: 0,
+                                          textureOffsetY: 0,
+                                          textureRotation: 0,
+                                          textureFlipX: false,
+                                          textureFlipY: false
+                                        })
+                                      }
+                                      className="text-[10px] text-teal-400 hover:underline cursor-pointer"
+                                    >
+                                      Reset UVs
+                                    </button>
+                                  )}
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <NumberSliderInput
+                                    label="Offset X"
+                                    value={currentGeom.textureOffsetX ?? 0.0}
+                                    onChange={(val) => handleUpdateGeometry(currentGeom.id, { textureOffsetX: val })}
+                                    min={-1.0}
+                                    max={1.0}
+                                    step={0.05}
+                                    color="indigo"
+                                  />
+                                  <NumberSliderInput
+                                    label="Offset Y"
+                                    value={currentGeom.textureOffsetY ?? 0.0}
+                                    onChange={(val) => handleUpdateGeometry(currentGeom.id, { textureOffsetY: val })}
+                                    min={-1.0}
+                                    max={1.0}
+                                    step={0.05}
+                                    color="indigo"
+                                  />
+                                </div>
+
+                                <NumberSliderInput
+                                  label="Texture Rotation"
+                                  value={currentGeom.textureRotation ?? 0}
+                                  onChange={(val) => handleUpdateGeometry(currentGeom.id, { textureRotation: val })}
+                                  min={0}
+                                  max={360}
+                                  step={5}
+                                  unit="°"
+                                  color="purple"
+                                />
+
+                                {/* Flip UVs Horizontally / Vertically */}
+                                <div className="grid grid-cols-2 gap-2 pt-0.5">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleUpdateGeometry(currentGeom.id, {
+                                        textureFlipX: !currentGeom.textureFlipX
+                                      })
+                                    }
+                                    className={`py-1 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                                      currentGeom.textureFlipX
+                                        ? 'bg-teal-500/20 border-teal-500 text-teal-300'
+                                        : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'
+                                    }`}
+                                  >
+                                    <span className="material-symbols-outlined text-sm">flip</span>
+                                    <span>Flip X</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleUpdateGeometry(currentGeom.id, {
+                                        textureFlipY: !currentGeom.textureFlipY
+                                      })
+                                    }
+                                    className={`py-1 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                                      currentGeom.textureFlipY
+                                        ? 'bg-teal-500/20 border-teal-500 text-teal-300'
+                                        : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'
+                                    }`}
+                                  >
+                                    <span className="material-symbols-outlined text-sm">swap_vertical_circle</span>
+                                    <span>Flip Y</span>
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Surface Opacity Slider */}
+                              <div className="space-y-1 pt-1 border-t border-neutral-800/80">
+                                <NumberSliderInput
+                                  label="Texture Opacity"
+                                  value={currentGeom.opacity ?? 1.0}
+                                  onChange={(val) =>
+                                    handleUpdateGeometry(currentGeom.id, {
+                                      opacity: val,
+                                      transparent: val < 1.0
+                                    })
+                                  }
+                                  min={0.0}
+                                  max={1.0}
+                                  step={0.05}
+                                  color="sky"
+                                  description="Controls surface transparency (PNG alpha is auto-supported)"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
                         {/* Color Picker & Swatches */}
                         <div className="space-y-2">
                           <div className="flex items-center justify-between">
-                            <span className="text-xs font-semibold text-neutral-300">Surface Color</span>
+                            <div>
+                              <span className="text-xs font-semibold text-neutral-300 block">
+                                {currentGeom.textureUrl ? 'Surface Tint Color' : 'Surface Color'}
+                              </span>
+                              {currentGeom.textureUrl && (
+                                <span className="text-[10px] text-neutral-400 block">
+                                  White (#FFFFFF) preserves original image colors
+                                </span>
+                              )}
+                            </div>
                             <div className="flex items-center gap-2">
                               <span className="text-xs font-mono text-neutral-400">{currentGeom.color}</span>
                               <input
@@ -11400,7 +11922,7 @@ const ARTest = () => {
                               : 'bg-neutral-900/70 border-neutral-800/80 hover:border-neutral-700 text-neutral-300'
                             }`}
                         >
-                          <div className="flex items-center gap-2 min-w-0">
+                          <div className="flex listed-shapes items-center gap-2 min-w-0">
                             <input
                               type="checkbox"
                               checked={isMultiSelected}
@@ -16133,8 +16655,8 @@ const ARTest = () => {
                     selectedTargetType === 'group'
                       ? 'Export Selected Group as .GLB'
                       : selectedTargetType === 'multi'
-                      ? 'Export Selected Objects as .GLB'
-                      : 'Export Selected Object as .GLB'
+                        ? 'Export Selected Objects as .GLB'
+                        : 'Export Selected Object as .GLB'
                   }
                   className="p-1 px-2 rounded-lg bg-teal-950/80 hover:bg-teal-900 border border-teal-500/40 text-teal-300 hover:text-white transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer"
                 >
