@@ -1138,6 +1138,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           const mesh = modelEl.getObject3D('mesh');
           if (mesh) {
             const overrides = arData?.config?.meshOverrides;
+            const nodesToDelete = [];
           mesh.traverse((node) => {
             if (node.isMesh) {
               if (overrides) {
@@ -1146,7 +1147,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                   if (ovr.deleted || ovr.visible === false) {
                     node.visible = false;
                     if (ovr.deleted && node.parent) {
-                      node.parent.remove(node);
+                      nodesToDelete.push(node);
                     }
                     return;
                   }
@@ -1199,7 +1200,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                       tex.needsUpdate = true;
                     };
 
-                    if (ovr.material.textureUrl) {
+                    if (ovr.material.textureUrl && typeof ovr.material.textureUrl === 'string' && !ovr.material.textureUrl.startsWith('blob:')) {
                       const loader = new THREE_LIB.TextureLoader();
                       loader.load(ovr.material.textureUrl, (tex) => {
                         if (THREE_LIB.SRGBColorSpace !== undefined) {
@@ -1233,6 +1234,11 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                 const matType = mat.type || 'Standard';
                 logToScreen(`MESH_AUDIT [${node.name || 'mesh'}]`, `Material: ${matType} | Texture: ${hasMap} | Roughness: ${mat.roughness ?? 'N/A'} | Metalness: ${mat.metalness ?? 'N/A'}`);
               }
+            }
+          });
+          nodesToDelete.forEach((node) => {
+            if (node.parent) {
+              node.parent.remove(node);
             }
           });
         }

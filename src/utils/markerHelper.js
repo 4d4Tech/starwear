@@ -223,7 +223,7 @@ export const loadMarkerForBatch = async (options = {}) => {
   const batchId = options.batchId || options.id || options.batchData?.id || '';
 
   // 1. Resolve Candidate Direct Marker Image URL
-  const candidateImageUrl =
+  const rawCandidate =
     options.customMarkerUrl ||
     options.markerImageUrl ||
     options.marker_image_url ||
@@ -252,6 +252,8 @@ export const loadMarkerForBatch = async (options = {}) => {
     options.data?.trackingConfig?.markerImageUrl ||
     '';
 
+  const candidateImageUrl = (typeof rawCandidate === 'string' && !rawCandidate.startsWith('blob:')) ? rawCandidate : '';
+
   const cacheKey = candidateImageUrl || options.mindUrl || options.mindFilePath || options.mind_file_path || batchId;
   if (cacheKey && markerCache.has(cacheKey)) {
     const cached = markerCache.get(cacheKey);
@@ -260,8 +262,8 @@ export const loadMarkerForBatch = async (options = {}) => {
     }
   }
 
-  // If candidate image URL is valid and accessible
-  if (candidateImageUrl && typeof candidateImageUrl === 'string' && (candidateImageUrl.startsWith('http') || candidateImageUrl.startsWith('data:') || candidateImageUrl.startsWith('blob:'))) {
+  // If candidate image URL is valid and accessible (http/https or persistent data URI)
+  if (candidateImageUrl && typeof candidateImageUrl === 'string' && (candidateImageUrl.startsWith('http') || candidateImageUrl.startsWith('data:'))) {
     try {
       const dimensions = await getImageDimensions(candidateImageUrl);
       const res = {
@@ -276,7 +278,7 @@ export const loadMarkerForBatch = async (options = {}) => {
       if (cacheKey) markerCache.set(cacheKey, res);
       return res;
     } catch {
-      // Candidate image URL unreachable (e.g. stale blob URL from past session), silently fall back
+      // Candidate image URL unreachable, silently fall back
     }
   }
 
@@ -444,7 +446,7 @@ export const loadMarkerForBatch = async (options = {}) => {
  */
 export const getImageDimensions = (url) => {
   return new Promise((resolve, reject) => {
-    if (typeof Image === 'undefined') {
+    if (!url || typeof url !== 'string' || url.startsWith('blob:') || typeof Image === 'undefined') {
       return resolve({ width: 512, height: 512, aspectRatio: 1.0 });
     }
     const img = new Image();

@@ -904,15 +904,16 @@ const ARTest = () => {
 
   // Synchronize marker attributes to A-Frame entity without string parser truncation
   useEffect(() => {
-    if (typeof window !== 'undefined' && markerImageUrl) {
+    if (typeof window !== 'undefined' && markerImageUrl && !markerImageUrl.startsWith('blob:')) {
       window.__starwear_active_marker_image = markerImageUrl;
     }
+    const safeMarkerUrl = (markerImageUrl && typeof markerImageUrl === 'string' && !markerImageUrl.startsWith('blob:')) ? markerImageUrl : '';
     const markerEl = document.getElementById('ar-marker-reference-anchor');
     if (markerEl && typeof markerEl.setAttribute === 'function') {
       markerEl.setAttribute('ar-marker-reference', {
         enabled: Boolean(markerVisible),
-        imageUrl: markerImageUrl || '',
-        src: markerImageUrl || '',
+        imageUrl: safeMarkerUrl,
+        src: safeMarkerUrl,
         width: Number(markerWidth) || 1.0,
         height: Number((Number(markerWidth || 1.0) * (Number(markerAspectRatio) || 0.5926)).toFixed(4)),
         aspectRatio: Number(markerAspectRatio) || 0.5926,
@@ -3059,6 +3060,7 @@ const ARTest = () => {
       const model3D = modelEl.getObject3D('mesh');
       if (model3D && arData?.config?.meshOverrides) {
         const overrides = arData.config.meshOverrides;
+        const nodesToDelete = [];
         model3D.traverse((node) => {
           if (node.isMesh) {
             // Pristine backup of original material before any overrides are applied
@@ -3075,7 +3077,7 @@ const ARTest = () => {
               if (ovr.deleted || ovr.visible === false) {
                 node.visible = false;
                 if (ovr.deleted && node.parent) {
-                  node.parent.remove(node);
+                  nodesToDelete.push(node);
                 }
                 return;
               }
@@ -3106,7 +3108,7 @@ const ARTest = () => {
                   if (ovr.material.wireframe !== undefined) m.wireframe = !!ovr.material.wireframe;
                   m.needsUpdate = true;
                 });
-                if (ovr.material.textureUrl) {
+                if (ovr.material.textureUrl && typeof ovr.material.textureUrl === 'string' && !ovr.material.textureUrl.startsWith('blob:')) {
                   const loader = new THREE.TextureLoader();
                   loader.load(ovr.material.textureUrl, (tex) => {
                     tex.colorSpace = THREE.SRGBColorSpace;
@@ -3125,6 +3127,11 @@ const ARTest = () => {
                 }
               }
             }
+          }
+        });
+        nodesToDelete.forEach((node) => {
+          if (node.parent) {
+            node.parent.remove(node);
           }
         });
       }
@@ -3167,13 +3174,19 @@ const ARTest = () => {
       }
     };
 
+    const handleError = (evt) => {
+      console.error('[ARTest] #ar-model failed to load:', evt?.detail || evt);
+    };
+
     modelEl.addEventListener('model-loaded', handleLoaded);
+    modelEl.addEventListener('model-error', handleError);
     if (modelEl.getObject3D('mesh')) {
       handleLoaded();
     }
 
     return () => {
       modelEl.removeEventListener('model-loaded', handleLoaded);
+      modelEl.removeEventListener('model-error', handleError);
     };
   }, [localGlbUrl, arData, scanMeshes, videoFlipX, getOrbitControls, getThreeCamera]);
 
@@ -4604,15 +4617,19 @@ const ARTest = () => {
     let resolvedName = meshName || '';
 
     if (model3D) {
+      const nodesToRemove = [];
       model3D.traverse((node) => {
         if ((node.uuid === uuid || (meshName && node.name === meshName)) && node.isMesh) {
           resolvedName = node.name || meshName || `Mesh_${uuid}`;
           node.visible = false;
           if (node.parent) {
             deletedNodesRef.current.set(uuid, { node, parent: node.parent, name: resolvedName });
-            node.parent.remove(node);
+            nodesToRemove.push(node);
           }
         }
+      });
+      nodesToRemove.forEach((node) => {
+        if (node.parent) node.parent.remove(node);
       });
     }
 
@@ -5401,15 +5418,22 @@ const ARTest = () => {
     lastFramedModelKeyRef.current = '';
 
     try {
-      const response = await fetch(`https://loomrouter-5qjmmwdvcq-uc.a.run.app/s/${batchId.trim()}?t=${Date.now()}`, {
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' }
-      });
-      if (!response.ok) {
-        throw new Error("Batch not found or inactive.");
+      let data = null;
+      try {
+        const response = await fetch(`https://loomrouter-5qjmmwdvcq-uc.a.run.app/s/${batchId.trim()}?t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' }
+        });
+        if (response.ok) {
+          data = await response.json();
+        }
+      } catch (routerErr) {
+        console.warn("[ARTest] Loomrouter fetch skipped or failed:", routerErr);
       }
-      const data = await response.json();
+      data = data || {};
+
       let videoUrl = data.arExperience?.videoUrl || data.arExperience?.video || data.videoUrl || '';
+      if (typeof videoUrl === 'string' && videoUrl.startsWith('blob:')) videoUrl = '';
 
       const batchRef = doc(db, 'batches', batchId.trim());
       let batchSnap = null;
@@ -5423,8 +5447,9 @@ const ARTest = () => {
 
       if (batchSnap && batchSnap.exists()) {
         const batchData = batchSnap.data();
-        if (batchData.video_url || batchData.videoUrl) {
-          videoUrl = batchData.video_url || batchData.videoUrl;
+        const bVid = batchData.video_url || batchData.videoUrl;
+        if (bVid && typeof bVid === 'string' && !bVid.startsWith('blob:')) {
+          videoUrl = bVid;
         }
         if (batchData.ar_config) {
           batchConfig = batchData.ar_config;
@@ -5443,8 +5468,9 @@ const ARTest = () => {
         if (assetSnap && assetSnap.exists()) {
           const aData = assetSnap.data();
           if (!batchConfig) {
-            if (aData.video_url || aData.videoUrl) {
-              videoUrl = aData.video_url || aData.videoUrl;
+            const aVid = aData.video_url || aData.videoUrl;
+            if (aVid && typeof aVid === 'string' && !aVid.startsWith('blob:')) {
+              videoUrl = aVid;
             }
             if (aData.ar_config) {
               batchConfig = aData.ar_config;
@@ -5455,9 +5481,57 @@ const ARTest = () => {
         console.warn("[ARTest] Asset document fetch skipped:", assetErr);
       }
 
-      const cfg = batchConfig || data.arExperience?.config || data.ar_config || {};
+      const bData = batchSnap && batchSnap.exists() ? batchSnap.data() : null;
+      const aData = assetSnap && assetSnap.exists() ? assetSnap.data() : null;
+      const docSource = aData || bData;
 
-      if (cfg.videoUrl || cfg.video_url) videoUrl = cfg.videoUrl || cfg.video_url;
+      if (!bData && !aData && (!data.arExperience || !data.arExperience.modelUrl)) {
+        throw new Error("Batch or asset not found.");
+      }
+
+      // Resolve 3D GLTF model URL: prioritize direct storage path from asset/batch doc to guarantee permanent download URL
+      let resolvedModelUrl = '';
+      const candidatePath = aData?.gltf_file_path || bData?.gltf_file_path || docSource?.gltf_file_path || '';
+      if (candidatePath && !candidatePath.startsWith('http')) {
+        try {
+          resolvedModelUrl = await getDownloadURL(ref(storage, candidatePath));
+        } catch (storageGltfErr) {
+          console.warn('[ARTest] Could not resolve gltf storage path:', storageGltfErr);
+        }
+      }
+
+      if (!resolvedModelUrl) {
+        const candidateUrl = data.arExperience?.modelUrl || data.modelUrl || data.gltfPath || aData?.gltf_url || bData?.gltf_url || aData?.modelUrl || bData?.modelUrl || '';
+        if (candidateUrl) {
+          if (!candidateUrl.startsWith('http')) {
+            try {
+              resolvedModelUrl = await getDownloadURL(ref(storage, candidateUrl));
+            } catch (storageUrlErr) {
+              console.warn('[ARTest] Could not resolve gltf candidate path:', storageUrlErr);
+            }
+          } else {
+            resolvedModelUrl = candidateUrl;
+          }
+        }
+      }
+
+      data.arExperience = data.arExperience || {};
+      data.arExperience.modelUrl = resolvedModelUrl || data.arExperience.modelUrl || '';
+      data.gltfPath = resolvedModelUrl || data.gltfPath || data.arExperience.modelUrl || '';
+      data.modelUrl = resolvedModelUrl || data.modelUrl || data.arExperience.modelUrl || '';
+
+      const cfg = batchConfig || bData?.ar_config || aData?.ar_config || data.arExperience?.config || data.ar_config || bData || aData || {};
+      if (!cfg.meshOverrides && (bData?.meshOverrides || aData?.meshOverrides)) cfg.meshOverrides = bData?.meshOverrides || aData?.meshOverrides;
+      if (!cfg.custom3DTexts && (bData?.custom3DTexts || aData?.custom3DTexts)) cfg.custom3DTexts = bData?.custom3DTexts || aData?.custom3DTexts;
+      if (!cfg.customLights && (bData?.customLights || aData?.customLights)) cfg.customLights = bData?.customLights || aData?.customLights;
+      if (!cfg.additionalGeometries && (bData?.additionalGeometries || aData?.additionalGeometries)) cfg.additionalGeometries = bData?.additionalGeometries || aData?.additionalGeometries;
+      if (!cfg.customModels && (bData?.customModels || aData?.customModels)) cfg.customModels = bData?.customModels || aData?.customModels;
+      if (!cfg.particleConfig && (bData?.particleConfig || aData?.particleConfig)) cfg.particleConfig = bData?.particleConfig || aData?.particleConfig;
+      if (!cfg.portalConfig && (bData?.portalConfig || aData?.portalConfig)) cfg.portalConfig = bData?.portalConfig || aData?.portalConfig;
+      if (!cfg.websiteLayer && (bData?.websiteLayer || aData?.websiteLayer)) cfg.websiteLayer = bData?.websiteLayer || aData?.websiteLayer;
+
+      const cVid = cfg.videoUrl || cfg.video_url;
+      if (cVid && typeof cVid === 'string' && !cVid.startsWith('blob:')) videoUrl = cVid;
       if (cfg.ambientColor !== undefined) setAmbientColor(cfg.ambientColor);
       if (cfg.ambientIntensity !== undefined) setAmbientIntensity(cfg.ambientIntensity);
       if (cfg.dir1Color !== undefined) setDir1Color(cfg.dir1Color);
@@ -5563,7 +5637,7 @@ const ARTest = () => {
         if (pCfg.rotY !== undefined) setPortalRotY(Number(pCfg.rotY));
         if (pCfg.rotZ !== undefined) setPortalRotZ(Number(pCfg.rotZ));
         if (pCfg.interiorType) setPortalInteriorType(pCfg.interiorType);
-        if (pCfg.skyboxUrl !== undefined) setPortalSkyboxUrl(pCfg.skyboxUrl);
+        if (pCfg.skyboxUrl !== undefined && !String(pCfg.skyboxUrl).startsWith('blob:')) setPortalSkyboxUrl(pCfg.skyboxUrl);
         if (pCfg.skyboxScale !== undefined) setPortalSkyboxScale(Number(pCfg.skyboxScale));
         if (pCfg.skyboxPosX !== undefined) setPortalSkyboxPosX(Number(pCfg.skyboxPosX));
         if (pCfg.skyboxPosY !== undefined) setPortalSkyboxPosY(Number(pCfg.skyboxPosY));
@@ -5580,7 +5654,7 @@ const ARTest = () => {
         if (pCfg.interiorLightIntensity !== undefined) setPortalLightIntensity(Number(pCfg.interiorLightIntensity));
         if (pCfg.interiorModelType) setPortalModelType(pCfg.interiorModelType);
         if (pCfg.artifactType) setPortalArtifactType(pCfg.artifactType);
-        if (pCfg.customModelUrl !== undefined) setPortalCustomModelUrl(pCfg.customModelUrl);
+        if (pCfg.customModelUrl !== undefined && !String(pCfg.customModelUrl).startsWith('blob:')) setPortalCustomModelUrl(pCfg.customModelUrl);
         if (pCfg.modelScale !== undefined) setPortalModelScale(Number(pCfg.modelScale));
         if (pCfg.modelPosX !== undefined) setPortalModelPosX(Number(pCfg.modelPosX));
         if (pCfg.modelPosY !== undefined) setPortalModelPosY(Number(pCfg.modelPosY));
@@ -5590,7 +5664,7 @@ const ARTest = () => {
         if (pCfg.modelRotY !== undefined) setPortalModelRotY(Number(pCfg.modelRotY));
         if (pCfg.modelRotZ !== undefined) setPortalModelRotZ(Number(pCfg.modelRotZ));
         if (pCfg.showVideo !== undefined) setPortalShowVideo(Boolean(pCfg.showVideo));
-        if (pCfg.videoUrl !== undefined) setPortalVideoUrl(pCfg.videoUrl);
+        if (pCfg.videoUrl !== undefined && !String(pCfg.videoUrl).startsWith('blob:')) setPortalVideoUrl(pCfg.videoUrl);
         if (pCfg.videoScale !== undefined) setPortalVideoScale(Number(pCfg.videoScale));
         if (pCfg.videoPosY !== undefined) setPortalVideoPosY(Number(pCfg.videoPosY));
         if (pCfg.videoPosZ !== undefined) setPortalVideoPosZ(Number(pCfg.videoPosZ));
@@ -5727,6 +5801,13 @@ const ARTest = () => {
         }
       }
 
+      // Sanitize cfg for marker payload so stale blob URLs in cfg.markerConfig.imageUrl are excluded
+      const cleanMarkerCfg = cfg?.markerConfig ? {
+        ...cfg.markerConfig,
+        imageUrl: (cfg.markerConfig.imageUrl && !cfg.markerConfig.imageUrl.startsWith('blob:')) ? cfg.markerConfig.imageUrl : ''
+      } : null;
+      const cleanCfg = cfg ? { ...cfg, markerConfig: cleanMarkerCfg } : null;
+
       // Automatically load/extract marker from batch (marker image, Firebase Storage path, or .mind file)
       const batchMarkerPayload = {
         batchId: batchId.trim(),
@@ -5734,26 +5815,28 @@ const ARTest = () => {
         data,
         batchData: (typeof batchSnap !== 'undefined' && batchSnap?.exists()) ? batchSnap.data() : null,
         assetData: (typeof assetSnap !== 'undefined' && assetSnap?.exists()) ? assetSnap.data() : null,
-        cfg
+        cfg: cleanCfg
       };
       setMarkerLoading(true);
       loadMarkerForBatch(batchMarkerPayload).then((res) => {
         if (res && (res.blobUrl || res.dataUrl)) {
-          const activeUrl = res.blobUrl || res.dataUrl;
-          if (typeof window !== 'undefined') {
-            window.__starwear_active_marker_image = activeUrl;
+          const activeUrl = res.dataUrl || res.blobUrl;
+          if (activeUrl) {
+            if (typeof window !== 'undefined') {
+              window.__starwear_active_marker_image = activeUrl;
+            }
+            setMarkerImageUrl(activeUrl);
+            setMarkerAspectRatio(res.aspectRatio || 0.5926);
+            setMarkerInfo({
+              width: res.width,
+              height: res.height,
+              source: res.source,
+              previewWidth: res.previewWidth,
+              previewHeight: res.previewHeight,
+              mindFilePath: res.mindFilePath
+            });
+            setMarkerVisible(true);
           }
-          setMarkerImageUrl(activeUrl);
-          setMarkerAspectRatio(res.aspectRatio || 0.5926);
-          setMarkerInfo({
-            width: res.width,
-            height: res.height,
-            source: res.source,
-            previewWidth: res.previewWidth,
-            previewHeight: res.previewHeight,
-            mindFilePath: res.mindFilePath
-          });
-          setMarkerVisible(true);
         }
       }).catch((err) => {
         console.warn("[ARTest] Failed to load marker image for batch:", err);
@@ -5771,7 +5854,14 @@ const ARTest = () => {
       setArData({
         ...data,
         videoUrl,
-        config: cfg
+        config: cfg,
+        gltfPath: resolvedModelUrl,
+        modelUrl: resolvedModelUrl,
+        arExperience: {
+          ...(data.arExperience || {}),
+          modelUrl: resolvedModelUrl,
+          config: cfg
+        }
       });
     } catch (err) {
       setError(err.message);
@@ -6034,11 +6124,17 @@ const ARTest = () => {
 
     try {
       let finalVideoUrl = activeVideoUrl || customVideoUrl || arData?.videoUrl || '';
+      if (typeof finalVideoUrl === 'string' && finalVideoUrl.startsWith('blob:') && !selectedVideoFile) {
+        finalVideoUrl = '';
+      }
       let videoFilePath = arData?.config?.video_file_path || arData?.video_file_path || '';
       if (!finalVideoUrl) {
         videoFilePath = '';
       }
       let finalGltfUrl = localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || '';
+      if (typeof finalGltfUrl === 'string' && finalGltfUrl.startsWith('blob:') && !selectedGlbFile) {
+        finalGltfUrl = '';
+      }
       let gltfFilePath = arData?.gltf_file_path || '';
 
       // 1. Upload Video File to Firebase Storage bucket if a new file was chosen
@@ -6081,6 +6177,8 @@ const ARTest = () => {
         await uploadBytes(skyRef, selectedPortalSkyboxFile);
         finalPortalSkyboxUrl = await getDownloadURL(skyRef);
         setPortalSkyboxUrl(finalPortalSkyboxUrl);
+      } else if (typeof finalPortalSkyboxUrl === 'string' && finalPortalSkyboxUrl.startsWith('blob:')) {
+        finalPortalSkyboxUrl = '';
       }
 
       let finalPortalGlbUrl = portalCustomModelUrl;
@@ -6092,6 +6190,8 @@ const ARTest = () => {
         await uploadBytes(pGlbRef, selectedPortalGlbFile);
         finalPortalGlbUrl = await getDownloadURL(pGlbRef);
         setPortalCustomModelUrl(finalPortalGlbUrl);
+      } else if (typeof finalPortalGlbUrl === 'string' && finalPortalGlbUrl.startsWith('blob:')) {
+        finalPortalGlbUrl = '';
       }
 
       // 2c. Upload any staged custom mesh textures to Storage bucket
@@ -6127,6 +6227,8 @@ const ARTest = () => {
           window.__starwear_active_marker_image = finalMarkerImageUrl;
         }
         stagedMarkerFileRef.current = null;
+      } else if (typeof finalMarkerImageUrl === 'string' && finalMarkerImageUrl.startsWith('blob:')) {
+        finalMarkerImageUrl = '';
       }
 
       // 2e. Upload any staged custom external 3D model files (.glb/.gltf) to Firebase Storage
@@ -6281,7 +6383,7 @@ const ARTest = () => {
           rotY: Number(portalRotY),
           rotZ: Number(portalRotZ),
           interiorType: portalInteriorType,
-          skyboxUrl: finalPortalSkyboxUrl || portalSkyboxUrl,
+          skyboxUrl: (finalPortalSkyboxUrl && !finalPortalSkyboxUrl.startsWith('blob:')) ? finalPortalSkyboxUrl : '',
           skyboxScale: Number(portalSkyboxScale),
           skyboxPosX: Number(portalSkyboxPosX),
           skyboxPosY: Number(portalSkyboxPosY),
@@ -6298,7 +6400,7 @@ const ARTest = () => {
           interiorLightIntensity: Number(portalLightIntensity),
           interiorModelType: portalModelType,
           artifactType: portalArtifactType,
-          customModelUrl: finalPortalGlbUrl || portalCustomModelUrl,
+          customModelUrl: (finalPortalGlbUrl && !finalPortalGlbUrl.startsWith('blob:')) ? finalPortalGlbUrl : '',
           modelScale: Number(portalModelScale),
           modelPosX: Number(portalModelPosX),
           modelPosY: Number(portalModelPosY),
@@ -6395,8 +6497,8 @@ const ARTest = () => {
       }
 
       const payload = {
-        video_url: finalVideoUrl,
-        videoUrl: finalVideoUrl,
+        video_url: (finalVideoUrl && !finalVideoUrl.startsWith('blob:')) ? finalVideoUrl : '',
+        videoUrl: (finalVideoUrl && !finalVideoUrl.startsWith('blob:')) ? finalVideoUrl : '',
         video_file_path: videoFilePath,
         ...(gltfFilePath ? { gltf_file_path: gltfFilePath } : {}),
         ...(existingThumbnailUrl ? { thumbnailUrl: existingThumbnailUrl, thumbnail_url: existingThumbnailUrl } : {}),
@@ -15649,11 +15751,12 @@ const ARTest = () => {
             )}
 
             {/* Center Model Entity Anchor */}
-            {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
+            {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || arData?.modelUrl) && (
               <a-entity position="0 0 0">
                 <a-gltf-model
                   id="ar-model"
-                  src={localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath}
+                  src={localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || arData?.modelUrl}
+                  crossOrigin="anonymous"
                   position={`${modelPosX} ${modelPosY} ${modelPosZ}`}
                   scale={`${modelScale} ${modelScale} ${modelScale}`}
                   rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}

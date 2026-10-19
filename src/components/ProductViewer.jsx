@@ -90,6 +90,7 @@ export function applyMeshStyling(rootObject, config = {}, videoUrl = '', videoTe
     });
   }
 
+  const nodesToDelete = [];
   rootObject.traverse((node) => {
     if (node.isMesh) {
       const isTargetForVideo = (
@@ -170,7 +171,7 @@ export function applyMeshStyling(rootObject, config = {}, videoUrl = '', videoTe
           if (ovr.deleted || ovr.visible === false) {
             node.visible = false;
             if (ovr.deleted && node.parent) {
-              node.parent.remove(node);
+              nodesToDelete.push(node);
             }
             return;
           }
@@ -204,7 +205,7 @@ export function applyMeshStyling(rootObject, config = {}, videoUrl = '', videoTe
               tex.needsUpdate = true;
             };
 
-            if (ovr.material.textureUrl) {
+            if (ovr.material.textureUrl && typeof ovr.material.textureUrl === 'string' && !ovr.material.textureUrl.startsWith('blob:')) {
               const tLoader = new THREE.TextureLoader();
               tLoader.load(ovr.material.textureUrl, (tex) => {
                 if (THREE.SRGBColorSpace !== undefined) {
@@ -222,6 +223,12 @@ export function applyMeshStyling(rootObject, config = {}, videoUrl = '', videoTe
           }
         }
       }
+    }
+  });
+
+  nodesToDelete.forEach((node) => {
+    if (node.parent) {
+      node.parent.remove(node);
     }
   });
 

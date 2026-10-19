@@ -2580,7 +2580,7 @@ if (typeof AFRAME !== 'undefined') {
         if (data.interiorType === 'nebula' || data.interiorType === 'starfield') {
           const sphereGeom = new THREE_LIB.SphereGeometry(14, 32, 32);
           let envTexture = null;
-          if (data.skyboxUrl) {
+          if (data.skyboxUrl && typeof data.skyboxUrl === 'string' && !data.skyboxUrl.startsWith('blob:')) {
             const loader = new THREE_LIB.TextureLoader();
             envTexture = loader.load(data.skyboxUrl);
             envTexture.colorSpace = THREE_LIB.SRGBColorSpace;
@@ -2652,7 +2652,7 @@ if (typeof AFRAME !== 'undefined') {
         } else if (data.interiorType === 'skybox') {
           const sphereGeom = new THREE_LIB.SphereGeometry(15, 32, 32);
           let skyTex = null;
-          if (data.skyboxUrl) {
+          if (data.skyboxUrl && typeof data.skyboxUrl === 'string' && !data.skyboxUrl.startsWith('blob:')) {
             const loader = new THREE_LIB.TextureLoader();
             skyTex = loader.load(data.skyboxUrl);
             skyTex.colorSpace = THREE_LIB.SRGBColorSpace;
@@ -4692,13 +4692,16 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
         const frameColor = new THREE_LIB.Color(this.data.frameColor || '#10b981');
 
         let imgUrl = this.data.imageUrl || this.data.src || '';
+        if (typeof imgUrl === 'string' && imgUrl.startsWith('blob:')) {
+          imgUrl = '';
+        }
         // Semicolon-truncated URL safeguard (from A-Frame styleParser)
         if (!imgUrl || imgUrl === 'data:image/png' || (imgUrl.startsWith('data:') && !imgUrl.includes('base64,'))) {
-          if (typeof window !== 'undefined' && window.__starwear_active_marker_image) {
+          if (typeof window !== 'undefined' && window.__starwear_active_marker_image && typeof window.__starwear_active_marker_image === 'string' && !window.__starwear_active_marker_image.startsWith('blob:')) {
             imgUrl = window.__starwear_active_marker_image;
           }
         }
-        if (!imgUrl && typeof window !== 'undefined' && window.__starwear_active_marker_image) {
+        if (!imgUrl && typeof window !== 'undefined' && window.__starwear_active_marker_image && typeof window.__starwear_active_marker_image === 'string' && !window.__starwear_active_marker_image.startsWith('blob:')) {
           imgUrl = window.__starwear_active_marker_image;
         }
 
@@ -4706,7 +4709,7 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
         const planeGeo = new THREE_LIB.PlaneGeometry(width, height);
         let planeMat;
 
-        if (imgUrl) {
+        if (imgUrl && typeof imgUrl === 'string' && !imgUrl.startsWith('blob:')) {
           const img = new Image();
           img.crossOrigin = 'anonymous';
           img.onload = () => {
