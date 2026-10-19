@@ -868,38 +868,11 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
     return () => {
       try {
+        // Cleanly remove canvas WebGL event listeners
         if (canvas) {
           if (handleContextLost) canvas.removeEventListener('webglcontextlost', handleContextLost);
           if (handleContextRestored) canvas.removeEventListener('webglcontextrestored', handleContextRestored);
           canvas.__webgl_handlers_attached = false;
-        }
-
-        // Deep dispose scene geometries, materials, textures to prevent VRAM leaks
-        if (sceneEl.object3D) {
-          sceneEl.object3D.traverse((child) => {
-            if (child.geometry) {
-              try { child.geometry.dispose(); } catch {}
-            }
-            if (child.material) {
-              const materials = Array.isArray(child.material) ? child.material : [child.material];
-              materials.forEach((mat) => {
-                if (!mat) return;
-                Object.keys(mat).forEach((key) => {
-                  if (mat[key] && typeof mat[key].dispose === 'function') {
-                    try { mat[key].dispose(); } catch {}
-                  }
-                });
-                try { mat.dispose(); } catch {}
-              });
-            }
-          });
-        }
-
-        // Cleanly dispose renderer on unmount
-        if (sceneEl.renderer) {
-          try {
-            sceneEl.renderer.dispose();
-          } catch {}
         }
       } catch (teardownErr) {
         console.warn('[ARExperience] Cleanup warning during scene unmount:', teardownErr);

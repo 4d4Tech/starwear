@@ -838,38 +838,11 @@ const ARTest = () => {
 
     return () => {
       try {
+        // Cleanly remove canvas WebGL event listeners
         if (canvas) {
           if (handleContextLost) canvas.removeEventListener('webglcontextlost', handleContextLost);
           if (handleContextRestored) canvas.removeEventListener('webglcontextrestored', handleContextRestored);
           canvas.__webgl_handlers_attached = false;
-        }
-
-        // Deep dispose scene geometries, materials, textures to prevent VRAM leaks
-        if (sceneEl.object3D) {
-          sceneEl.object3D.traverse((child) => {
-            if (child.geometry) {
-              try { child.geometry.dispose(); } catch {}
-            }
-            if (child.material) {
-              const materials = Array.isArray(child.material) ? child.material : [child.material];
-              materials.forEach((mat) => {
-                if (!mat) return;
-                Object.keys(mat).forEach((key) => {
-                  if (mat[key] && typeof mat[key].dispose === 'function') {
-                    try { mat[key].dispose(); } catch {}
-                  }
-                });
-                try { mat.dispose(); } catch {}
-              });
-            }
-          });
-        }
-
-        // Cleanly dispose renderer on page unmount
-        if (sceneEl.renderer) {
-          try {
-            sceneEl.renderer.dispose();
-          } catch {}
         }
       } catch (teardownErr) {
         console.warn('[ARTest] Cleanup warning during scene unmount:', teardownErr);
@@ -877,14 +850,39 @@ const ARTest = () => {
     };
   }, []);
 
+  // Synchronize A-Frame canvas resolution and aspect ratio with container dimensions
+  useEffect(() => {
+    const handleResize = () => {
+      const sceneEl = sceneRef.current || document.querySelector('a-scene');
+      if (sceneEl && typeof sceneEl.resize === 'function') {
+        sceneEl.resize();
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    const timer = setTimeout(handleResize, 150);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      clearTimeout(timer);
+    };
+  }, []);
+
   // Target Marker Visual Reference States (MindAR Physical Anchor Plane at 0, 0, 0)
   const [markerVisible, setMarkerVisible] = useState(true);
-  const [markerImageUrl, setMarkerImageUrl] = useState('');
-  const [markerAspectRatio, setMarkerAspectRatio] = useState(0.5926); // height / width
+  const [markerImageUrl, setMarkerImageUrl] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const fb = createDefaultMarkerDataUrl('STAR weAR');
+        window.__starwear_active_marker_image = fb.dataUrl;
+        return fb.dataUrl;
+      } catch {}
+    }
+    return '';
+  });
+  const [markerAspectRatio, setMarkerAspectRatio] = useState(1.0); // Procedural default is 512x512 = 1.0
   const [markerWidth, setMarkerWidth] = useState(1.0); // 1.0m MindAR default
   const [markerOpacity, setMarkerOpacity] = useState(0.85);
   const [markerLoading, setMarkerLoading] = useState(false);
-  const [markerInfo, setMarkerInfo] = useState(null); // { width, height, source }
+  const [markerInfo, setMarkerInfo] = useState(() => ({ width: 512, height: 512, source: 'default' }));
   const [markerLockAspect, setMarkerLockAspect] = useState(true);
   const markerFileInputRef = useRef(null);
   const stagedMarkerFileRef = useRef(null);
@@ -892,13 +890,15 @@ const ARTest = () => {
   // Initialize procedural default marker on mount if none loaded
   useEffect(() => {
     if (!markerImageUrl) {
-      const fb = createDefaultMarkerDataUrl('STAR weAR');
-      setMarkerImageUrl(fb.dataUrl);
-      setMarkerAspectRatio(fb.aspectRatio);
-      setMarkerInfo({ width: fb.width, height: fb.height, source: 'default' });
-      if (typeof window !== 'undefined') {
-        window.__starwear_active_marker_image = fb.dataUrl;
-      }
+      try {
+        const fb = createDefaultMarkerDataUrl('STAR weAR');
+        setMarkerImageUrl(fb.dataUrl);
+        setMarkerAspectRatio(fb.aspectRatio || 1.0);
+        setMarkerInfo({ width: fb.width, height: fb.height, source: 'default' });
+        if (typeof window !== 'undefined') {
+          window.__starwear_active_marker_image = fb.dataUrl;
+        }
+      } catch {}
     }
   }, []);
 
@@ -915,8 +915,8 @@ const ARTest = () => {
         imageUrl: safeMarkerUrl,
         src: safeMarkerUrl,
         width: Number(markerWidth) || 1.0,
-        height: Number((Number(markerWidth || 1.0) * (Number(markerAspectRatio) || 0.5926)).toFixed(4)),
-        aspectRatio: Number(markerAspectRatio) || 0.5926,
+        height: Number((Number(markerWidth || 1.0) * (Number(markerAspectRatio) || 1.0)).toFixed(4)),
+        aspectRatio: Number(markerAspectRatio) || 1.0,
         opacity: Number(markerOpacity) || 0.85,
         showAxes: true,
         showFrame: true
@@ -6888,11 +6888,11 @@ const ARTest = () => {
   const currentScale = selectedMesh ? selectedMesh.scale.x : modelScale;
 
   return (
-    <div className="w-screen min-h-[100dvh] bg-neutral-950 text-white font-sans flex flex-col md:flex-row overflow-hidden">
+    <div className="w-screen h-screen h-[100dvh] max-h-[100dvh] bg-neutral-950 text-white font-sans flex flex-col md:flex-row overflow-hidden">
       {/* ========================================================================= */}
       {/* SIDEBAR CONTROL DOCK                                                      */}
       {/* ========================================================================= */}
-      <div className="w-full md:w-96 lg:w-[420px] bg-black border-r border-neutral-800 z-50 flex flex-col shadow-2xl flex-shrink-0 h-[100dvh]">
+      <div className="w-full md:w-96 lg:w-[420px] bg-black border-r border-neutral-800 z-50 flex flex-col shadow-2xl flex-shrink-0 h-full max-h-[100dvh]">
         {/* Top Header & Batch Form */}
         <div className="p-4 border-b border-neutral-800 bg-neutral-950/80">
           <div className="flex items-center justify-between mb-2">
@@ -15340,8 +15340,8 @@ const ARTest = () => {
       {/* ========================================================================= */}
       <div
         id="ar-scene-container"
-        className="flex-1 relative bg-neutral-900 overflow-hidden cursor-grab active:cursor-grabbing"
-        style={{ touchAction: 'none' }}
+        className="flex-1 relative bg-neutral-900 overflow-hidden cursor-grab active:cursor-grabbing w-full h-full min-w-0"
+        style={{ touchAction: 'none', height: '100%', minHeight: '100%' }}
         onContextMenu={(e) => e.preventDefault()}
       >
         {/* Floating Viewport Controls: Camera View Angles on Top, 3D Transform Gizmo Toolbar Directly Beneath */}
@@ -15703,7 +15703,7 @@ const ARTest = () => {
             <a-entity
               id="scene-camera"
               camera="active: true; fov: 45; near: 0.01; far: 1000"
-              position="0 0 0"
+              position="0 0.4 2.5"
               orbit-camera-controls={`enableDamping: true; dampingFactor: 0.08; screenSpacePanning: true; autoRotate: ${cameraAutoRotate}; autoRotateSpeed: 1.2; minDistance: 0.2; maxDistance: 100; enableRotate: true; enablePan: true; enableZoom: true; rotateSpeed: 1.0; zoomSpeed: 1.0; panSpeed: 1.0`}
             >
             </a-entity>
@@ -15742,11 +15742,11 @@ const ARTest = () => {
             )}
 
             {/* MindAR Target Marker Reference Plane Anchor (XY plane at 0, 0, 0) */}
-            {markerVisible && markerImageUrl && (
+            {markerVisible && (
               <a-entity
                 id="ar-marker-reference-anchor"
                 position="0 0 0"
-                ar-marker-reference={`enabled: ${markerVisible}; imageUrl: ${markerImageUrl}; src: ${markerImageUrl}; width: ${markerWidth}; height: ${Number((markerWidth * (markerAspectRatio || 0.5926)).toFixed(4))}; aspectRatio: ${markerAspectRatio}; opacity: ${markerOpacity}; showAxes: true; showFrame: true;`}
+                ar-marker-reference={`enabled: ${markerVisible}; width: ${markerWidth}; height: ${Number((markerWidth * (markerAspectRatio || 1.0)).toFixed(4))}; aspectRatio: ${markerAspectRatio || 1.0}; opacity: ${markerOpacity}; showAxes: true; showFrame: true;`}
               ></a-entity>
             )}
 

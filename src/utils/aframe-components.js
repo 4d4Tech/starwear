@@ -6,6 +6,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { createPrimitiveMesh, createPrimitiveThreeGeometry, createPrimitiveMaterial } from './geometryHelper.js';
 import { create3DTextMesh, loadTypefaceFont } from './text3DHelper.js';
+import { createDefaultMarkerDataUrl } from './markerHelper.js';
 
 
 // =========================================================================
@@ -347,7 +348,9 @@ if (typeof AFRAME !== 'undefined') {
 
           const isEnabled = this.data.enabled !== undefined ? this.data.enabled : true;
           if (isEnabled && camera.position.lengthSq() < 0.001) {
-            camera.position.set(0, 1.2, 3.5);
+            camera.position.set(0, 0.4, 2.5);
+            camera.lookAt(0, 0, 0);
+            camera.updateMatrixWorld();
           }
 
           const controls = new OrbitControls(camera, canvas);
@@ -380,12 +383,24 @@ if (typeof AFRAME !== 'undefined') {
         };
 
         const sceneEl = this.el.sceneEl;
-        if (sceneEl.hasLoaded && sceneEl.canvas) {
-          setup();
-        } else {
-          sceneEl.addEventListener('loaded', setup);
-          sceneEl.addEventListener('render-target-loaded', setup);
-          sceneEl.addEventListener('camera-set-active', setup);
+        if (sceneEl) {
+          if (sceneEl.canvas && (this.el.getObject3D('camera') || sceneEl.camera)) {
+            setup();
+          } else {
+            sceneEl.addEventListener('loaded', setup);
+            sceneEl.addEventListener('render-target-loaded', setup);
+            sceneEl.addEventListener('camera-set-active', setup);
+            let attempts = 0;
+            const interval = setInterval(() => {
+              attempts++;
+              if (this.controls || attempts > 60) {
+                clearInterval(interval);
+              } else if (sceneEl.canvas && (this.el.getObject3D('camera') || sceneEl.camera)) {
+                clearInterval(interval);
+                setup();
+              }
+            }, 50);
+          }
         }
       },
 
@@ -4704,6 +4719,15 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
         if (!imgUrl && typeof window !== 'undefined' && window.__starwear_active_marker_image && typeof window.__starwear_active_marker_image === 'string' && !window.__starwear_active_marker_image.startsWith('blob:')) {
           imgUrl = window.__starwear_active_marker_image;
         }
+        if (!imgUrl) {
+          try {
+            const defMarker = createDefaultMarkerDataUrl('STAR weAR');
+            imgUrl = defMarker.dataUrl;
+            if (typeof window !== 'undefined') {
+              window.__starwear_active_marker_image = imgUrl;
+            }
+          } catch {}
+        }
 
         // 1. Target Marker Image Plane (in XY plane, matching MindAR anchor orientation)
         const planeGeo = new THREE_LIB.PlaneGeometry(width, height);
@@ -4711,7 +4735,9 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
 
         if (imgUrl && typeof imgUrl === 'string' && !imgUrl.startsWith('blob:')) {
           const img = new Image();
-          img.crossOrigin = 'anonymous';
+          if (imgUrl.startsWith('http')) {
+            img.crossOrigin = 'anonymous';
+          }
           img.onload = () => {
             if (this.texture) this.texture.dispose();
             const tex = new THREE_LIB.Texture(img);
@@ -4729,7 +4755,7 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
           };
           img.onerror = () => {
             if (this.planeMesh && this.planeMesh.material) {
-              this.planeMesh.material.color.set('#060913');
+              this.planeMesh.material.color.set('#0f172a');
               this.planeMesh.material.needsUpdate = true;
             }
           };
@@ -4745,7 +4771,7 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
         } else {
           // Subtle dark blueprint plane if texture is not yet loaded
           planeMat = new THREE_LIB.MeshBasicMaterial({
-            color: new THREE_LIB.Color('#060913'),
+            color: new THREE_LIB.Color('#0f172a'),
             transparent: true,
             opacity: opacity,
             side: THREE_LIB.DoubleSide,
