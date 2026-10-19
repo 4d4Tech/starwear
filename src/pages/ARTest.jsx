@@ -1828,6 +1828,75 @@ const ARTest = () => {
   const [isGizmoDragging, setIsGizmoDragging] = useState(false);
   const [gizmoReady, setGizmoReady] = useState(false);
 
+  // Helper: Find Three.js Object3D by item type and id
+  const findThreeObject = useCallback((type, id) => {
+    if (!id) return null;
+    const sceneEl = document.querySelector('a-scene');
+    if (!sceneEl || !sceneEl.object3D) return null;
+
+    if (type === 'geometry') {
+      const geomAnchor = document.getElementById('ar-additional-geometries-anchor');
+      const root = geomAnchor?.getObject3D('additionalGeometriesRoot') || geomAnchor?.object3D;
+      if (root) {
+        let found = null;
+        root.traverse((node) => {
+          if (!found && node.userData?.geometryId === id) found = node;
+        });
+        if (found) return found;
+      }
+    } else if (type === 'text3d') {
+      const textAnchor = document.getElementById('ar-3d-texts-anchor');
+      const root = textAnchor?.getObject3D('texts3DRoot') || textAnchor?.object3D;
+      if (root) {
+        let found = null;
+        root.traverse((node) => {
+          if (!found && node.userData?.textId === id) found = node;
+        });
+        if (found) return found;
+      }
+    } else if (type === 'customModel') {
+      const customModelsAnchor = document.getElementById('ar-custom-models-anchor');
+      const root = customModelsAnchor?.getObject3D('customModelsRoot') || customModelsAnchor?.object3D;
+      if (root) {
+        const wrapper = root.children?.find((c) => c.userData?.modelId === id);
+        if (wrapper) return wrapper;
+        let found = null;
+        root.traverse((node) => {
+          if (!found && node.userData?.modelId === id && node.userData?.isCustomModel && node.isGroup) {
+            found = node;
+          }
+        });
+        if (found) return found;
+      }
+    } else if (type === 'light') {
+      const lightsAnchor = document.getElementById('ar-custom-lights-anchor');
+      const root = lightsAnchor?.getObject3D('lightsRoot') || lightsAnchor?.object3D;
+      if (root) {
+        let found = null;
+        root.traverse((node) => {
+          if (!found && node.userData?.lightId === id) {
+            found = node.userData.lightRef || node;
+          }
+        });
+        if (found) return found;
+      }
+    } else if (type === 'mesh') {
+      const modelEl = document.getElementById('ar-model');
+      const model3D = modelEl?.getObject3D('mesh');
+      if (model3D) {
+        let found = null;
+        model3D.traverse((node) => {
+          if (!found && node.uuid === id && node.isMesh) found = node;
+        });
+        if (found) return found;
+      }
+    } else if (type === 'model') {
+      const modelEl = document.getElementById('ar-model');
+      return modelEl?.getObject3D('mesh') || modelEl?.object3D || null;
+    }
+    return null;
+  }, []);
+
   // Export any scene shape, extruded vector, 3D text, model, submesh, multi-selection, or group as a standard binary .GLB file
   const handleExportShapeAsGLB = useCallback(async (targetParam = null) => {
     try {
@@ -2340,75 +2409,6 @@ const ARTest = () => {
         })
       );
     }
-  }, []);
-
-  // Helper: Find Three.js Object3D by item type and id
-  const findThreeObject = useCallback((type, id) => {
-    if (!id) return null;
-    const sceneEl = document.querySelector('a-scene');
-    if (!sceneEl || !sceneEl.object3D) return null;
-
-    if (type === 'geometry') {
-      const geomAnchor = document.getElementById('ar-additional-geometries-anchor');
-      const root = geomAnchor?.getObject3D('additionalGeometriesRoot') || geomAnchor?.object3D;
-      if (root) {
-        let found = null;
-        root.traverse((node) => {
-          if (!found && node.userData?.geometryId === id) found = node;
-        });
-        if (found) return found;
-      }
-    } else if (type === 'text3d') {
-      const textAnchor = document.getElementById('ar-3d-texts-anchor');
-      const root = textAnchor?.getObject3D('texts3DRoot') || textAnchor?.object3D;
-      if (root) {
-        let found = null;
-        root.traverse((node) => {
-          if (!found && node.userData?.textId === id) found = node;
-        });
-        if (found) return found;
-      }
-    } else if (type === 'customModel') {
-      const customModelsAnchor = document.getElementById('ar-custom-models-anchor');
-      const root = customModelsAnchor?.getObject3D('customModelsRoot') || customModelsAnchor?.object3D;
-      if (root) {
-        const wrapper = root.children?.find((c) => c.userData?.modelId === id);
-        if (wrapper) return wrapper;
-        let found = null;
-        root.traverse((node) => {
-          if (!found && node.userData?.modelId === id && node.userData?.isCustomModel && node.isGroup) {
-            found = node;
-          }
-        });
-        if (found) return found;
-      }
-    } else if (type === 'light') {
-      const lightsAnchor = document.getElementById('ar-custom-lights-anchor');
-      const root = lightsAnchor?.getObject3D('lightsRoot') || lightsAnchor?.object3D;
-      if (root) {
-        let found = null;
-        root.traverse((node) => {
-          if (!found && node.userData?.lightId === id) {
-            found = node.userData.lightRef || node;
-          }
-        });
-        if (found) return found;
-      }
-    } else if (type === 'mesh') {
-      const modelEl = document.getElementById('ar-model');
-      const model3D = modelEl?.getObject3D('mesh');
-      if (model3D) {
-        let found = null;
-        model3D.traverse((node) => {
-          if (!found && node.uuid === id && node.isMesh) found = node;
-        });
-        if (found) return found;
-      }
-    } else if (type === 'model') {
-      const modelEl = document.getElementById('ar-model');
-      return modelEl?.getObject3D('mesh') || modelEl?.object3D || null;
-    }
-    return null;
   }, []);
 
   // Compute centroid / average world position of an array of objects
