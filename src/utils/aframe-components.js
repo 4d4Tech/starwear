@@ -5877,8 +5877,6 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
                   side: THREE_LIB.DoubleSide
                 });
               }
-              bulbGroup.add(new THREE_LIB.Mesh(auraGeo, auraMat));
-
               bulbGroup.position.copy(light.position);
               bulbGroup.userData = {
                 ...(item || {}),
@@ -5886,31 +5884,53 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
                 lightId: item.id,
                 lightRef: light
               };
+              bulbGroup.traverse((child) => {
+                child.userData = {
+                  ...(item || {}),
+                  isCustomLight: true,
+                  lightId: item.id,
+                  lightRef: light
+                };
+              });
               this.rootGroup.add(bulbGroup);
             }
 
-            // Add Clickable 3D Anchor Mesh for raycasting and visual selection in editor mode
-            if (this.data.showHelpers && item.showHelper !== false) {
-              const anchorGeo = new THREE_LIB.SphereGeometry(0.14, 16, 16);
-              const anchorMat = new THREE_LIB.MeshBasicMaterial({
-                color: color,
-                wireframe: true,
-                transparent: true,
-                opacity: 0.9
-              });
-              const anchorMesh = new THREE_LIB.Mesh(anchorGeo, anchorMat);
-              anchorMesh.name = `Anchor_${item.id}`;
-              anchorMesh.position.copy(light.position);
-              anchorMesh.userData = {
+            // Always add a Clickable 3D Anchor Mesh for raycasting and visual selection in editor mode
+            const anchorGeo = new THREE_LIB.SphereGeometry(0.2, 16, 12);
+            const anchorMat = new THREE_LIB.MeshBasicMaterial({
+              color: color,
+              wireframe: true,
+              transparent: true,
+              opacity: (this.data.showHelpers && item.showHelper !== false) ? 0.9 : 0.02,
+              depthWrite: false
+            });
+            const anchorMesh = new THREE_LIB.Mesh(anchorGeo, anchorMat);
+            anchorMesh.name = `LightAnchor_${item.id}`;
+            anchorMesh.position.copy(light.position);
+            anchorMesh.userData = {
+              ...(item || {}),
+              isCustomLight: true,
+              lightId: item.id,
+              lightRef: light
+            };
+            this.rootGroup.add(anchorMesh);
+
+            if (helper) {
+              helper.name = `LightHelper_${item.id}`;
+              helper.userData = {
                 ...(item || {}),
                 isCustomLight: true,
                 lightId: item.id,
                 lightRef: light
               };
-              this.rootGroup.add(anchorMesh);
-            }
-
-            if (helper) {
+              helper.traverse((child) => {
+                child.userData = {
+                  ...(item || {}),
+                  isCustomLight: true,
+                  lightId: item.id,
+                  lightRef: light
+                };
+              });
               this.rootGroup.add(helper);
               this.helpers.push(helper);
             }

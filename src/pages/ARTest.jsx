@@ -633,7 +633,32 @@ const ARTest = () => {
   const [selectedObjects, setSelectedObjects] = useState([]); // Array<{ type: string, id: string }>
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
   const [groupSelectionMode, setGroupSelectionMode] = useState('group'); // 'group' | 'direct'
+  const [isModifierHeld, setIsModifierHeld] = useState(false);
   const activeGroupDragRef = useRef(null);
+
+  useEffect(() => {
+    const handleModifierDown = (e) => {
+      if (e.key === 'Control' || e.key === 'Meta') {
+        setIsModifierHeld(true);
+      }
+    };
+    const handleModifierUp = (e) => {
+      if (e.key === 'Control' || e.key === 'Meta') {
+        setIsModifierHeld(false);
+      }
+    };
+    const handleBlur = () => {
+      setIsModifierHeld(false);
+    };
+    window.addEventListener('keydown', handleModifierDown);
+    window.addEventListener('keyup', handleModifierUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleModifierDown);
+      window.removeEventListener('keyup', handleModifierUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, []);
 
   const sceneGroupsRef = useRef(sceneGroups);
   useEffect(() => {
@@ -3201,7 +3226,8 @@ const ARTest = () => {
         cancelAnimationFrame(cameraTransitionIdRef.current);
         cameraTransitionIdRef.current = null;
       }
-      if (e.button !== undefined && e.button !== 0) return;
+      const isModifierClick = Boolean(e.ctrlKey || e.metaKey);
+      if (e.button !== undefined && e.button !== 0 && !(e.button === 2 && isModifierClick)) return;
       // Ignore clicks on HTML toolbars, controls, buttons, or modals
       if (e.target && e.target.tagName !== 'CANVAS') {
         pointerDownPos = null;
@@ -3215,7 +3241,7 @@ const ARTest = () => {
       const dist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
       pointerDownPos = null;
 
-      if (dist > 6) return; // Orbit/drag gesture: do not raycast or deselect
+      if (dist > 8) return; // Orbit/drag gesture: do not raycast or deselect
       if (e.target && e.target.tagName !== 'CANVAS') return; // Ignore releases on HTML toolbars/buttons
       if (isGizmoDragging || window.__isGizmoDragging) return;
 
@@ -3273,15 +3299,26 @@ const ARTest = () => {
       const model3D = modelEl?.getObject3D('mesh');
       if (model3D) candidates.push(model3D);
 
+      const isLightHit = (o) => {
+        let cur = o;
+        while (cur) {
+          if (cur.userData?.lightId || cur.userData?.isCustomLight || cur.light?.userData?.lightId) return true;
+          cur = cur.parent;
+        }
+        return false;
+      };
+
       const allIntersects = raycaster.intersectObjects(candidates, true);
-      // Filter out invisible objects, helpers, and gizmo pickers
+      // Filter out invisible objects and transform gizmo pickers (while allowing custom lights, models, shapes, texts)
       const validHit = allIntersects.find((intersect) => {
         const obj = intersect.object;
         if (!obj || obj.visible === false) return false;
-        if (obj.name && /helper|picker|gizmo|starwear-transform/i.test(obj.name)) return false;
+        if (isLightHit(obj)) return true;
+        if (obj.name && /picker|gizmo|starwear-transform/i.test(obj.name)) return false;
         let p = obj.parent;
         while (p) {
           if (p.visible === false) return false;
+          if (p.name && /starwear-transform/i.test(p.name)) return false;
           p = p.parent;
         }
         return true;
@@ -3309,9 +3346,15 @@ const ARTest = () => {
         if (!hitType) {
           p = curr;
           while (p) {
-            if (p.userData?.lightId) {
+            if (p.userData?.lightId || p.userData?.isCustomLight) {
               hitType = 'light';
               hitId = p.userData.lightId;
+              targetTab = 'lighting';
+              break;
+            }
+            if (p.light?.userData?.lightId) {
+              hitType = 'light';
+              hitId = p.light.userData.lightId;
               targetTab = 'lighting';
               break;
             }
@@ -3352,11 +3395,16 @@ const ARTest = () => {
         if (!hitType && validHit.object.isMesh && validHit.object.uuid) {
           hitType = 'mesh';
           hitId = validHit.object.uuid;
+          targetTab = 'hierarchy';
         }
 
         if (hitType && hitId) {
-          const isMultiAction = Boolean(e.shiftKey || e.metaKey || e.ctrlKey || isMultiSelectMode);
-          if (isMultiAction) {
+          const isCtrlOrCmd = Boolean(e.metaKey || e.ctrlKey);
+          const isShift = Boolean(e.shiftKey);
+
+          // Multi-Selection: Only triggered when Shift is held OR multiSelectMode button is active
+          // (Control / Command click is used for direct selection)
+          if (isShift || isMultiSelectMode) {
             const parentGroup = sceneGroupsRef.current.find((g) =>
               g.itemIds.some((it) => it.type === hitType && it.id === hitId)
             );
@@ -3381,18 +3429,29 @@ const ARTest = () => {
           }
 
           // Check if item belongs to a group and group selection mode is active
+          // (Unless Ctrl/Cmd was held specifically to select the individual item directly)
           const parentGroup = sceneGroupsRef.current.find((g) =>
             g.itemIds.some((it) => it.type === hitType && it.id === hitId)
           );
 
-          if (parentGroup && groupSelectionMode === 'group') {
+          if (parentGroup && groupSelectionMode === 'group' && !isCtrlOrCmd) {
             selectSceneObject('group', parentGroup.id);
             setActiveTab('hierarchy');
             return;
           }
 
+          // Single selection (either via direct click OR holding Ctrl/Cmd)
           selectSceneObject(hitType, hitId);
           if (targetTab) setActiveTab(targetTab);
+
+          let label = hitType.charAt(0).toUpperCase() + hitType.slice(1);
+          if (hitType === 'geometry') label = '3D Shape';
+          if (hitType === 'light') label = 'Light';
+          if (hitType === 'text3d') label = '3D Text';
+          if (hitType === 'customModel') label = '3D Model';
+          if (hitType === 'mesh') label = 'Mesh';
+          setSaveSuccessMsg(`Selected ${label}`);
+          setTimeout(() => setSaveSuccessMsg(''), 2500);
           return;
         }
       }
@@ -3404,9 +3463,17 @@ const ARTest = () => {
     };
 
     const sceneContainer = document.getElementById('ar-scene-container');
+    const handleContextMenu = (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
     if (sceneContainer) {
       sceneContainer.addEventListener('pointerdown', handlePointerDown);
       sceneContainer.addEventListener('pointerup', handlePointerUp);
+      sceneContainer.addEventListener('contextmenu', handleContextMenu);
     }
 
     const handleGlobalPointerUp = () => {
@@ -3419,6 +3486,7 @@ const ARTest = () => {
       if (sceneContainer) {
         sceneContainer.removeEventListener('pointerdown', handlePointerDown);
         sceneContainer.removeEventListener('pointerup', handlePointerUp);
+        sceneContainer.removeEventListener('contextmenu', handleContextMenu);
       }
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
@@ -15365,10 +15433,23 @@ const ARTest = () => {
       {/* ========================================================================= */}
       <div
         id="ar-scene-container"
-        className="flex-1 relative bg-neutral-900 overflow-hidden cursor-grab active:cursor-grabbing w-full h-full min-w-0"
+        className={`flex-1 relative bg-neutral-900 overflow-hidden w-full h-full min-w-0 ${
+          isModifierHeld ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
+        }`}
         style={{ touchAction: 'none', height: '100%', minHeight: '100%' }}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={(e) => {
+          if (e.ctrlKey || e.metaKey) e.preventDefault();
+        }}
       >
+        {/* Control / Command Held Selection Guide Banner */}
+        {isModifierHeld && (
+          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none animate-fade-in flex items-center gap-2 px-3 py-1.5 bg-neutral-900/95 backdrop-blur-md border border-indigo-500/60 rounded-xl shadow-2xl text-xs text-white">
+            <span className="material-symbols-outlined text-sm text-indigo-400 animate-pulse">ads_click</span>
+            <span className="font-bold text-indigo-300">Ctrl / ⌘ Held:</span>
+            <span className="text-neutral-300">Click any object, light, or shape to select it</span>
+          </div>
+        )}
+
         {/* Floating Viewport Controls: Camera View Angles on Top, 3D Transform Gizmo Toolbar Directly Beneath */}
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 pointer-events-none select-none max-w-[95vw]">
           {/* Floating Multi-Select & Active Group Viewport Pill Banner */}
