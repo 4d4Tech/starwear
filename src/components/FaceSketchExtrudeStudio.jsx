@@ -25,10 +25,12 @@ export default function FaceSketchExtrudeStudio({
   isOpen,
   onClose,
   onCommitExtrude,
-  sceneRef
+  sceneRef,
+  selectedTarget = null
 }) {
   // Step workflow: 'pick_face' -> 'draw_shape' -> 'extrude'
   const [step, setStep] = useState('pick_face');
+  const [scopeToSelected, setScopeToSelected] = useState(true);
 
   // Face data captured upon face click
   const [faceData, setFaceData] = useState(null);
@@ -232,9 +234,192 @@ export default function FaceSketchExtrudeStudio({
   ]);
 
   // ---------------------------------------------------------------------------
+  // Auto-Activate Face Selection on Target Object
+  // ---------------------------------------------------------------------------
+  const activateFaceOnTarget = useCallback((targetObj, targetName) => {
+    if (!targetObj) {
+      setStep('pick_face');
+      return;
+    }
+
+    try {
+      targetObj.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(targetObj);
+      if (box.isEmpty()) {
+        setStep('pick_face');
+        return;
+      }
+
+      const center = new THREE.Vector3();
+      box.getCenter(center);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+
+      const sceneEl = document.querySelector('a-scene');
+      const camera = sceneEl?.camera || window.__arOrbitCamera;
+
+      let validHit = null;
+
+      // 1. Primary: Raycast from camera position directly towards center of target
+      if (camera) {
+        const rayDir = new THREE.Vector3().subVectors(center, camera.position).normalize();
+        const raycaster = new THREE.Raycaster(camera.position.clone(), rayDir);
+        const hits = raycaster.intersectObject(targetObj, true);
+        validHit = hits.find(
+          (h) => h.object && h.object.visible !== false && Boolean(h.face)
+        );
+      }
+
+      // 2. Secondary: If camera raycast didn't hit (camera inside or angled),
+      // probe from outside bounding box towards center along camera line of sight
+      if (!validHit && camera) {
+        const camDir = new THREE.Vector3().subVectors(camera.position, center).normalize();
+        const maxDim = Math.max(size.x, size.y, size.z, 0.5);
+        const probeOrigin = center.clone().add(camDir.multiplyScalar(maxDim * 2.5));
+        const probeDir = new THREE.Vector3().subVectors(center, probeOrigin).normalize();
+        const probeRay = new THREE.Raycaster(probeOrigin, probeDir);
+        const probeHits = probeRay.intersectObject(targetObj, true);
+        validHit = probeHits.find(
+          (h) => h.object && h.object.visible !== false && Boolean(h.face)
+        );
+      }
+
+      // 3. Fallback: Probe from +Y (top face) downwards towards center
+      if (!validHit) {
+        const maxDim = Math.max(size.x, size.y, size.z, 0.5);
+        const topOrigin = new THREE.Vector3(center.x, box.max.y + maxDim, center.z);
+        const downDir = new THREE.Vector3(0, -1, 0);
+        const topRay = new THREE.Raycaster(topOrigin, downDir);
+        const topHits = topRay.intersectObject(targetObj, true);
+        validHit = topHits.find(
+          (h) => h.object && h.object.visible !== false && Boolean(h.face)
+        );
+      }
+
+      let hitPoint = null;
+      let worldNormal = null;
+      let hitMesh = null;
+
+      if (validHit && validHit.face) {
+        hitMesh = validHit.object;
+        const normalMatrix = new THREE.Matrix3().getNormalMatrix(hitMesh.matrixWorld);
+        worldNormal = validHit.face.normal.clone().applyMatrix3(normalMatrix).normalize();
+        hitPoint = validHit.point.clone();
+      } else {
+        // 4. Final fallback: find first mesh with geometry and use top (+Y)
+        targetObj.traverse((child) => {
+          if (!hitMesh && child.isMesh && child.geometry) {
+            hitMesh = child;
+          }
+        });
+        worldNormal = new THREE.Vector3(0, 1, 0);
+        hitPoint = new THREE.Vector3(center.x, box.max.y, center.z);
+      }
+
+      // Compute tangent uAxis & bitangent vAxis
+      const uAxis = new THREE.Vector3();
+      const vAxis = new THREE.Vector3();
+      if (Math.abs(worldNormal.y) > 0.92) {
+        uAxis.set(1, 0, 0);
+        vAxis.crossVectors(worldNormal, uAxis).normalize();
+        uAxis.crossVectors(vAxis, worldNormal).normalize();
+      } else {
+        uAxis.crossVectors(new THREE.Vector3(0, 1, 0), worldNormal).normalize();
+        vAxis.crossVectors(worldNormal, uAxis).normalize();
+      }
+
+      // Determine parent name & color
+      let resolvedName = targetName || hitMesh?.name || 'Object';
+      let resolvedColor = '#38bdf8';
+      let p = hitMesh || targetObj;
+      while (p) {
+        if (p.userData?.name) resolvedName = p.userData.name;
+        if (p.userData?.color) resolvedColor = p.userData.color;
+        p = p.parent;
+      }
+      if (hitMesh?.material?.color) {
+        resolvedColor = `#${hitMesh.material.color.getHexString()}`;
+      }
+
+      // Proportional shape sizing based on target's bounding box face dimensions
+      const faceSpan = Math.max(
+        0.05,
+        Math.min(
+          Math.abs(worldNormal.x) > 0.5 ? Math.min(size.y, size.z) :
+          Math.abs(worldNormal.y) > 0.5 ? Math.min(size.x, size.z) :
+          Math.min(size.x, size.y)
+        ) || 0.4
+      );
+
+      const propW = Number(Math.max(0.04, Math.min(faceSpan * 0.5, 1.5)).toFixed(2));
+      const propH = Number(Math.max(0.04, Math.min(faceSpan * 0.5, 1.5)).toFixed(2));
+      const propR = Number(Math.max(0.02, Math.min(faceSpan * 0.3, 0.8)).toFixed(2));
+      const propD = Number(Math.max(0.02, Math.min(faceSpan * 0.25, 0.8)).toFixed(2));
+
+      setShapeWidth(propW);
+      setShapeHeight(propH);
+      setShapeRadius(propR);
+      setExtrudeDepth(propD);
+      setShapeRotation(0);
+      setOffsetU(0);
+      setOffsetV(0);
+      setCustomPoints([]);
+
+      setFaceData({
+        point: hitPoint,
+        normal: worldNormal,
+        uAxis,
+        vAxis,
+        parentMesh: hitMesh,
+        parentName: resolvedName,
+        parentColor: resolvedColor
+      });
+
+      setObjectName(`${resolvedName} Face Extrude`);
+      setExtrudeColor(resolvedColor);
+      setStep('draw_shape');
+    } catch (err) {
+      console.warn('FaceSketchExtrudeStudio: Auto-activation on target failed:', err);
+      setStep('pick_face');
+    }
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle Hook: Auto-activate on selectedTarget when Studio opens or target changes
+  // ---------------------------------------------------------------------------
+  const prevIsOpenRef = useRef(false);
+  const prevTargetIdRef = useRef(null);
+
+  useEffect(() => {
+    const targetId = selectedTarget?.id || null;
+    const justOpened = isOpen && !prevIsOpenRef.current;
+    const targetChanged = isOpen && targetId !== prevTargetIdRef.current;
+
+    if (justOpened || targetChanged) {
+      if (selectedTarget?.threeObject) {
+        setScopeToSelected(true);
+        activateFaceOnTarget(selectedTarget.threeObject, selectedTarget.name);
+      } else if (justOpened) {
+        setStep('pick_face');
+        setFaceData(null);
+        setScopeToSelected(false);
+      }
+    } else if (!isOpen && prevIsOpenRef.current) {
+      setFaceData(null);
+      setStep('pick_face');
+    }
+
+    prevIsOpenRef.current = isOpen;
+    prevTargetIdRef.current = targetId;
+  }, [isOpen, selectedTarget, activateFaceOnTarget]);
+
+  // ---------------------------------------------------------------------------
   // Face Raycasting Candidates in 3D Scene
   // ---------------------------------------------------------------------------
   const getRaycastCandidates = useCallback(() => {
+    if (scopeToSelected && selectedTarget?.threeObject) {
+      return [selectedTarget.threeObject];
+    }
     const candidates = [];
     const modelEl = document.getElementById('ar-model');
     const model3D = modelEl?.getObject3D('mesh');
@@ -253,7 +438,7 @@ export default function FaceSketchExtrudeStudio({
     if (textGroup) candidates.push(textGroup);
 
     return candidates;
-  }, []);
+  }, [scopeToSelected, selectedTarget]);
 
   // ---------------------------------------------------------------------------
   // STEP 1: Face Hover and Selection Handling
@@ -433,6 +618,28 @@ export default function FaceSketchExtrudeStudio({
         if (validHit.object.material?.color) {
           parentColor = `#${validHit.object.material.color.getHexString()}`;
         }
+
+        const box = new THREE.Box3().setFromObject(validHit.object);
+        if (!box.isEmpty()) {
+          const size = new THREE.Vector3();
+          box.getSize(size);
+          const faceSpan = Math.max(
+            0.05,
+            Math.min(
+              Math.abs(worldNormal.x) > 0.5 ? Math.min(size.y, size.z) :
+              Math.abs(worldNormal.y) > 0.5 ? Math.min(size.x, size.z) :
+              Math.min(size.x, size.y)
+            ) || 0.4
+          );
+          setShapeWidth(Number(Math.max(0.04, Math.min(faceSpan * 0.5, 1.5)).toFixed(2)));
+          setShapeHeight(Number(Math.max(0.04, Math.min(faceSpan * 0.5, 1.5)).toFixed(2)));
+          setShapeRadius(Number(Math.max(0.02, Math.min(faceSpan * 0.3, 0.8)).toFixed(2)));
+          setExtrudeDepth(Number(Math.max(0.02, Math.min(faceSpan * 0.25, 0.8)).toFixed(2)));
+        }
+        setShapeRotation(0);
+        setOffsetU(0);
+        setOffsetV(0);
+        setCustomPoints([]);
 
         setFaceData({
           point: hitPoint,
@@ -904,17 +1111,40 @@ export default function FaceSketchExtrudeStudio({
                 <span className="material-symbols-outlined text-lg animate-pulse">ads_click</span>
               </div>
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-teal-900/60 text-teal-300 border border-teal-500/40">
                     Step 1 of 3
                   </span>
-                  <span className="text-xs font-bold text-white">Click any object face to place sketch plane</span>
+                  <span className="text-xs font-bold text-white">
+                    {scopeToSelected && selectedTarget?.name
+                      ? `Click any face on ${selectedTarget.name}`
+                      : 'Click any object face to place sketch plane'}
+                  </span>
+                  {selectedTarget?.threeObject && (
+                    <button
+                      type="button"
+                      onClick={() => setScopeToSelected((prev) => !prev)}
+                      className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border transition-all cursor-pointer flex items-center gap-1 ${
+                        scopeToSelected
+                          ? 'bg-teal-500/20 text-teal-300 border-teal-500/40 hover:bg-teal-500/30'
+                          : 'bg-neutral-800 text-neutral-300 border-neutral-700 hover:bg-neutral-700'
+                      }`}
+                      title={scopeToSelected ? "Click to pick from any object in the scene" : `Click to restrict picking to ${selectedTarget.name}`}
+                    >
+                      <span className="material-symbols-outlined text-xs">
+                        {scopeToSelected ? 'filter_center_focus' : 'public'}
+                      </span>
+                      <span>{scopeToSelected ? `Target: ${selectedTarget.name}` : 'Target: Any Object'}</span>
+                    </button>
+                  )}
                 </div>
                 <p className="text-[11px] text-neutral-400">
                   {hoveredInfo ? (
                     <span className="text-teal-300 font-medium">
                       Hovering on: <strong className="text-white">{hoveredInfo.name}</strong> • {hoveredInfo.normalDesc}
                     </span>
+                  ) : scopeToSelected && selectedTarget?.name ? (
+                    `Hover over ${selectedTarget.name} to choose another face, or switch target`
                   ) : (
                     'Hover your cursor over any 3D object in the viewport'
                   )}
@@ -930,13 +1160,19 @@ export default function FaceSketchExtrudeStudio({
                 <span className="material-symbols-outlined text-lg">draw</span>
               </div>
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-cyan-900/60 text-cyan-300 border border-cyan-500/40">
                     Step 2 of 3
                   </span>
                   <span className="text-xs font-bold text-white">
                     Draw Shape on {faceData?.parentName || 'Face'}
                   </span>
+                  {selectedTarget?.name && (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-cyan-950/80 text-cyan-300 border border-cyan-500/40 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                      <span>{selectedTarget.name}</span>
+                    </span>
+                  )}
                 </div>
                 <p className="text-[11px] text-neutral-400">
                   Select a shape tool or draw on the face, then click Extrude
@@ -982,9 +1218,12 @@ export default function FaceSketchExtrudeStudio({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setStep('pick_face')}
+                  onClick={() => {
+                    if (selectedTarget?.threeObject) setScopeToSelected(true);
+                    setStep('pick_face');
+                  }}
                   className="px-2.5 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white border border-neutral-700 rounded-lg text-xs font-medium transition-colors cursor-pointer"
-                  title="Select a different face"
+                  title={selectedTarget?.name ? `Select a different face on ${selectedTarget.name}` : "Select a different face"}
                 >
                   Change Face
                 </button>

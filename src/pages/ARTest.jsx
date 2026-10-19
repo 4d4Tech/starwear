@@ -2141,7 +2141,7 @@ const ARTest = () => {
       }
     } else if (type === 'model') {
       const modelEl = document.getElementById('ar-model');
-      return modelEl?.object3D || null;
+      return modelEl?.getObject3D('mesh') || modelEl?.object3D || null;
     }
     return null;
   }, []);
@@ -2789,6 +2789,60 @@ const ARTest = () => {
     }
     return null;
   }, [selectedTargetType, selectedGroupId, selectedObjects, sceneGroups, selectedCustomModelId, selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, customModels, custom3DTexts, customLights, additionalGeometries, meshList]);
+
+  // Currently selected 3D object/model/shape target for Draw on Face Studio
+  const selectedStudioTarget = useMemo(() => {
+    if (!selectedTargetType || selectedTargetType === 'light') return null;
+
+    let targetType = selectedTargetType;
+    let targetId = null;
+
+    if (targetType === 'geometry') {
+      targetId = selectedGeometryId;
+    } else if (targetType === 'mesh') {
+      targetId = selectedMeshUuid;
+    } else if (targetType === 'customModel') {
+      targetId = selectedCustomModelId;
+    } else if (targetType === 'text3d') {
+      targetId = selectedText3DId;
+    } else if (targetType === 'model') {
+      targetId = 'root-model';
+    } else if ((targetType === 'multi' || targetType === 'group') && selectedObjects.length > 0) {
+      const nonLight = selectedObjects.find((o) => o.type !== 'light');
+      if (nonLight) {
+        targetType = nonLight.type;
+        targetId = nonLight.id;
+      }
+    }
+
+    if (!targetId && targetType !== 'model') return null;
+
+    const threeObj = findThreeObject(targetType, targetId);
+    if (!threeObj) return null;
+
+    // Ensure target object actually contains renderable meshes
+    let hasMesh = false;
+    threeObj.traverse((c) => {
+      if (c.isMesh && c.geometry) hasMesh = true;
+    });
+    if (!hasMesh) return null;
+
+    return {
+      type: targetType,
+      id: targetId,
+      name: currentSelectedObjectInfo?.name || 'Selected Object',
+      threeObject: threeObj
+    };
+  }, [
+    selectedTargetType,
+    selectedGeometryId,
+    selectedMeshUuid,
+    selectedCustomModelId,
+    selectedText3DId,
+    selectedObjects,
+    currentSelectedObjectInfo,
+    findThreeObject
+  ]);
 
   // Staged Local Files for Portal
   const [selectedPortalSkyboxFile, setSelectedPortalSkyboxFile] = useState(null);
@@ -3912,6 +3966,16 @@ const ARTest = () => {
       window.removeEventListener('starwear-custom-model-loaded', onModelLoadedEvent);
     };
   }, [gizmoReady, selectedTargetType, selectedGroupId, selectedObjects, sceneGroups, selectedCustomModelId, selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, customModels, custom3DTexts, customLights, additionalGeometries, computeObjectsCentroid]);
+
+  // Temporarily hide TransformControls while Face Sketch & Extrude Studio is open
+  useEffect(() => {
+    const tc = transformControlsRef.current;
+    if (!tc) return;
+    const helper = tc.getHelper ? tc.getHelper() : tc;
+    if (helper) {
+      helper.visible = !faceSketchStudioOpen;
+    }
+  }, [faceSketchStudioOpen]);
 
   // Visual 3D Selection Box Helper on the selected object(s) or group
   useEffect(() => {
@@ -16260,6 +16324,7 @@ const ARTest = () => {
           setTimeout(() => setSaveSuccessMsg(''), 4500);
         }}
         sceneRef={sceneRef}
+        selectedTarget={selectedStudioTarget}
       />
     </div>
   );
