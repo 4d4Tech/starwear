@@ -21,6 +21,7 @@ import AddModelModal from '../components/AddModelModal';
 import VectorPenModal from '../components/VectorPenModal';
 import Add3DTextModal from '../components/Add3DTextModal';
 import ARLightDiagnosticsDrawer from '../components/ARLightDiagnosticsDrawer';
+import FaceSketchExtrudeStudio from '../components/FaceSketchExtrudeStudio';
 import { AVAILABLE_FONTS, TEXT_MATERIAL_PRESETS } from '../utils/text3DHelper';
 import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES, createPrimitiveMesh, INFLATION_PROFILES } from '../utils/geometryHelper';
 import { loadMarkerForBatch, createDefaultMarkerDataUrl, getImageDimensions } from '../utils/markerHelper';
@@ -1355,6 +1356,7 @@ const ARTest = () => {
   const [additionalGeometries, setAdditionalGeometries] = useState([]);
   const [geometryModalOpen, setGeometryModalOpen] = useState(false);
   const [vectorPenModalOpen, setVectorPenModalOpen] = useState(false);
+  const [faceSketchStudioOpen, setFaceSketchStudioOpen] = useState(false);
   const [editingVectorGeom, setEditingVectorGeom] = useState(null);
   const [vectorPenInitialMode, setVectorPenInitialMode] = useState('extrude');
 
@@ -1377,16 +1379,16 @@ const ARTest = () => {
       emissiveIntensity: payload.emissiveIntensity !== undefined ? Number(payload.emissiveIntensity) : 0,
       wireframe: Boolean(payload.wireframe),
       flatShading: Boolean(payload.flatShading),
-      posX: Number(((count % 4 - 1.5) * 0.45).toFixed(2)),
-      posY: 0.35,
-      posZ: Number(((Math.floor(count / 4) - 0.5) * 0.45).toFixed(2)),
-      rotX: 0,
-      rotY: 0,
-      rotZ: 0,
-      scale: 1,
-      scaleX: 1,
-      scaleY: 1,
-      scaleZ: 1,
+      posX: payload.posX !== undefined ? Number(payload.posX) : Number(((count % 4 - 1.5) * 0.45).toFixed(2)),
+      posY: payload.posY !== undefined ? Number(payload.posY) : 0.35,
+      posZ: payload.posZ !== undefined ? Number(payload.posZ) : Number(((Math.floor(count / 4) - 0.5) * 0.45).toFixed(2)),
+      rotX: payload.rotX !== undefined ? Number(payload.rotX) : 0,
+      rotY: payload.rotY !== undefined ? Number(payload.rotY) : 0,
+      rotZ: payload.rotZ !== undefined ? Number(payload.rotZ) : 0,
+      scale: payload.scale !== undefined ? Number(payload.scale) : 1,
+      scaleX: payload.scaleX !== undefined ? Number(payload.scaleX) : 1,
+      scaleY: payload.scaleY !== undefined ? Number(payload.scaleY) : 1,
+      scaleZ: payload.scaleZ !== undefined ? Number(payload.scaleZ) : 1,
       rotationSpeed: 0,
       visible: true
     };
@@ -4355,7 +4357,13 @@ const ARTest = () => {
       } else if (k === 'q') {
         setGizmoMode((prev) => (prev === 'translate' ? 'rotate' : prev === 'rotate' ? 'scale' : 'translate'));
       } else if (e.key === 'Escape') {
-        clearSelectionAndDetachGizmo();
+        if (faceSketchStudioOpen) {
+          setFaceSketchStudioOpen(false);
+        } else {
+          clearSelectionAndDetachGizmo();
+        }
+      } else if (k === 'x') {
+        setFaceSketchStudioOpen((prev) => !prev);
       } else if (k === 'f') {
         if (selectedMeshUuid) {
           focusCameraOnMesh(selectedMeshUuid);
@@ -4368,7 +4376,7 @@ const ARTest = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedMeshUuid, focusCameraOnMesh, focusCameraOnSelectedObject, clearSelectionAndDetachGizmo, selectedGroupId, selectedObjects, handleUngroup, handleCreateGroupFromSelection]);
+  }, [faceSketchStudioOpen, selectedMeshUuid, focusCameraOnMesh, focusCameraOnSelectedObject, clearSelectionAndDetachGizmo, selectedGroupId, selectedObjects, handleUngroup, handleCreateGroupFromSelection]);
 
   // Target Marker Alignment & Calibration Actions
   const MARKER_PRESETS = [
@@ -9074,6 +9082,15 @@ const ARTest = () => {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
+                    onClick={() => setFaceSketchStudioOpen(true)}
+                    className="px-2.5 py-1.5 bg-gradient-to-r from-teal-500 via-cyan-600 to-indigo-600 hover:opacity-95 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-teal-950/40 transition-all cursor-pointer"
+                    title="Draw a shape on any object face and extrude it into 3D (X)"
+                  >
+                    <span className="material-symbols-outlined text-sm">draw</span>
+                    <span>+ Draw on Face</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setIsAddModelModalOpen(true)}
                     className="px-2.5 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-purple-950/40 transition-all cursor-pointer"
                     title="Add External 3D Model (.glb / .gltf from file, URL, or sample library)"
@@ -9132,6 +9149,14 @@ const ARTest = () => {
                     </p>
                   </div>
                   <div className="flex items-center justify-center gap-2 pt-1 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => setFaceSketchStudioOpen(true)}
+                      className="px-3.5 py-2 bg-gradient-to-r from-teal-500 via-cyan-600 to-indigo-600 hover:opacity-90 text-white font-bold text-xs rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer shadow-md"
+                    >
+                      <span className="material-symbols-outlined text-sm">draw</span>
+                      <span>Draw on Face & Extrude</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -15603,6 +15628,22 @@ const ARTest = () => {
               {gizmoSnap ? `Snap: ${gizmoSnap}m` : 'Snap: Off'}
             </button>
 
+            {/* Draw on Face & Extrude Studio Toggle (X) */}
+            <button
+              type="button"
+              onClick={() => setFaceSketchStudioOpen((prev) => !prev)}
+              title="Click any object face to draw a 2D shape on it and extrude into 3D (X)"
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                faceSketchStudioOpen
+                  ? 'bg-gradient-to-r from-teal-500 to-emerald-600 text-white shadow-md ring-2 ring-teal-400'
+                  : 'bg-black/60 hover:bg-neutral-800 border border-teal-500/40 text-teal-300 hover:text-white'
+              }`}
+            >
+              <span className="material-symbols-outlined text-sm">draw</span>
+              <span className="hidden sm:inline">Draw on Face</span>
+              <span className="text-[10px] font-mono opacity-60">X</span>
+            </button>
+
             {/* Multi-Select Mode Toggle */}
             <button
               type="button"
@@ -16126,6 +16167,18 @@ const ARTest = () => {
         sceneRef={sceneRef}
         trackingStatus="STUDIO_VIEW"
         cameraEnabled={false}
+      />
+
+      {/* Interactive Face Sketch & Extrude Studio */}
+      <FaceSketchExtrudeStudio
+        isOpen={faceSketchStudioOpen}
+        onClose={() => setFaceSketchStudioOpen(false)}
+        onCommitExtrude={(payload) => {
+          handleAddGeometry(payload);
+          setSaveSuccessMsg(`Extruded 3D shape from face: ${payload.name}`);
+          setTimeout(() => setSaveSuccessMsg(''), 4500);
+        }}
+        sceneRef={sceneRef}
       />
     </div>
   );
