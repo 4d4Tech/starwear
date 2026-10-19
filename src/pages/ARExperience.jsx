@@ -895,20 +895,11 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           });
         }
 
-        // Cleanly dispose renderer and free WebGL drawing context
+        // Cleanly dispose renderer on unmount
         if (sceneEl.renderer) {
-          const gl = sceneEl.renderer.getContext();
           try {
             sceneEl.renderer.dispose();
           } catch {}
-          if (gl) {
-            try {
-              const loseContextExt = gl.getExtension('WEBGL_lose_context');
-              if (loseContextExt) {
-                loseContextExt.loseContext();
-              }
-            } catch {}
-          }
         }
       } catch (teardownErr) {
         console.warn('[ARExperience] Cleanup warning during scene unmount:', teardownErr);

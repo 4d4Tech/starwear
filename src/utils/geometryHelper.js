@@ -5,8 +5,29 @@ import {
   INFLATION_PROFILES,
   INFLATION_PROFILE_MAP
 } from './inflationEngine.js';
+import {
+  createRevolvedGeometryFromPoints,
+  createSweptGeometryFromPath,
+  createOrthogonalCarveGeometry,
+  createAdvancedExtrudeGeometry,
+  VECTOR_GENERATION_MODES,
+  REVOLVE_PRESETS,
+  SWEEP_SPINE_PRESETS,
+  CARVE_PRESETS
+} from './vectorMeshEngine.js';
 
-export { INFLATION_PROFILES, INFLATION_PROFILE_MAP };
+export {
+  INFLATION_PROFILES,
+  INFLATION_PROFILE_MAP,
+  createRevolvedGeometryFromPoints,
+  createSweptGeometryFromPath,
+  createOrthogonalCarveGeometry,
+  createAdvancedExtrudeGeometry,
+  VECTOR_GENERATION_MODES,
+  REVOLVE_PRESETS,
+  SWEEP_SPINE_PRESETS,
+  CARVE_PRESETS
+};
 
 export const GEOMETRY_DEFINITIONS = [
   {
@@ -168,12 +189,16 @@ export const GEOMETRY_DEFINITIONS = [
   },
   {
     id: 'vectorExtrude',
-    name: 'Vector Pen Tool (Extruded Face)',
+    name: 'Vector Pen Tool (Extrude & Shell)',
     category: 'Vector / Pen',
-    icon: 'gesture',
-    description: 'Photoshop-style vector pen tool: draw custom bezier curves, connect a closed face, and extrude into 3D geometry.',
+    icon: 'straighten',
+    description: 'Extrude custom 2D vector path with directional taper, edge beveling, and hollow shell / solidify modifier.',
     defaultParams: {
       depth: 0.25,
+      taper: 1.0,
+      twist: 0,
+      shellEnabled: false,
+      shellThickness: 0.04,
       bevelEnabled: true,
       bevelThickness: 0.03,
       bevelSize: 0.02,
@@ -195,6 +220,8 @@ export const GEOMETRY_DEFINITIONS = [
     },
     paramConfigs: [
       { key: 'depth', label: 'Extrude Depth', min: 0.02, max: 2.0, step: 0.02, unit: 'm' },
+      { key: 'taper', label: 'Directional Taper', min: 0.1, max: 2.5, step: 0.05 },
+      { key: 'twist', label: 'Extrusion Twist', min: -360, max: 360, step: 5, unit: '°' },
       { key: 'bevelThickness', label: 'Bevel Thickness', min: 0.0, max: 0.2, step: 0.01, unit: 'm' },
       { key: 'bevelSize', label: 'Bevel Size', min: 0.0, max: 0.2, step: 0.01, unit: 'm' },
       { key: 'bevelSegments', label: 'Bevel Segments', min: 1, max: 8, step: 1 },
@@ -209,6 +236,8 @@ export const GEOMETRY_DEFINITIONS = [
     description: 'Volumetric curved 3D mesh inflated from 2D vector silhouette using Distance-Field Poisson equations.',
     defaultParams: {
       depth: 0.35,
+      depthFront: 0.35,
+      depthBack: 0.35,
       curvatureProfile: 'elliptic',
       symmetric: true,
       smoothPasses: 2,
@@ -234,6 +263,110 @@ export const GEOMETRY_DEFINITIONS = [
       { key: 'smoothPasses', label: 'Smoothing Passes', min: 0, max: 6, step: 1 },
       { key: 'resolution', label: 'Mesh Resolution', min: 12, max: 48, step: 2 },
       { key: 'rimDepth', label: 'Rim Wall Depth', min: 0.0, max: 0.5, step: 0.02, unit: 'm' }
+    ]
+  },
+  {
+    id: 'vectorRevolve',
+    name: 'Revolved Vector Lathe',
+    category: 'Vector / Pen',
+    icon: 'rotate_right',
+    description: 'Axis-symmetric 360° or partial rotational surface generated from 2D profile curve around Y or X axis.',
+    defaultParams: {
+      revolveAngle: 360,
+      revolveAxis: 'Y',
+      revolveSegments: 32,
+      axisOffset: 0.0,
+      capEnds: true,
+      curveSegments: 32,
+      scaleFactor: 0.005,
+      points: [
+        { x: 15, y: -130 },
+        { x: 55, y: -120 },
+        { x: 25, y: -80 },
+        { x: 85, y: -10 },
+        { x: 30, y: 70 },
+        { x: 45, y: 130 },
+        { x: 38, y: 130 },
+        { x: 22, y: 75 },
+        { x: 75, y: -10 },
+        { x: 18, y: -75 },
+        { x: 15, y: -120 }
+      ]
+    },
+    paramConfigs: [
+      { key: 'revolveAngle', label: 'Revolution Angle', min: 15, max: 360, step: 15, unit: '°' },
+      { key: 'revolveSegments', label: 'Radial Segments', min: 12, max: 64, step: 2 },
+      { key: 'axisOffset', label: 'Axis Radial Offset', min: -0.5, max: 1.0, step: 0.02, unit: 'm' }
+    ]
+  },
+  {
+    id: 'vectorSweep',
+    name: 'Swept Vector Rail & Loft',
+    category: 'Vector / Pen',
+    icon: 'timeline',
+    description: 'Cross-sectional vector profile swept along a 3D guide curve with Bishop parallel transport and taper falloff.',
+    defaultParams: {
+      spineType: 'arc',
+      spineLength: 1.2,
+      spineCurvature: 0.5,
+      spineTwist: 0,
+      spineSteps: 36,
+      scaleStart: 1.0,
+      scaleEnd: 0.5,
+      scaleProfile: 'linear',
+      capEnds: true,
+      curveSegments: 24,
+      scaleFactor: 0.005,
+      points: [
+        { x: 0, y: -60 },
+        { x: 40, y: 0 },
+        { x: 0, y: 60 },
+        { x: -40, y: 0 }
+      ]
+    },
+    paramConfigs: [
+      { key: 'spineLength', label: 'Path Length', min: 0.2, max: 4.0, step: 0.1, unit: 'm' },
+      { key: 'spineCurvature', label: 'Spine Curvature', min: 0.0, max: 1.5, step: 0.05 },
+      { key: 'spineTwist', label: 'Spine Twist', min: 0, max: 720, step: 15, unit: '°' },
+      { key: 'scaleStart', label: 'Start Scale', min: 0.1, max: 2.5, step: 0.05 },
+      { key: 'scaleEnd', label: 'End Scale', min: 0.05, max: 2.5, step: 0.05 }
+    ]
+  },
+  {
+    id: 'vectorCarve',
+    name: 'Orthogonal Silhouette Carve',
+    category: 'Vector / Pen',
+    icon: 'view_in_ar',
+    description: 'Dual-orthogonal vector carving: intersects Front and Top silhouettes into a solid 3D visual hull.',
+    defaultParams: {
+      carveView: 'top',
+      carveResolution: 32,
+      carveSmooth: 2,
+      scaleFactor: 0.005,
+      curveSegments: 24,
+      frontPoints: [
+        { x: -140, y: 20 },
+        { x: -60, y: -20 },
+        { x: 10, y: -45 },
+        { x: 80, y: -30 },
+        { x: 140, y: 15 },
+        { x: 140, y: 40 },
+        { x: -140, y: 40 }
+      ],
+      topSidePoints: [
+        { x: -140, y: 0 },
+        { x: -90, y: -45 },
+        { x: 20, y: -55 },
+        { x: 120, y: -40 },
+        { x: 140, y: 0 },
+        { x: 120, y: 40 },
+        { x: 20, y: 55 },
+        { x: -90, y: 45 }
+      ]
+    },
+    paramConfigs: [
+      { key: 'carveResolution', label: 'Voxel Density', min: 20, max: 44, step: 2 },
+      { key: 'carveSmooth', label: 'Laplacian Smoothing', min: 0, max: 4, step: 1 }
     ]
   }
 ];
@@ -361,7 +494,75 @@ export function createPrimitiveThreeGeometry(type, params, THREE_LIB = THREE) {
         p.detail || 0
       );
       break;
-    case 'vectorInflate':
+    case 'vectorRevolve': {
+      const rawPoints = p.points || [];
+      if (!Array.isArray(rawPoints) || rawPoints.length < 2) {
+        geom = new THREE_LIB.CylinderGeometry(0.5, 0.5, 1, 32);
+        break;
+      }
+      try {
+        geom = createRevolvedGeometryFromPoints(rawPoints, p, THREE_LIB);
+      } catch (err) {
+        console.warn('[geometryHelper] Revolve generation fallback:', err);
+        geom = new THREE_LIB.CylinderGeometry(0.5, 0.5, 1, 32);
+      }
+      break;
+    }
+    case 'vectorSweep': {
+      const rawPoints = p.points || [];
+      if (!Array.isArray(rawPoints) || rawPoints.length < 3) {
+        geom = new THREE_LIB.TorusGeometry(0.5, 0.15, 16, 32);
+        break;
+      }
+      try {
+        geom = createSweptGeometryFromPath(rawPoints, p, THREE_LIB);
+      } catch (err) {
+        console.warn('[geometryHelper] Sweep generation fallback:', err);
+        geom = new THREE_LIB.TorusGeometry(0.5, 0.15, 16, 32);
+      }
+      break;
+    }
+    case 'vectorCarve': {
+      const frontPts = p.frontPoints || p.points || [];
+      const topPts = p.topSidePoints || p.topPoints || [];
+      if (!Array.isArray(frontPts) || frontPts.length < 3 || !Array.isArray(topPts) || topPts.length < 3) {
+        geom = new THREE_LIB.BoxGeometry(1, 0.6, 1);
+        break;
+      }
+      try {
+        geom = createOrthogonalCarveGeometry(frontPts, topPts, p, THREE_LIB);
+      } catch (err) {
+        console.warn('[geometryHelper] Carve generation fallback:', err);
+        geom = new THREE_LIB.BoxGeometry(1, 0.6, 1);
+      }
+      break;
+    }
+    case 'vectorInflate': {
+      const rawPoints = p.points || [];
+      if (!Array.isArray(rawPoints) || rawPoints.length < 3) {
+        geom = new THREE_LIB.BoxGeometry(1, 1, 0.2);
+        break;
+      }
+      try {
+        geom = createInflatedGeometryFromPoints(rawPoints, {
+          depth: Number(p.depth ?? p.inflationAmount ?? 0.35),
+          depthFront: p.depthFront !== undefined ? Number(p.depthFront) : Number(p.depth ?? 0.35),
+          depthBack: p.depthBack !== undefined ? Number(p.depthBack) : (p.symmetric !== false ? Number(p.depth ?? 0.35) : 0),
+          curvatureProfile: p.curvatureProfile || p.profile || 'elliptic',
+          symmetric: p.symmetric !== false,
+          smoothPasses: p.smoothPasses !== undefined ? Number(p.smoothPasses) : 2,
+          resolution: p.resolution !== undefined ? Number(p.resolution) : 24,
+          rimDepth: Number(p.rimDepth ?? 0),
+          scaleFactor: Number(p.scaleFactor ?? 0.005),
+          curveSegments: Number(p.curveSegments ?? 24),
+          connectEdges: p.connectEdges !== false
+        }, THREE_LIB);
+      } catch (inflateErr) {
+        console.warn('[geometryHelper] Inflation generation fallback:', inflateErr);
+        geom = new THREE_LIB.BoxGeometry(1, 1, 0.2);
+      }
+      break;
+    }
     case 'vectorExtrude':
     case 'extrude': {
       const rawPoints = p.points || [];
@@ -370,12 +571,14 @@ export function createPrimitiveThreeGeometry(type, params, THREE_LIB = THREE) {
         break;
       }
 
-      const isInflateMode = type === 'vectorInflate' || Boolean(p.inflateEnabled);
+      const isInflateMode = Boolean(p.inflateEnabled);
 
       if (isInflateMode) {
         try {
           geom = createInflatedGeometryFromPoints(rawPoints, {
             depth: Number(p.depth ?? p.inflationAmount ?? 0.35),
+            depthFront: p.depthFront !== undefined ? Number(p.depthFront) : Number(p.depth ?? 0.35),
+            depthBack: p.depthBack !== undefined ? Number(p.depthBack) : (p.symmetric !== false ? Number(p.depth ?? 0.35) : 0),
             curvatureProfile: p.curvatureProfile || p.profile || 'elliptic',
             symmetric: p.symmetric !== false,
             smoothPasses: p.smoothPasses !== undefined ? Number(p.smoothPasses) : 2,
@@ -386,49 +589,13 @@ export function createPrimitiveThreeGeometry(type, params, THREE_LIB = THREE) {
             connectEdges: p.connectEdges !== false
           }, THREE_LIB);
         } catch (inflateErr) {
-          console.warn('[geometryHelper] Inflation generation fallback:', inflateErr);
+          console.warn('[geometryHelper] Inflation generation fallback in extrude mode:', inflateErr);
         }
       }
 
       if (!geom) {
-        const shape = new THREE_LIB.Shape();
-        const scale = Number(p.scaleFactor ?? 0.005);
-        const p0 = rawPoints[0];
-        shape.moveTo(p0.x * scale, -p0.y * scale);
-
-        for (let i = 0; i < rawPoints.length; i++) {
-          const curr = rawPoints[i];
-          const next = rawPoints[(i + 1) % rawPoints.length];
-
-          const cp1 = curr.handleOut
-            ? { x: (curr.x + curr.handleOut.x) * scale, y: -(curr.y + curr.handleOut.y) * scale }
-            : null;
-          const cp2 = next.handleIn
-            ? { x: (next.x + next.handleIn.x) * scale, y: -(next.y + next.handleIn.y) * scale }
-            : null;
-
-          if (cp1 || cp2) {
-            const c1 = cp1 || { x: curr.x * scale, y: -curr.y * scale };
-            const c2 = cp2 || { x: next.x * scale, y: -next.y * scale };
-            shape.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, next.x * scale, -next.y * scale);
-          } else {
-            shape.lineTo(next.x * scale, -next.y * scale);
-          }
-        }
-        shape.closePath();
-
-        const extrudeSettings = {
-          depth: Number(p.depth ?? 0.25),
-          bevelEnabled: p.bevelEnabled !== false,
-          bevelThickness: Number(p.bevelThickness ?? 0.03),
-          bevelSize: Number(p.bevelSize ?? 0.02),
-          bevelSegments: Math.max(1, Number(p.bevelSegments ?? 3)),
-          curveSegments: Math.max(6, Number(p.curveSegments ?? 24)),
-          steps: Math.max(1, Number(p.steps ?? 1))
-        };
-
         try {
-          geom = new THREE_LIB.ExtrudeGeometry(shape, extrudeSettings);
+          geom = createAdvancedExtrudeGeometry(rawPoints, p, THREE_LIB);
           if (p.domeWarpEnabled) {
             applyDomeDeformation(geom, {
               depth: Number(p.domeCurvature ?? p.domeWarpDepth ?? 0.2),

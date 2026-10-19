@@ -1,6 +1,6 @@
 import { decode } from '@msgpack/msgpack';
 import { storage } from '../firebase';
-import { ref, getDownloadURL, getBytes } from 'firebase/storage';
+import { ref, getDownloadURL, getBytes, list } from 'firebase/storage';
 
 // In-memory cache for extracted marker textures to prevent redundant network fetches
 const markerCache = new Map();
@@ -190,26 +190,9 @@ export const extractMarkerFromMindBuffer = (arrayBuffer) => {
     ctx.putImageData(imgData, 0, 0);
 
     const dataUrl = canvas.toDataURL('image/png');
-    let blobUrl = '';
-    if (typeof window !== 'undefined' && typeof window.btoa !== 'undefined') {
-      try {
-        const base64Data = dataUrl.split(',')[1];
-        const byteCharacters = atob(base64Data);
-        const byteNumbers = new Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-          byteNumbers[i] = byteCharacters.charCodeAt(i);
-        }
-        const byteArray = new Uint8Array(byteNumbers);
-        const blob = new Blob([byteArray], { type: 'image/png' });
-        blobUrl = URL.createObjectURL(blob);
-      } catch (err) {
-        console.warn('[MarkerHelper] Could not create blobUrl for extracted marker:', err);
-      }
-    }
-
     return {
       dataUrl,
-      blobUrl: blobUrl || dataUrl,
+      blobUrl: dataUrl,
       width: targetW,
       height: targetH,
       previewWidth: previewW,
@@ -292,32 +275,24 @@ export const loadMarkerForBatch = async (options = {}) => {
       };
       if (cacheKey) markerCache.set(cacheKey, res);
       return res;
-    } catch (e) {
-      console.warn('[MarkerHelper] Failed to measure dimensions of marker image URL:', e);
+    } catch {
+      // Candidate image URL unreachable (e.g. stale blob URL from past session), silently fall back
     }
   }
 
   // 2. Check Candidate Firebase Storage Image Paths
-  const candidateImagePaths = [];
-  if (options.markerFilePath) candidateImagePaths.push(options.markerFilePath);
-  if (options.marker_file_path) candidateImagePaths.push(options.marker_file_path);
-  if (options.targetImageStoragePath) candidateImagePaths.push(options.targetImageStoragePath);
-  if (options.target_image_path) candidateImagePaths.push(options.target_image_path);
-  if (options.tempImageStoragePath) candidateImagePaths.push(options.tempImageStoragePath);
-  if (options.batchData?.marker_file_path) candidateImagePaths.push(options.batchData.marker_file_path);
-  if (options.assetData?.marker_file_path) candidateImagePaths.push(options.assetData.marker_file_path);
-  if (options.assetData?.target_image_path) candidateImagePaths.push(options.assetData.target_image_path);
-  if (batchId) {
-    candidateImagePaths.push(`assets/${batchId}/marker.png`);
-    candidateImagePaths.push(`assets/${batchId}/marker.jpg`);
-    candidateImagePaths.push(`assets/${batchId}/marker.jpeg`);
-    candidateImagePaths.push(`assets/${batchId}/target.png`);
-    candidateImagePaths.push(`assets/${batchId}/target.jpg`);
-    candidateImagePaths.push(`anchors/default/${batchId}.png`);
-    candidateImagePaths.push(`anchors/default/${batchId}.jpg`);
-  }
+  // First, check explicit file paths configured in batch/asset documents
+  const explicitImagePaths = [];
+  if (options.markerFilePath) explicitImagePaths.push(options.markerFilePath);
+  if (options.marker_file_path) explicitImagePaths.push(options.marker_file_path);
+  if (options.targetImageStoragePath) explicitImagePaths.push(options.targetImageStoragePath);
+  if (options.target_image_path) explicitImagePaths.push(options.target_image_path);
+  if (options.tempImageStoragePath) explicitImagePaths.push(options.tempImageStoragePath);
+  if (options.batchData?.marker_file_path) explicitImagePaths.push(options.batchData.marker_file_path);
+  if (options.assetData?.marker_file_path) explicitImagePaths.push(options.assetData.marker_file_path);
+  if (options.assetData?.target_image_path) explicitImagePaths.push(options.assetData.target_image_path);
 
-  for (const imgPath of candidateImagePaths) {
+  for (const imgPath of explicitImagePaths) {
     if (!imgPath || typeof imgPath !== 'string' || imgPath.startsWith('http')) continue;
     try {
       const imgStorageRef = ref(storage, imgPath);
@@ -337,8 +312,42 @@ export const loadMarkerForBatch = async (options = {}) => {
         if (cacheKey) markerCache.set(cacheKey, res);
         return res;
       }
-    } catch (e) {
-      // Path not found, proceed
+    } catch {
+      // Explicit path not found, proceed
+    }
+  }
+
+  // Next, if batchId is provided, inspect assets/${batchId} folder without speculative 404s
+  let batchFolderItems = null;
+  if (batchId) {
+    try {
+      const folderRef = ref(storage, `assets/${batchId}`);
+      const listRes = await list(folderRef, { maxResults: 30 });
+      batchFolderItems = listRes.items || [];
+      const imageItem = batchFolderItems.find((item) => {
+        const n = item.name.toLowerCase();
+        return (n.startsWith('marker') || n.startsWith('target')) && (n.endsWith('.png') || n.endsWith('.jpg') || n.endsWith('.jpeg') || n.endsWith('.webp'));
+      });
+      if (imageItem) {
+        const dlUrl = await getDownloadURL(imageItem);
+        if (dlUrl) {
+          const dimensions = await getImageDimensions(dlUrl);
+          const res = {
+            dataUrl: dlUrl,
+            blobUrl: dlUrl,
+            width: dimensions.width,
+            height: dimensions.height,
+            aspectRatio: dimensions.aspectRatio || (dimensions.height / dimensions.width),
+            hasExtractedImage: true,
+            source: 'storage_marker_image',
+            storagePath: imageItem.fullPath
+          };
+          if (cacheKey) markerCache.set(cacheKey, res);
+          return res;
+        }
+      }
+    } catch {
+      // Folder doesn't exist or list failed, proceed to mind checks
     }
   }
 
@@ -363,27 +372,35 @@ export const loadMarkerForBatch = async (options = {}) => {
           return res;
         }
       }
-    } catch (err) {
-      console.warn('[MarkerHelper] Could not fetch candidateMindUrl:', err.message);
+    } catch {}
+  }
+
+  // 4. Resolve Candidate Firebase Storage .mind File from batch folder or explicit paths
+  if (batchFolderItems && batchFolderItems.length > 0) {
+    const mindItem = batchFolderItems.find((it) => it.name.toLowerCase().endsWith('.mind'));
+    if (mindItem) {
+      try {
+        const bytes = await getBytes(mindItem);
+        if (bytes) {
+          const extracted = extractMarkerFromMindBuffer(bytes);
+          if (extracted) {
+            const res = { ...extracted, source: 'storage_mind_file', mindFilePath: mindItem.fullPath };
+            if (cacheKey) markerCache.set(cacheKey, res);
+            return res;
+          }
+        }
+      } catch {}
     }
   }
 
-  // 4. Resolve Candidate Firebase Storage .mind File Path
-  const candidateMindPaths = [];
-  if (options.mindFilePath) candidateMindPaths.push(options.mindFilePath);
-  if (options.mind_file_path) candidateMindPaths.push(options.mind_file_path);
-  if (options.batchData?.mind_file_path) candidateMindPaths.push(options.batchData.mind_file_path);
-  if (options.assetData?.mind_file_path) candidateMindPaths.push(options.assetData.mind_file_path);
-  if (options.data?.mind_file_path) candidateMindPaths.push(options.data.mind_file_path);
-  if (batchId) {
-    candidateMindPaths.push(`anchors/default/${batchId}.mind`);
-    candidateMindPaths.push(`anchors/merch_4d4/${batchId}.mind`);
-    candidateMindPaths.push(`anchors/${options.merchantId || options.batchData?.merchant_id || 'default'}/${batchId}.mind`);
-    candidateMindPaths.push(`assets/${batchId}/${batchId}.mind`);
-    candidateMindPaths.push(`assets/${batchId}/target.mind`);
-  }
+  const explicitMindPaths = [];
+  if (options.mindFilePath) explicitMindPaths.push(options.mindFilePath);
+  if (options.mind_file_path) explicitMindPaths.push(options.mind_file_path);
+  if (options.batchData?.mind_file_path) explicitMindPaths.push(options.batchData.mind_file_path);
+  if (options.assetData?.mind_file_path) explicitMindPaths.push(options.assetData.mind_file_path);
+  if (options.data?.mind_file_path) explicitMindPaths.push(options.data.mind_file_path);
 
-  for (const mindFilePath of candidateMindPaths) {
+  for (const mindFilePath of explicitMindPaths) {
     if (!mindFilePath || typeof mindFilePath !== 'string') continue;
     try {
       const fileRef = ref(storage, mindFilePath);
@@ -391,8 +408,7 @@ export const loadMarkerForBatch = async (options = {}) => {
       try {
         const bytes = await getBytes(fileRef);
         buf = bytes;
-      } catch (errBytes) {
-        // Fallback: try download URL fetch
+      } catch {
         try {
           const downloadUrl = await getDownloadURL(fileRef);
           const resp = await fetch(downloadUrl);
@@ -410,9 +426,7 @@ export const loadMarkerForBatch = async (options = {}) => {
           return res;
         }
       }
-    } catch (err) {
-      // Mind file path not found, proceed to next
-    }
+    } catch {}
   }
 
   // 5. Fallback to procedural target marker graphic

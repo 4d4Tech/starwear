@@ -248,9 +248,10 @@ export function buildDistanceFieldInflatedGeometry(boundaryPts, options = {}, TH
     return new THREE_LIB.BoxGeometry(1, 1, 0.2);
   }
 
-  const depth = Math.max(0.01, Number(options.depth ?? options.inflationAmount ?? 0.35));
-  const profileKey = (options.curvatureProfile || options.profile || 'elliptic').toLowerCase();
+  const depthFront = Math.max(0.01, Number(options.depthFront ?? options.depth ?? options.inflationAmount ?? 0.35));
   const symmetric = options.symmetric !== false;
+  const depthBack = options.depthBack !== undefined ? Math.max(0, Number(options.depthBack)) : (symmetric ? depthFront : 0);
+  const profileKey = (options.curvatureProfile || options.profile || 'elliptic').toLowerCase();
   const smoothPasses = Math.max(0, Math.min(8, parseInt(options.smoothPasses ?? 2, 10)));
   const gridRes = Math.max(8, Math.min(64, parseInt(options.resolution ?? 24, 10)));
   const rimDepth = Math.max(0, Number(options.rimDepth ?? 0));
@@ -399,10 +400,16 @@ export function buildDistanceFieldInflatedGeometry(boundaryPts, options = {}, TH
   });
   if (maxD <= 0) maxD = 0.001;
 
-  const heights = distances.map((d, i) => {
+  const heightsFront = distances.map((d, i) => {
     if (isBoundaryVert[i] || d < 1e-6) return 0;
     const u = Math.min(1.0, Math.max(0.0, d / maxD));
-    return depth * profileEval(u);
+    return depthFront * profileEval(u);
+  });
+
+  const heightsBack = distances.map((d, i) => {
+    if (isBoundaryVert[i] || d < 1e-6) return 0;
+    const u = Math.min(1.0, Math.max(0.0, d / maxD));
+    return depthBack * profileEval(u);
   });
 
   // Laplacian smoothing on interior heights to relax creases while locking boundary coordinates
@@ -414,16 +421,22 @@ export function buildDistanceFieldInflatedGeometry(boundaryPts, options = {}, TH
       neighbors[t.c].add(t.a); neighbors[t.c].add(t.b);
     }
     for (let pass = 0; pass < smoothPasses; pass++) {
-      const nextHeights = [...heights];
+      const nextHF = [...heightsFront];
+      const nextHB = [...heightsBack];
       for (let i = 0; i < verts.length; i++) {
         if (isBoundaryVert[i]) continue;
         const nbs = Array.from(neighbors[i]);
         if (nbs.length > 0) {
-          const avg = nbs.reduce((sum, idx) => sum + heights[idx], 0) / nbs.length;
-          nextHeights[i] = heights[i] * 0.4 + avg * 0.6;
+          const avgF = nbs.reduce((sum, idx) => sum + heightsFront[idx], 0) / nbs.length;
+          const avgB = nbs.reduce((sum, idx) => sum + heightsBack[idx], 0) / nbs.length;
+          nextHF[i] = heightsFront[i] * 0.4 + avgF * 0.6;
+          nextHB[i] = heightsBack[i] * 0.4 + avgB * 0.6;
         }
       }
-      for (let i = 0; i < heights.length; i++) heights[i] = nextHeights[i];
+      for (let i = 0; i < verts.length; i++) {
+        heightsFront[i] = nextHF[i];
+        heightsBack[i] = nextHB[i];
+      }
     }
   }
 
@@ -437,12 +450,12 @@ export function buildDistanceFieldInflatedGeometry(boundaryPts, options = {}, TH
 
   // Front Hull Vertices [0 ... V-1]
   for (let i = 0; i < V; i++) {
-    posArray.push(verts[i].x, verts[i].y, heights[i] + halfRim);
+    posArray.push(verts[i].x, verts[i].y, heightsFront[i] + halfRim);
   }
 
   // Back Hull Vertices [V ... 2V-1]
   for (let i = 0; i < V; i++) {
-    const backZ = symmetric ? -(heights[i] + halfRim) : -halfRim;
+    const backZ = depthBack > 0 ? -(heightsBack[i] + halfRim) : -halfRim;
     posArray.push(verts[i].x, verts[i].y, backZ);
   }
 

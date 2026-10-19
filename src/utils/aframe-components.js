@@ -4724,7 +4724,12 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
               this.planeMesh.material.needsUpdate = true;
             }
           };
-          img.onerror = (err) => console.warn('[ar-marker-reference] Texture Image load error:', err);
+          img.onerror = () => {
+            if (this.planeMesh && this.planeMesh.material) {
+              this.planeMesh.material.color.set('#060913');
+              this.planeMesh.material.needsUpdate = true;
+            }
+          };
           img.src = imgUrl;
 
           planeMat = new THREE_LIB.MeshBasicMaterial({

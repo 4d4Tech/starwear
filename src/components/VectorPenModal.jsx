@@ -2,8 +2,16 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
-import { MATERIAL_PRESETS, COLOR_SWATCHES, createPrimitiveMesh } from '../utils/geometryHelper';
-import { INFLATION_PROFILES } from '../utils/inflationEngine';
+import {
+  MATERIAL_PRESETS,
+  COLOR_SWATCHES,
+  createPrimitiveMesh,
+  INFLATION_PROFILES,
+  VECTOR_GENERATION_MODES,
+  REVOLVE_PRESETS,
+  SWEEP_SPINE_PRESETS,
+  CARVE_PRESETS
+} from '../utils/geometryHelper';
 
 // Presets with Photoshop-style anchor points and bezier handles
 const VECTOR_PRESETS = [
@@ -200,24 +208,36 @@ export default function VectorPenModal({
   const [activeTool, setActiveTool] = useState('pen'); // 'pen' | 'hand'
   const [isPanningState, setIsPanningState] = useState(false); // for cursor feedback
 
-  // 3D Generation Mode: 'extrude' (beveled 2.5D extrusion) or 'inflate' (volumetric Poisson/distance-field curvature)
+  // 3D Generation Mode: 'extrude' | 'inflate' | 'revolve' | 'sweep' | 'carve'
   const [creationMode, setCreationMode] = useState(() => {
-    if (initialMode === 'inflate') return 'inflate';
-    if (initialParams?.inflateEnabled) return 'inflate';
+    if (initialMode === 'inflate' || initialParams?.inflateEnabled) return 'inflate';
+    if (initialMode === 'revolve' || initialParams?.revolveAngle !== undefined) return 'revolve';
+    if (initialMode === 'sweep' || initialParams?.spineType !== undefined) return 'sweep';
+    if (initialMode === 'carve' || initialParams?.frontPoints !== undefined) return 'carve';
     return 'extrude';
   });
 
-  // Extrusion & Material Settings
+  // Canvas View Mode: 'canvas2d' (Standard 2D Pen) | 'split' (2D Pen + 3D Viewport) | 'preview3d' (Full 3D)
+  const [canvasViewMode, setCanvasViewMode] = useState('canvas2d');
+
+  // Common Shape Settings
   const [shapeName, setShapeName] = useState(initialName);
+  const [curveSegments, setCurveSegments] = useState(initialParams?.curveSegments ?? 24);
+
+  // 1. Extrude & Shell Parameters
   const [extrudeDepth, setExtrudeDepth] = useState(initialParams?.depth ?? 0.25);
+  const [extrudeTaper, setExtrudeTaper] = useState(initialParams?.taper ?? 1.0);
+  const [extrudeTwist, setExtrudeTwist] = useState(initialParams?.twist ?? 0);
+  const [shellEnabled, setShellEnabled] = useState(Boolean(initialParams?.shellEnabled));
+  const [shellThickness, setShellThickness] = useState(initialParams?.shellThickness ?? 0.04);
   const [bevelEnabled, setBevelEnabled] = useState(initialParams?.bevelEnabled !== false);
   const [bevelThickness, setBevelThickness] = useState(initialParams?.bevelThickness ?? 0.03);
   const [bevelSize, setBevelSize] = useState(initialParams?.bevelSize ?? 0.02);
   const [bevelSegments, setBevelSegments] = useState(initialParams?.bevelSegments ?? 3);
-  const [curveSegments, setCurveSegments] = useState(initialParams?.curveSegments ?? 24);
 
-  // Curvature & Volumetric Inflation Settings (Monster Mash / Distance-Field Poisson)
-  const [inflateDepth, setInflateDepth] = useState(initialParams?.depth ?? 0.35);
+  // 2. Curvature & Volumetric Inflation Parameters
+  const [inflateDepth, setInflateDepth] = useState(initialParams?.depthFront ?? initialParams?.depth ?? 0.35);
+  const [inflateDepthBack, setInflateDepthBack] = useState(initialParams?.depthBack ?? 0.35);
   const [curvatureProfile, setCurvatureProfile] = useState(
     initialParams?.curvatureProfile || initialParams?.profile || 'elliptic'
   );
@@ -227,11 +247,52 @@ export default function VectorPenModal({
   const [inflateRimDepth, setInflateRimDepth] = useState(initialParams?.rimDepth ?? 0.0);
   const [connectEdges, setConnectEdges] = useState(initialParams?.connectEdges !== false);
 
+  // 3. Revolve (Lathe) Parameters
+  const [revolveAngle, setRevolveAngle] = useState(initialParams?.revolveAngle ?? 360);
+  const [revolveAxis, setRevolveAxis] = useState(initialParams?.revolveAxis || 'Y');
+  const [revolveSegments, setRevolveSegments] = useState(initialParams?.revolveSegments ?? 32);
+  const [axisOffset, setAxisOffset] = useState(initialParams?.axisOffset ?? 0.0);
+  const [revolveCapEnds, setRevolveCapEnds] = useState(initialParams?.capEnds !== false);
+
+  // 4. Sweep & Loft Parameters
+  const [sweepSpineType, setSweepSpineType] = useState(initialParams?.spineType || 'arc');
+  const [sweepSpineLength, setSweepSpineLength] = useState(initialParams?.spineLength ?? 1.2);
+  const [sweepCurvature, setSweepCurvature] = useState(initialParams?.spineCurvature ?? 0.5);
+  const [sweepTwist, setSweepTwist] = useState(initialParams?.spineTwist ?? 0);
+  const [sweepScaleStart, setSweepScaleStart] = useState(initialParams?.scaleStart ?? 1.0);
+  const [sweepScaleEnd, setSweepScaleEnd] = useState(initialParams?.scaleEnd ?? 0.5);
+  const [sweepScaleProfile, setSweepScaleProfile] = useState(initialParams?.scaleProfile || 'linear');
+  const [sweepCapEnds, setSweepCapEnds] = useState(initialParams?.capEnds !== false);
+
+  // 5. Silhouette Carving (Visual Hull) Parameters
+  const [carveView, setCarveView] = useState(initialParams?.carveView || 'top');
+  const [carveResolution, setCarveResolution] = useState(initialParams?.carveResolution ?? 32);
+  const [carveSmooth, setCarveSmooth] = useState(initialParams?.carveSmooth ?? 2);
+  const [carveActivePlane, setCarveActivePlane] = useState('front');
+  const [frontPoints, setFrontPoints] = useState(() => initialParams?.frontPoints || CARVE_PRESETS[0].frontPoints);
+  const [topSidePoints, setTopSidePoints] = useState(() => initialParams?.topSidePoints || CARVE_PRESETS[0].topPoints);
+
+  // PBR Surface Finishes
   const [selectedColor, setSelectedColor] = useState(initialColor);
   const [materialPreset, setMaterialPreset] = useState('standard');
   const [isWireframe, setIsWireframe] = useState(false);
   const [isFlatShading, setIsFlatShading] = useState(false);
   const [isGlow, setIsGlow] = useState(false);
+
+  // 3D Live Viewport Canvas Ref & Orbit State
+  const preview3DCanvasRef = useRef(null);
+  const preview3DStateRef = useRef({
+    renderer: null,
+    scene: null,
+    camera: null,
+    mesh: null,
+    yaw: 0.6,
+    pitch: 0.35,
+    dist: 2.2,
+    isOrbiting: false,
+    lastX: 0,
+    lastY: 0
+  });
 
   // Interaction tracking refs
   const dragRef = useRef({
@@ -337,14 +398,55 @@ export default function VectorPenModal({
     setSelectedPointIdx(null);
   };
 
+  // Switch active silhouette plane in Carve mode (Front XY vs Top XZ)
+  const handleSwitchCarvePlane = (targetPlane) => {
+    if (targetPlane === carveActivePlane) return;
+    pushHistory(points, isClosed);
+    if (carveActivePlane === 'front') {
+      setFrontPoints(points);
+      setPoints(topSidePoints);
+    } else {
+      setTopSidePoints(points);
+      setPoints(frontPoints);
+    }
+    setCarveActivePlane(targetPlane);
+    setSelectedPointIdx(null);
+  };
+
   // Load Preset
   const handleLoadPreset = (preset) => {
     pushHistory(points, isClosed);
-    const newPts = preset.createPoints();
-    setPoints(newPts);
-    setIsClosed(true);
-    setSelectedPointIdx(null);
-    setShapeName(preset.name);
+    if (creationMode === 'carve' && preset.frontPoints && preset.topPoints) {
+      setFrontPoints(preset.frontPoints);
+      setTopSidePoints(preset.topPoints);
+      setPoints(carveActivePlane === 'top' ? preset.topPoints : preset.frontPoints);
+      setIsClosed(true);
+      setSelectedPointIdx(null);
+      setShapeName(preset.name);
+      return;
+    }
+    if (creationMode === 'revolve' && preset.createPoints) {
+      const newPts = preset.createPoints();
+      setPoints(newPts);
+      setIsClosed(true);
+      setSelectedPointIdx(null);
+      setShapeName(preset.name);
+      if (preset.axis) setRevolveAxis(preset.axis);
+      if (preset.angle) setRevolveAngle(preset.angle);
+      if (preset.offset !== undefined) setAxisOffset(preset.offset);
+      return;
+    }
+    if (creationMode === 'sweep' && !preset.createPoints) {
+      setSweepSpineType(preset.id);
+      return;
+    }
+    if (typeof preset.createPoints === 'function') {
+      const newPts = preset.createPoints();
+      setPoints(newPts);
+      setIsClosed(true);
+      setSelectedPointIdx(null);
+      setShapeName(preset.name);
+    }
   };
 
   // Convert Point between smooth curve and sharp corner
@@ -1327,35 +1429,80 @@ export default function VectorPenModal({
 
   if (!isOpen) return null;
 
-  // Handle Extrude / Inflate Action
-  const handleExtrudeAction = () => {
-    if (!isClosed || points.length < 3) return;
-
+  // Universal Payload Builder for Preview, AR Test Scene, and GLB Export
+  const buildExportPayload = useCallback(() => {
     const matPresetObj = MATERIAL_PRESETS.find((m) => m.id === materialPreset) || MATERIAL_PRESETS[0];
-    const isInflate = creationMode === 'inflate';
 
-    const payload = {
-      type: isInflate ? 'vectorInflate' : 'vectorExtrude',
-      name: shapeName || (isInflate ? 'Inflated Vector Shape' : 'Extruded Vector Shape'),
+    let type = 'vectorExtrude';
+    let defaultName = 'Extruded Vector Shape';
+    if (creationMode === 'inflate') {
+      type = 'vectorInflate';
+      defaultName = 'Inflated Vector Shape';
+    } else if (creationMode === 'revolve') {
+      type = 'vectorRevolve';
+      defaultName = 'Revolved Lathe Shape';
+    } else if (creationMode === 'sweep') {
+      type = 'vectorSweep';
+      defaultName = 'Swept Vector Rail';
+    } else if (creationMode === 'carve') {
+      type = 'vectorCarve';
+      defaultName = 'Carved Visual Hull';
+    }
+
+    const curFront = carveActivePlane === 'front' ? points : frontPoints;
+    const curTop = carveActivePlane === 'top' ? points : topSidePoints;
+
+    return {
+      type,
+      name: shapeName || defaultName,
       params: {
-        points: points,
-        scaleFactor: 0.005, // 200px on canvas = 1 meter in 3D AR space
-        inflateEnabled: isInflate,
-        depth: Number(isInflate ? inflateDepth : extrudeDepth),
-        curvatureProfile: curvatureProfile,
+        points: creationMode === 'carve' ? curFront : points,
+        scaleFactor: 0.005,
+        creationMode,
+        inflateEnabled: creationMode === 'inflate',
+        // Extrude & Shell
+        depth: creationMode === 'inflate' ? Number(inflateDepth) : Number(extrudeDepth),
+        taper: Number(extrudeTaper),
+        twist: Number(extrudeTwist),
+        shellEnabled: Boolean(shellEnabled),
+        shellThickness: Number(shellThickness),
+        bevelEnabled: Boolean(bevelEnabled),
+        bevelThickness: Number(bevelThickness),
+        bevelSize: Number(bevelSize),
+        bevelSegments: Number(bevelSegments),
+        curveSegments: Number(curveSegments),
+        steps: 1,
+        // Curvature & Volumetric Inflation
+        depthFront: Number(inflateDepth),
+        depthBack: inflateSymmetric ? Number(inflateDepth) : Number(inflateDepthBack),
+        curvatureProfile,
         profile: curvatureProfile,
         symmetric: Boolean(inflateSymmetric),
         smoothPasses: Number(inflateSmoothPasses),
         resolution: Number(inflateResolution),
         rimDepth: Number(inflateRimDepth),
         connectEdges: Boolean(connectEdges),
-        // Extrusion fallback params
-        bevelEnabled: Boolean(bevelEnabled),
-        bevelThickness: Number(bevelThickness),
-        bevelSize: Number(bevelSize),
-        bevelSegments: Number(bevelSegments),
-        curveSegments: Number(curveSegments),
-        steps: 1
+        // Revolve (Lathe)
+        revolveAngle: Number(revolveAngle),
+        revolveAxis,
+        revolveSegments: Number(revolveSegments),
+        axisOffset: Number(axisOffset),
+        capEnds: Boolean(revolveCapEnds),
+        // Sweep & Loft
+        spineType: sweepSpineType,
+        spineLength: Number(sweepSpineLength),
+        spineCurvature: Number(sweepCurvature),
+        spineTwist: Number(sweepTwist),
+        spineSteps: 36,
+        scaleStart: Number(sweepScaleStart),
+        scaleEnd: Number(sweepScaleEnd),
+        scaleProfile: sweepScaleProfile,
+        // Carve (Visual Hull)
+        carveView,
+        carveResolution: Number(carveResolution),
+        carveSmooth: Number(carveSmooth),
+        frontPoints: curFront,
+        topSidePoints: curTop
       },
       color: selectedColor,
       roughness: matPresetObj.roughness,
@@ -1366,7 +1513,57 @@ export default function VectorPenModal({
       flatShading: isFlatShading,
       preset: materialPreset
     };
+  }, [
+    creationMode,
+    materialPreset,
+    shapeName,
+    carveActivePlane,
+    points,
+    frontPoints,
+    topSidePoints,
+    inflateDepth,
+    extrudeDepth,
+    extrudeTaper,
+    extrudeTwist,
+    shellEnabled,
+    shellThickness,
+    bevelEnabled,
+    bevelThickness,
+    bevelSize,
+    bevelSegments,
+    curveSegments,
+    inflateDepthBack,
+    curvatureProfile,
+    inflateSymmetric,
+    inflateSmoothPasses,
+    inflateResolution,
+    inflateRimDepth,
+    connectEdges,
+    revolveAngle,
+    revolveAxis,
+    revolveSegments,
+    axisOffset,
+    revolveCapEnds,
+    sweepSpineType,
+    sweepSpineLength,
+    sweepCurvature,
+    sweepTwist,
+    sweepScaleStart,
+    sweepScaleEnd,
+    sweepScaleProfile,
+    carveView,
+    carveResolution,
+    carveSmooth,
+    selectedColor,
+    isGlow,
+    isWireframe,
+    isFlatShading
+  ]);
 
+  // Handle Extrude / Commit to 3D Scene
+  const handleExtrudeAction = () => {
+    if (!isClosed || points.length < 3) return;
+    const payload = buildExportPayload();
     if (typeof onExtrude === 'function') {
       onExtrude(payload);
       onClose();
@@ -1376,41 +1573,7 @@ export default function VectorPenModal({
   // Direct GLB Binary Export from Pen Studio
   const handleExportGLB = () => {
     if (!isClosed || points.length < 3) return;
-
-    const matPresetObj = MATERIAL_PRESETS.find((m) => m.id === materialPreset) || MATERIAL_PRESETS[0];
-    const isInflate = creationMode === 'inflate';
-
-    const payload = {
-      type: isInflate ? 'vectorInflate' : 'vectorExtrude',
-      name: shapeName || (isInflate ? 'Inflated Vector Shape' : 'Extruded Vector Shape'),
-      params: {
-        points: points,
-        scaleFactor: 0.005,
-        inflateEnabled: isInflate,
-        depth: Number(isInflate ? inflateDepth : extrudeDepth),
-        curvatureProfile: curvatureProfile,
-        profile: curvatureProfile,
-        symmetric: Boolean(inflateSymmetric),
-        smoothPasses: Number(inflateSmoothPasses),
-        resolution: Number(inflateResolution),
-        rimDepth: Number(inflateRimDepth),
-        connectEdges: Boolean(connectEdges),
-        bevelEnabled: Boolean(bevelEnabled),
-        bevelThickness: Number(bevelThickness),
-        bevelSize: Number(bevelSize),
-        bevelSegments: Number(bevelSegments),
-        curveSegments: Number(curveSegments),
-        steps: 1
-      },
-      color: selectedColor,
-      roughness: matPresetObj.roughness,
-      metalness: matPresetObj.metalness,
-      emissive: isGlow ? selectedColor : '#000000',
-      emissiveIntensity: isGlow ? 1.5 : 0.0,
-      wireframe: isWireframe,
-      flatShading: isFlatShading,
-      preset: materialPreset
-    };
+    const payload = buildExportPayload();
 
     try {
       const mesh = createPrimitiveMesh(payload, THREE);
@@ -1429,7 +1592,7 @@ export default function VectorPenModal({
           const blob = new Blob([result], { type: 'model/gltf-binary' });
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
-          const safeName = (shapeName || (isInflate ? 'inflated_vector' : 'extruded_vector')).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+          const safeName = (shapeName || payload.name).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
           a.href = url;
           a.download = `${safeName}.glb`;
           document.body.appendChild(a);
@@ -1448,6 +1611,130 @@ export default function VectorPenModal({
       alert('Could not export .GLB: ' + err.message);
     }
   };
+
+  // 3D Live Viewport Renderer Effect
+  useEffect(() => {
+    if (!isOpen || canvasViewMode === 'canvas2d') return;
+    const canvas = preview3DCanvasRef.current;
+    if (!canvas) return;
+
+    let renderer = null;
+    let animId = null;
+
+    try {
+      renderer = new THREE.WebGLRenderer({
+        canvas,
+        alpha: true,
+        antialias: true,
+        powerPreference: 'default'
+      });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setSize(canvas.clientWidth || 400, canvas.clientHeight || 360, false);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(
+        45,
+        (canvas.clientWidth || 400) / (canvas.clientHeight || 360),
+        0.05,
+        50
+      );
+
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
+      scene.add(ambientLight);
+
+      const keyLight = new THREE.DirectionalLight(0xffffff, 1.4);
+      keyLight.position.set(3, 4, 5);
+      keyLight.castShadow = true;
+      scene.add(keyLight);
+
+      const fillLight = new THREE.DirectionalLight(0x38bdf8, 0.6);
+      fillLight.position.set(-3, -2, -3);
+      scene.add(fillLight);
+
+      const grid = new THREE.GridHelper(2.5, 20, 0x38bdf8, 0x1e293b);
+      grid.position.y = -0.65;
+      scene.add(grid);
+
+      const payload = buildExportPayload();
+      const mesh = createPrimitiveMesh(payload, THREE);
+      if (mesh) {
+        scene.add(mesh);
+      }
+
+      const st = preview3DStateRef.current;
+      st.renderer = renderer;
+      st.scene = scene;
+      st.camera = camera;
+      st.mesh = mesh;
+
+      const updateCamera = () => {
+        const x = st.dist * Math.sin(st.yaw) * Math.cos(st.pitch);
+        const y = st.dist * Math.sin(st.pitch);
+        const z = st.dist * Math.cos(st.yaw) * Math.cos(st.pitch);
+        camera.position.set(x, y, z);
+        camera.lookAt(0, 0, 0);
+      };
+
+      const renderLoop = () => {
+        updateCamera();
+        renderer.render(scene, camera);
+        animId = requestAnimationFrame(renderLoop);
+      };
+      renderLoop();
+
+      const onPointerDown = (e) => {
+        st.isOrbiting = true;
+        st.lastX = e.clientX;
+        st.lastY = e.clientY;
+      };
+
+      const onPointerMove = (e) => {
+        if (!st.isOrbiting) return;
+        const dx = e.clientX - st.lastX;
+        const dy = e.clientY - st.lastY;
+        st.lastX = e.clientX;
+        st.lastY = e.clientY;
+
+        st.yaw -= dx * 0.01;
+        st.pitch = Math.max(-Math.PI * 0.45, Math.min(Math.PI * 0.45, st.pitch + dy * 0.01));
+      };
+
+      const onPointerUp = () => {
+        st.isOrbiting = false;
+      };
+
+      const onWheel = (e) => {
+        e.preventDefault();
+        st.dist = Math.max(0.6, Math.min(6.0, st.dist + (e.deltaY > 0 ? 0.2 : -0.2)));
+      };
+
+      canvas.addEventListener('pointerdown', onPointerDown);
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+      canvas.addEventListener('wheel', onWheel, { passive: false });
+
+      return () => {
+        if (animId) cancelAnimationFrame(animId);
+        canvas.removeEventListener('pointerdown', onPointerDown);
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', onPointerUp);
+        canvas.removeEventListener('wheel', onWheel);
+
+        if (mesh) {
+          if (mesh.geometry) mesh.geometry.dispose();
+          if (mesh.material) {
+            if (Array.isArray(mesh.material)) mesh.material.forEach((m) => m.dispose());
+            else mesh.material.dispose();
+          }
+        }
+        renderer.dispose();
+      };
+    } catch (err) {
+      console.warn('[VectorPenModal] 3D preview error:', err);
+    }
+  }, [isOpen, canvasViewMode, buildExportPayload]);
 
   return (
     <div className="fixed inset-0 z-[150] flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-fade-in">
@@ -1488,10 +1775,26 @@ export default function VectorPenModal({
 
         {/* Preset Templates Quick Bar */}
         <div className="px-5 py-2 bg-slate-950 border-b border-slate-800 flex items-center gap-2 overflow-x-auto no-scrollbar">
-          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 shrink-0">
-            Presets:
+          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 shrink-0 flex items-center gap-1">
+            <span className="material-symbols-outlined text-xs text-sky-400">auto_awesome</span>
+            <span>
+              {creationMode === 'revolve'
+                ? 'Lathe Presets:'
+                : creationMode === 'sweep'
+                ? 'Spine Presets:'
+                : creationMode === 'carve'
+                ? 'Dual-Hull Presets:'
+                : 'Vector Presets:'}
+            </span>
           </span>
-          {VECTOR_PRESETS.map((preset) => (
+          {(creationMode === 'revolve'
+            ? REVOLVE_PRESETS
+            : creationMode === 'sweep'
+            ? SWEEP_SPINE_PRESETS
+            : creationMode === 'carve'
+            ? CARVE_PRESETS
+            : VECTOR_PRESETS
+          ).map((preset) => (
             <button
               key={preset.id}
               type="button"
@@ -1513,6 +1816,85 @@ export default function VectorPenModal({
             {/* Canvas Toolbar */}
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs bg-slate-950/80 p-2 rounded-xl border border-slate-800">
               <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                {/* 2D Studio vs 3D Live Viewport Mode Switcher */}
+                <div className="flex items-center bg-slate-900 border border-slate-800 rounded-lg p-0.5 shadow-inner">
+                  <button
+                    type="button"
+                    onClick={() => setCanvasViewMode('canvas2d')}
+                    className={`px-2 py-1 rounded text-[11px] font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                      canvasViewMode === 'canvas2d'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                    title="2D Vector Pen Canvas"
+                  >
+                    <span className="material-symbols-outlined text-xs">brush</span>
+                    <span>2D Pen</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCanvasViewMode('split')}
+                    className={`px-2 py-1 rounded text-[11px] font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                      canvasViewMode === 'split'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                    title="Split Screen: 2D Pen + Live 3D Mesh"
+                  >
+                    <span className="material-symbols-outlined text-xs">vertical_split</span>
+                    <span>Split</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCanvasViewMode('preview3d')}
+                    className={`px-2 py-1 rounded text-[11px] font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                      canvasViewMode === 'preview3d'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                    title="Interactive 3D Mesh Orbit View"
+                  >
+                    <span className="material-symbols-outlined text-xs">view_in_ar</span>
+                    <span>3D Live</span>
+                  </button>
+                </div>
+
+                {/* Carve Active Plane Selector (Front vs Top/Side) */}
+                {creationMode === 'carve' && (
+                  <div className="flex items-center bg-slate-900 border border-amber-500/40 rounded-lg p-0.5 shadow-inner">
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchCarvePlane('front')}
+                      className={`px-2 py-1 rounded text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                        carveActivePlane === 'front'
+                          ? 'bg-amber-600 text-white shadow-sm'
+                          : 'text-amber-300 hover:text-white'
+                      }`}
+                      title="Edit Front silhouette (XY projection)"
+                    >
+                      <span>Front (XY)</span>
+                      <span className="text-[9px] font-mono px-1 rounded bg-black/40">
+                        {carveActivePlane === 'front' ? points.length : frontPoints.length}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchCarvePlane('top')}
+                      className={`px-2 py-1 rounded text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                        carveActivePlane === 'top'
+                          ? 'bg-amber-600 text-white shadow-sm'
+                          : 'text-amber-300 hover:text-white'
+                      }`}
+                      title="Edit Top/Side silhouette (orthogonal projection)"
+                    >
+                      <span>Top ({carveView === 'side' ? 'YZ' : 'XZ'})</span>
+                      <span className="text-[9px] font-mono px-1 rounded bg-black/40">
+                        {carveActivePlane === 'top' ? points.length : topSidePoints.length}
+                      </span>
+                    </button>
+                  </div>
+                )}
+
                 {/* Tool Selector: Pen vs Hand Pan */}
                 <div className="flex items-center bg-slate-900 border border-slate-800 rounded-lg p-0.5 shadow-inner">
                   <button
@@ -1799,123 +2181,161 @@ export default function VectorPenModal({
               </div>
             )}
 
-            {/* Interactive 2D Canvas */}
-            <div
-              className={`relative rounded-2xl border-2 overflow-hidden bg-slate-950 shadow-inner flex items-center justify-center transition-all ${
-                isDragOverCanvas
-                  ? 'border-purple-400 ring-4 ring-purple-500/40 shadow-xl'
-                  : 'border-slate-700/80'
-              }`}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setIsDragOverCanvas(true);
-              }}
-              onDragLeave={() => setIsDragOverCanvas(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsDragOverCanvas(false);
-                if (e.dataTransfer.files?.[0]) {
-                  handleFileUpload({ target: { files: e.dataTransfer.files } });
-                }
-              }}
-            >
-              <canvas
-                ref={canvasRef}
-                width={520}
-                height={400}
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                style={{
-                  cursor: dragRef.current.isPanning || isPanningState
-                    ? 'grabbing'
-                    : isSpaceDown || activeTool === 'hand'
-                    ? 'grab'
-                    : isCmdCtrlDown
-                    ? 'move'
-                    : isAltDown
-                    ? 'cell'
-                    : hoveredSegment
-                    ? 'copy'
-                    : 'crosshair'
-                }}
-                className="w-full h-[360px] sm:h-[400px] touch-none select-none"
-              />
+            {/* Interactive Viewport Canvas Area (Supports 2D Pen, Split, and 3D Live) */}
+            <div className={`grid gap-3 transition-all ${canvasViewMode === 'split' ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
+              
+              {/* 2D Vector Pen Canvas */}
+              {(canvasViewMode === 'canvas2d' || canvasViewMode === 'split') && (
+                <div
+                  className={`relative rounded-2xl border-2 overflow-hidden bg-slate-950 shadow-inner flex items-center justify-center transition-all ${
+                    isDragOverCanvas
+                      ? 'border-purple-400 ring-4 ring-purple-500/40 shadow-xl'
+                      : 'border-slate-700/80'
+                  }`}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDragOverCanvas(true);
+                  }}
+                  onDragLeave={() => setIsDragOverCanvas(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragOverCanvas(false);
+                    if (e.dataTransfer.files?.[0]) {
+                      handleFileUpload({ target: { files: e.dataTransfer.files } });
+                    }
+                  }}
+                >
+                  <canvas
+                    ref={canvasRef}
+                    width={520}
+                    height={400}
+                    onPointerDown={handlePointerDown}
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
+                    style={{
+                      cursor: dragRef.current.isPanning || isPanningState
+                        ? 'grabbing'
+                        : isSpaceDown || activeTool === 'hand'
+                        ? 'grab'
+                        : isCmdCtrlDown
+                        ? 'move'
+                        : isAltDown
+                        ? 'cell'
+                        : hoveredSegment
+                        ? 'copy'
+                        : 'crosshair'
+                    }}
+                    className="w-full h-[360px] sm:h-[400px] touch-none select-none"
+                  />
 
-              {/* Drag over canvas overlay */}
-              {isDragOverCanvas && (
-                <div className="absolute inset-0 bg-purple-950/85 backdrop-blur-sm flex flex-col items-center justify-center pointer-events-none text-white space-y-2 animate-fade-in">
-                  <span className="material-symbols-outlined text-4xl text-purple-300 animate-bounce">
-                    upload_file
-                  </span>
-                  <span className="text-xs font-bold uppercase tracking-wider text-purple-200">
-                    Drop Image Here to Load as Background
-                  </span>
+                  {/* Drag over canvas overlay */}
+                  {isDragOverCanvas && (
+                    <div className="absolute inset-0 bg-purple-950/85 backdrop-blur-sm flex flex-col items-center justify-center pointer-events-none text-white space-y-2 animate-fade-in">
+                      <span className="material-symbols-outlined text-4xl text-purple-300 animate-bounce">
+                        upload_file
+                      </span>
+                      <span className="text-xs font-bold uppercase tracking-wider text-purple-200">
+                        Drop Image Here to Load as Background
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Status Overlay Banner */}
+                  <div className="absolute top-3 left-3 pointer-events-none">
+                    {creationMode === 'carve' ? (
+                      <div className="bg-amber-950/90 border border-amber-500/40 text-amber-300 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 backdrop-blur-md shadow-lg shadow-amber-950/50">
+                        <span className="material-symbols-outlined text-sm text-amber-400">interests</span>
+                        <span>
+                          Editing {carveActivePlane === 'front' ? 'Front (XY)' : `Top (${carveView === 'side' ? 'YZ' : 'XZ'})`} Silhouette ({points.length} nodes)
+                        </span>
+                      </div>
+                    ) : isClosed ? (
+                      <div className="bg-emerald-950/90 border border-emerald-500/40 text-emerald-300 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 backdrop-blur-md shadow-lg shadow-emerald-950/50">
+                        <span className="material-symbols-outlined text-sm text-emerald-400">check_circle</span>
+                        <span>Face Connected & Closed ({points.length} nodes) • Ready</span>
+                      </div>
+                    ) : (
+                      <div className="bg-slate-900/90 border border-slate-800 text-slate-300 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 backdrop-blur-md">
+                        <span className="material-symbols-outlined text-sm text-sky-400">edit</span>
+                        <span>
+                          {points.length === 0
+                            ? 'Click on canvas to drop first anchor point'
+                            : `${points.length} points placed • Click green start point to close`}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Floating Viewport Navigation HUD (Bottom-Right) */}
+                  <div className="absolute bottom-3 right-3 flex items-center gap-1 bg-slate-950/85 backdrop-blur-md border border-slate-800/90 rounded-xl p-1 shadow-xl text-xs z-10">
+                    <button
+                      type="button"
+                      onClick={handleZoomOut}
+                      className="w-6 h-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                      title="Zoom Out (-)"
+                    >
+                      <span className="material-symbols-outlined text-xs">remove</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetZoom}
+                      className="px-2 h-6 rounded-lg bg-slate-900 hover:bg-slate-800 font-mono text-[11px] font-bold text-sky-400 hover:text-sky-300 flex items-center justify-center transition-colors cursor-pointer"
+                      title="Reset to 100% (0)"
+                    >
+                      {Math.round(zoom * 100)}%
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleZoomIn}
+                      className="w-6 h-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                      title="Zoom In (+)"
+                    >
+                      <span className="material-symbols-outlined text-xs">add</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleFitToScreen}
+                      className="px-2 h-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-[10px] font-bold text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer border-l border-slate-800 ml-0.5"
+                      title="Fit shape to view"
+                    >
+                      Fit
+                    </button>
+                  </div>
+
+                  {/* Close Path Floating Prompt when hovering start point */}
+                  {hoverStartPoint && !isClosed && (
+                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-emerald-600 text-white font-bold text-xs px-3.5 py-1 rounded-full shadow-lg pointer-events-none animate-bounce flex items-center gap-1">
+                      <span className="material-symbols-outlined text-sm">check</span>
+                      <span>Click to Close Face!</span>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Status Overlay Banner */}
-              <div className="absolute top-3 left-3 pointer-events-none">
-                {isClosed ? (
-                  <div className="bg-emerald-950/90 border border-emerald-500/40 text-emerald-300 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 backdrop-blur-md shadow-lg shadow-emerald-950/50">
-                    <span className="material-symbols-outlined text-sm text-emerald-400">check_circle</span>
-                    <span>Face Connected & Closed ({points.length} nodes) • Ready to Extrude</span>
-                  </div>
-                ) : (
-                  <div className="bg-slate-900/90 border border-slate-800 text-slate-300 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 backdrop-blur-md">
-                    <span className="material-symbols-outlined text-sm text-sky-400">edit</span>
+              {/* 3D Live Interactive Viewport */}
+              {(canvasViewMode === 'preview3d' || canvasViewMode === 'split') && (
+                <div className="relative rounded-2xl border-2 border-slate-700/80 overflow-hidden bg-slate-950 shadow-inner flex items-center justify-center min-h-[360px]">
+                  <canvas
+                    ref={preview3DCanvasRef}
+                    className="w-full h-[360px] sm:h-[400px] touch-none select-none block"
+                  />
+
+                  {/* 3D Viewport status overlay */}
+                  <div className="absolute top-3 left-3 bg-slate-900/90 border border-slate-800 text-purple-300 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 backdrop-blur-md shadow-lg pointer-events-none">
+                    <span className="material-symbols-outlined text-sm text-purple-400">view_in_ar</span>
                     <span>
-                      {points.length === 0
-                        ? 'Click on canvas to drop first anchor point'
-                        : `${points.length} points placed • Click green start point to close`}
+                      Live 3D Viewport • {VECTOR_GENERATION_MODES.find(m => m.id === creationMode)?.name || creationMode}
                     </span>
                   </div>
-                )}
-              </div>
 
-              {/* Floating Viewport Navigation HUD (Bottom-Right) */}
-              <div className="absolute bottom-3 right-3 flex items-center gap-1 bg-slate-950/85 backdrop-blur-md border border-slate-800/90 rounded-xl p-1 shadow-xl text-xs z-10">
-                <button
-                  type="button"
-                  onClick={handleZoomOut}
-                  className="w-6 h-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
-                  title="Zoom Out (-)"
-                >
-                  <span className="material-symbols-outlined text-xs">remove</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleResetZoom}
-                  className="px-2 h-6 rounded-lg bg-slate-900 hover:bg-slate-800 font-mono text-[11px] font-bold text-sky-400 hover:text-sky-300 flex items-center justify-center transition-colors cursor-pointer"
-                  title="Reset to 100% (0)"
-                >
-                  {Math.round(zoom * 100)}%
-                </button>
-                <button
-                  type="button"
-                  onClick={handleZoomIn}
-                  className="w-6 h-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
-                  title="Zoom In (+)"
-                >
-                  <span className="material-symbols-outlined text-xs">add</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleFitToScreen}
-                  className="px-2 h-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-[10px] font-bold text-slate-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer border-l border-slate-800 ml-0.5"
-                  title="Fit shape to view"
-                >
-                  Fit
-                </button>
-              </div>
-
-              {/* Close Path Floating Prompt when hovering start point */}
-              {hoverStartPoint && !isClosed && (
-                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-emerald-600 text-white font-bold text-xs px-3.5 py-1 rounded-full shadow-lg pointer-events-none animate-bounce flex items-center gap-1">
-                  <span className="material-symbols-outlined text-sm">check</span>
-                  <span>Click to Close Face!</span>
+                  {/* Orbit hint */}
+                  <div className="absolute bottom-3 right-3 bg-slate-950/85 border border-slate-800 rounded-lg px-2.5 py-1 text-[10px] text-slate-400 pointer-events-none font-mono flex items-center gap-1">
+                    <span className="material-symbols-outlined text-xs text-purple-400">3d_rotation</span>
+                    <span>Drag to Orbit • Pinch/Wheel to Zoom</span>
+                  </div>
                 </div>
               )}
+
             </div>
 
             {/* Live Keyboard Modifier Guidance Bar */}
@@ -1999,41 +2419,41 @@ export default function VectorPenModal({
               />
             </div>
 
-            {/* 3D Generation Mode Tabs: 3D Extrusion vs Curvature & Volumetric Inflation */}
-            <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-950 border border-slate-800 rounded-xl">
-              <button
-                type="button"
-                onClick={() => setCreationMode('extrude')}
-                className={`py-2 px-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                  creationMode === 'extrude'
-                    ? 'bg-sky-600 text-white shadow-md shadow-sky-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-900'
-                }`}
-              >
-                <span className="material-symbols-outlined text-base">straighten</span>
-                <span>3D Extrusion</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setCreationMode('inflate')}
-                className={`py-2 px-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                  creationMode === 'inflate'
-                    ? 'bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow-md shadow-pink-600/30'
-                    : 'text-pink-400 hover:text-white hover:bg-slate-900'
-                }`}
-              >
-                <span className="material-symbols-outlined text-base">bubble_chart</span>
-                <span>Curvature & Inflation</span>
-              </button>
+            {/* Procedural 3D Mode Switcher (5 Modes) */}
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-300 flex items-center justify-between">
+                <span>Procedural 3D Mode</span>
+                <span className="text-[10px] font-mono text-purple-400 font-semibold bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/20">
+                  {VECTOR_GENERATION_MODES.find((m) => m.id === creationMode)?.badge || 'PROCEDURAL'}
+                </span>
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 p-1 bg-slate-950 border border-slate-800 rounded-xl">
+                {VECTOR_GENERATION_MODES.map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    onClick={() => setCreationMode(mode.id)}
+                    className={`py-2 px-2 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                      creationMode === mode.id
+                        ? 'bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 text-white shadow-md shadow-purple-600/30'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent'
+                    }`}
+                    title={mode.description}
+                  >
+                    <span className="material-symbols-outlined text-base shrink-0">{mode.icon}</span>
+                    <span className="truncate">{mode.name}</span>
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {/* MODE 1: 3D Face Extrusion */}
+            {/* MODE 1: 3D Face Extrusion & Solidify Modifier */}
             {creationMode === 'extrude' && (
               <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-3.5">
                 <div className="flex items-center justify-between pb-2 border-b border-slate-800">
                   <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-sky-400">straighten</span>
-                    3D Face Extrusion
+                    Extrude & Solidify Modifier
                   </h4>
                   <span className="text-[10px] font-mono text-sky-400 font-bold bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/20">
                     {extrudeDepth.toFixed(2)}m Depth
@@ -2049,12 +2469,94 @@ export default function VectorPenModal({
                   <input
                     type="range"
                     min="0.02"
-                    max="1.5"
+                    max="2.00"
                     step="0.02"
                     value={extrudeDepth}
                     onChange={(e) => setExtrudeDepth(parseFloat(e.target.value))}
                     className="w-full accent-sky-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
                   />
+                </div>
+
+                {/* Directional Taper */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Directional Taper (Scale Falloff)</span>
+                    <span className="font-mono text-indigo-400">{extrudeTaper.toFixed(2)}x</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="2.5"
+                    step="0.05"
+                    value={extrudeTaper}
+                    onChange={(e) => setExtrudeTaper(parseFloat(e.target.value))}
+                    className="w-full accent-indigo-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                    <span>Converge (0.1x)</span>
+                    <span>Straight (1.0x)</span>
+                    <span>Flare (2.5x)</span>
+                  </div>
+                </div>
+
+                {/* Extrusion Twist */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Extrusion Twist</span>
+                    <span className="font-mono text-purple-400">{extrudeTwist}°</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="-180"
+                    max="180"
+                    step="5"
+                    value={extrudeTwist}
+                    onChange={(e) => setExtrudeTwist(parseInt(e.target.value, 10))}
+                    className="w-full accent-purple-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                  />
+                </div>
+
+                {/* Solidify / Hollow Shell Modifier */}
+                <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                  <label className="flex items-center justify-between cursor-pointer p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition-colors">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={shellEnabled}
+                        onChange={(e) => setShellEnabled(e.target.checked)}
+                        className="rounded bg-slate-800 border-slate-700 text-sky-500"
+                      />
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-semibold text-slate-200 block">
+                          Solidify / Shell Modifier
+                        </span>
+                        <span className="text-[10px] text-slate-400 block">
+                          Hollows interior geometry with solid wall rim thickness
+                        </span>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono text-sky-400 shrink-0 ml-2">
+                      {shellEnabled ? `${(shellThickness * 100).toFixed(1)}cm Wall` : 'Solid Mesh'}
+                    </span>
+                  </label>
+
+                  {shellEnabled && (
+                    <div className="space-y-1 pl-3 border-l-2 border-sky-500/30">
+                      <div className="flex justify-between text-[11px] text-slate-300">
+                        <span>Wall Thickness</span>
+                        <span className="font-mono text-sky-400">{(shellThickness * 100).toFixed(1)}cm</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.01"
+                        max="0.15"
+                        step="0.005"
+                        value={shellThickness}
+                        onChange={(e) => setShellThickness(parseFloat(e.target.value))}
+                        className="w-full accent-sky-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {/* Bevel Toggle & Sliders */}
@@ -2152,10 +2654,10 @@ export default function VectorPenModal({
                 <div className="flex items-center justify-between pb-2 border-b border-slate-800">
                   <h4 className="text-xs font-bold uppercase tracking-wider text-pink-300 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-pink-400">bubble_chart</span>
-                    Curvature & Volumetric Inflation
+                    Organic Curvature Inflation
                   </h4>
                   <span className="text-[10px] font-mono text-pink-400 font-bold bg-pink-500/10 px-2 py-0.5 rounded border border-pink-500/20">
-                    {inflateDepth.toFixed(2)}m Puff
+                    {inflateDepth.toFixed(2)}m Front
                   </span>
                 </div>
 
@@ -2187,10 +2689,10 @@ export default function VectorPenModal({
                   </div>
                 </div>
 
-                {/* Inflation Depth (Z Height) */}
+                {/* Front Elevation (+Z) */}
                 <div className="space-y-1 pt-1">
                   <div className="flex justify-between text-xs">
-                    <span className="text-slate-300 font-medium">Volumetric Thickness (Elevation)</span>
+                    <span className="text-slate-300 font-medium">Front Volumetric Elevation (+Z)</span>
                     <span className="font-mono text-pink-400 font-bold">{inflateDepth.toFixed(2)}m</span>
                   </div>
                   <input
@@ -2204,7 +2706,7 @@ export default function VectorPenModal({
                   />
                 </div>
 
-                {/* Symmetry Mode: Dual-Sided Puffy vs Single-Sided Dome & Edge Connection */}
+                {/* Symmetry Mode: Dual-Sided Puffy vs Asymmetric */}
                 <div className="pt-2 border-t border-slate-800/80 space-y-2">
                   <label className="flex items-center justify-between cursor-pointer p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition-colors">
                     <div className="flex items-center gap-2">
@@ -2219,9 +2721,27 @@ export default function VectorPenModal({
                       </span>
                     </div>
                     <span className="text-[10px] font-mono text-pink-400">
-                      {inflateSymmetric ? 'Full 3D Puffy Balloon' : 'Flat Back (Relief Dome)'}
+                      {inflateSymmetric ? 'Symmetric Front/Back' : 'Asymmetric Depth'}
                     </span>
                   </label>
+
+                  {!inflateSymmetric && (
+                    <div className="space-y-1 pl-3 border-l-2 border-pink-500/30">
+                      <div className="flex justify-between text-[11px] text-slate-300">
+                        <span>Rear Elevation (-Z)</span>
+                        <span className="font-mono text-purple-400 font-bold">{inflateDepthBack.toFixed(2)}m</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.00"
+                        max="1.50"
+                        step="0.02"
+                        value={inflateDepthBack}
+                        onChange={(e) => setInflateDepthBack(parseFloat(e.target.value))}
+                        className="w-full accent-purple-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                      />
+                    </div>
+                  )}
 
                   {/* Connect All Edges (Watertight Seal) */}
                   <label className="flex items-center justify-between cursor-pointer p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition-colors">
@@ -2298,6 +2818,438 @@ export default function VectorPenModal({
                     value={inflateRimDepth}
                     onChange={(e) => setInflateRimDepth(parseFloat(e.target.value))}
                     className="w-full accent-slate-400 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* MODE 3: Revolve (Lathe) Surface */}
+            {creationMode === 'revolve' && (
+              <div className="bg-slate-950/80 border border-sky-500/30 rounded-xl p-4 space-y-3.5 shadow-lg shadow-sky-950/20">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-sky-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-sky-400">rotate_right</span>
+                    Rotational Lathe (Revolve)
+                  </h4>
+                  <span className="text-[10px] font-mono text-sky-400 font-bold bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/20">
+                    {revolveAngle}° around {revolveAxis}
+                  </span>
+                </div>
+
+                {/* Revolve Axis: Y (Vertical) vs X (Horizontal) */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block">
+                    Revolution Axis
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setRevolveAxis('Y')}
+                      className={`py-1.5 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                        revolveAxis === 'Y'
+                          ? 'bg-sky-600 text-white border-sky-400 shadow-sm'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-sm">swap_vert</span>
+                      <span>Y Axis (Vertical)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRevolveAxis('X')}
+                      className={`py-1.5 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                        revolveAxis === 'X'
+                          ? 'bg-sky-600 text-white border-sky-400 shadow-sm'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-sm">swap_horiz</span>
+                      <span>X Axis (Horizontal)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Revolution Angle Slider & Quick Chips */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Revolution Angle</span>
+                    <span className="font-mono text-sky-400 font-bold">{revolveAngle}°</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="15"
+                    max="360"
+                    step="15"
+                    value={revolveAngle}
+                    onChange={(e) => setRevolveAngle(parseInt(e.target.value, 10))}
+                    className="w-full accent-sky-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                  />
+                  <div className="grid grid-cols-4 gap-1 pt-1">
+                    {[90, 180, 270, 360].map((ang) => (
+                      <button
+                        key={ang}
+                        type="button"
+                        onClick={() => setRevolveAngle(ang)}
+                        className={`py-1 rounded text-[10px] font-mono font-bold border transition-all cursor-pointer ${
+                          revolveAngle === ang
+                            ? 'bg-sky-500/20 border-sky-400 text-sky-300'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                        }`}
+                      >
+                        {ang}°
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Radial Segments (Smoothness) */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Radial Segments</span>
+                    <span className="font-mono text-purple-400 font-bold">{revolveSegments}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="12"
+                    max="64"
+                    step="2"
+                    value={revolveSegments}
+                    onChange={(e) => setRevolveSegments(parseInt(e.target.value, 10))}
+                    className="w-full accent-purple-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                  />
+                </div>
+
+                {/* Radial Offset from Axis */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Axis Radial Offset (Hole Size)</span>
+                    <span className="font-mono text-indigo-400 font-bold">{axisOffset.toFixed(2)}m</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="-0.20"
+                    max="0.80"
+                    step="0.02"
+                    value={axisOffset}
+                    onChange={(e) => setAxisOffset(parseFloat(e.target.value))}
+                    className="w-full accent-indigo-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                  />
+                </div>
+
+                {/* Cap Ends Toggle */}
+                <div className="pt-2 border-t border-slate-800/80">
+                  <label className="flex items-center justify-between cursor-pointer p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition-colors">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={revolveCapEnds}
+                        onChange={(e) => setRevolveCapEnds(e.target.checked)}
+                        className="rounded bg-slate-800 border-slate-700 text-sky-500"
+                      />
+                      <span className="text-xs font-semibold text-slate-200">
+                        Cap Planar Ends (when &lt; 360°)
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono text-sky-400">
+                      {revolveCapEnds ? 'Sealed Ends' : 'Open Ends'}
+                    </span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {/* MODE 4: Sweep & Loft Along Guide Curves */}
+            {creationMode === 'sweep' && (
+              <div className="bg-slate-950/80 border border-indigo-500/30 rounded-xl p-4 space-y-3.5 shadow-lg shadow-indigo-950/20">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-indigo-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-indigo-400">timeline</span>
+                    Sweep Cross-Section Along Spine
+                  </h4>
+                  <span className="text-[10px] font-mono text-indigo-400 font-bold bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">
+                    {sweepSpineType} spine
+                  </span>
+                </div>
+
+                {/* Guide Spine Type */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block">
+                    3D Guide Curve Spine
+                  </label>
+                  <div className="grid grid-cols-5 gap-1">
+                    {[
+                      { id: 'arc', name: 'Arc', icon: 'architecture' },
+                      { id: 's-curve', name: 'S-Bend', icon: 'conversion_path' },
+                      { id: 'helix', name: 'Helix', icon: 'cyclone' },
+                      { id: 'wave', name: 'Wave', icon: 'waves' },
+                      { id: 'linear', name: 'Linear', icon: 'straighten' }
+                    ].map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => setSweepSpineType(s.id)}
+                        className={`p-1.5 rounded-lg border text-center flex flex-col items-center gap-1 transition-all cursor-pointer ${
+                          sweepSpineType === s.id
+                            ? 'bg-indigo-600 text-white border-indigo-400 shadow-sm'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                        }`}
+                        title={`Guide curve: ${s.name}`}
+                      >
+                        <span className="material-symbols-outlined text-base">{s.icon}</span>
+                        <span className="text-[10px] font-bold">{s.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Spine Length */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Spine Rail Length</span>
+                    <span className="font-mono text-indigo-400 font-bold">{sweepSpineLength.toFixed(2)}m</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.3"
+                    max="3.0"
+                    step="0.1"
+                    value={sweepSpineLength}
+                    onChange={(e) => setSweepSpineLength(parseFloat(e.target.value))}
+                    className="w-full accent-indigo-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                  />
+                </div>
+
+                {/* Spine Curvature */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Spine Curvature / Bend</span>
+                    <span className="font-mono text-purple-400 font-bold">{sweepCurvature.toFixed(2)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.0"
+                    max="2.0"
+                    step="0.05"
+                    value={sweepCurvature}
+                    onChange={(e) => setSweepCurvature(parseFloat(e.target.value))}
+                    className="w-full accent-purple-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                  />
+                </div>
+
+                {/* Spine Twist (Bishop Frame) */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Spine Twist (Bishop Frame)</span>
+                    <span className="font-mono text-teal-400 font-bold">{sweepTwist}°</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="-360"
+                    max="360"
+                    step="15"
+                    value={sweepTwist}
+                    onChange={(e) => setSweepTwist(parseInt(e.target.value, 10))}
+                    className="w-full accent-teal-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                  />
+                </div>
+
+                {/* Scale Profile */}
+                <div className="space-y-1.5 pt-1 border-t border-slate-800/80">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-300 font-medium">Scale Falloff Profile</span>
+                    <span className="font-mono text-indigo-400 text-[10px] font-bold">{sweepScaleProfile}</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1">
+                    {['linear', 'bell', 'pinch', 'flare'].map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setSweepScaleProfile(p)}
+                        className={`py-1 rounded text-[10px] font-bold border capitalize transition-all cursor-pointer ${
+                          sweepScaleProfile === p
+                            ? 'bg-indigo-500/20 border-indigo-400 text-indigo-300'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[11px] text-slate-300">
+                        <span>Start Scale</span>
+                        <span className="font-mono text-indigo-400">{sweepScaleStart.toFixed(2)}x</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="2.5"
+                        step="0.05"
+                        value={sweepScaleStart}
+                        onChange={(e) => setSweepScaleStart(parseFloat(e.target.value))}
+                        className="w-full accent-indigo-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[11px] text-slate-300">
+                        <span>End Scale</span>
+                        <span className="font-mono text-purple-400">{sweepScaleEnd.toFixed(2)}x</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="2.5"
+                        step="0.05"
+                        value={sweepScaleEnd}
+                        onChange={(e) => setSweepScaleEnd(parseFloat(e.target.value))}
+                        className="w-full accent-purple-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Cap Ends Toggle */}
+                <div className="pt-2 border-t border-slate-800/80">
+                  <label className="flex items-center justify-between cursor-pointer p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 transition-colors">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={sweepCapEnds}
+                        onChange={(e) => setSweepCapEnds(e.target.checked)}
+                        className="rounded bg-slate-800 border-slate-700 text-indigo-500"
+                      />
+                      <span className="text-xs font-semibold text-slate-200">
+                        Cap Planar Ends
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono text-indigo-400">
+                      {sweepCapEnds ? 'Sealed Mesh' : 'Open Tube'}
+                    </span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {/* MODE 5: Multi-View Silhouette Carve (Visual Hull) */}
+            {creationMode === 'carve' && (
+              <div className="bg-slate-950/80 border border-amber-500/30 rounded-xl p-4 space-y-3.5 shadow-lg shadow-amber-950/20">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-amber-400">interests</span>
+                    Visual Hull Constructive Carve
+                  </h4>
+                  <span className="text-[10px] font-mono text-amber-400 font-bold bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                    Dual Silhouette
+                  </span>
+                </div>
+
+                {/* Active Plane Switcher */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block">
+                    Active Drawing Plane
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchCarvePlane('front')}
+                      className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                        carveActivePlane === 'front'
+                          ? 'bg-amber-600 text-white border-amber-400 shadow-sm'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-sm">visibility</span>
+                      <span>Front Profile (XY)</span>
+                      <span className="text-[10px] font-mono px-1 rounded bg-black/40">
+                        {carveActivePlane === 'front' ? points.length : frontPoints.length}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchCarvePlane('top')}
+                      className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
+                        carveActivePlane === 'top'
+                          ? 'bg-amber-600 text-white border-amber-400 shadow-sm'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-sm">navigation</span>
+                      <span>Top Profile ({carveView === 'side' ? 'YZ' : 'XZ'})</span>
+                      <span className="text-[10px] font-mono px-1 rounded bg-black/40">
+                        {carveActivePlane === 'top' ? points.length : topSidePoints.length}
+                      </span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-amber-300/80 italic bg-amber-950/30 p-2 rounded-lg border border-amber-500/20">
+                    Draw the Front silhouette on the canvas, then click "Top Profile" to draw the orthogonal cross-profile. The engine carves their constructive 3D intersection.
+                  </p>
+                </div>
+
+                {/* Orthogonal Plane Type */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Orthogonal View Axis</span>
+                    <span className="font-mono text-amber-400 uppercase font-bold">{carveView}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCarveView('top')}
+                      className={`py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                        carveView === 'top'
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                          : 'bg-slate-900 border-slate-800 text-slate-400'
+                      }`}
+                    >
+                      Top Projection (XZ)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCarveView('side')}
+                      className={`py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                        carveView === 'side'
+                          ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                          : 'bg-slate-900 border-slate-800 text-slate-400'
+                      }`}
+                    >
+                      Side Projection (YZ)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Marching Cubes Voxel Resolution */}
+                <div className="space-y-1 pt-1 border-t border-slate-800/80">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Marching Cubes Grid Resolution</span>
+                    <span className="font-mono text-amber-400 font-bold">{carveResolution}³ voxels</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="16"
+                    max="48"
+                    step="4"
+                    value={carveResolution}
+                    onChange={(e) => setCarveResolution(parseInt(e.target.value, 10))}
+                    className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                  />
+                </div>
+
+                {/* Laplacian Mesh Smoothing */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 font-medium">Isosurface Smoothing Passes</span>
+                    <span className="font-mono text-purple-400 font-bold">{carveSmooth} passes</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="4"
+                    step="1"
+                    value={carveSmooth}
+                    onChange={(e) => setCarveSmooth(parseInt(e.target.value, 10))}
+                    className="w-full accent-purple-500 cursor-pointer h-1 bg-slate-800 rounded-lg"
                   />
                 </div>
               </div>
@@ -2408,11 +3360,20 @@ export default function VectorPenModal({
         {/* Footer Actions */}
         <div className="p-4 sm:p-5 border-t border-slate-800 bg-slate-950 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="text-xs text-slate-400 font-mono">
-            {isClosed ? (
+            {creationMode === 'carve' ? (
+              <span className="text-amber-400 font-semibold flex items-center gap-1">
+                <span className="material-symbols-outlined text-sm">verified</span>
+                Visual Hull Carve • Front: {frontPoints.length} nodes | Top/Side: {topSidePoints.length} nodes ({carveResolution}³ voxels)
+              </span>
+            ) : isClosed ? (
               <span className="text-emerald-400 font-semibold flex items-center gap-1">
                 <span className="material-symbols-outlined text-sm">verified</span>
                 {creationMode === 'inflate'
                   ? `Closed contour ready for volumetric inflation (${points.length} nodes) • Depth ${inflateDepth.toFixed(2)}m (${curvatureProfile})`
+                  : creationMode === 'revolve'
+                  ? `Closed profile ready for ${revolveAngle}° revolution (${points.length} nodes) around ${revolveAxis}-axis`
+                  : creationMode === 'sweep'
+                  ? `Closed cross-section ready to sweep along ${sweepSpineType} spine (${points.length} nodes)`
                   : `Closed face ready for 3D extrusion (${points.length} nodes) • Depth ${extrudeDepth.toFixed(2)}m`}
               </span>
             ) : (
@@ -2433,29 +3394,59 @@ export default function VectorPenModal({
             </button>
             <button
               type="button"
-              disabled={!isClosed || points.length < 3}
+              disabled={
+                creationMode === 'carve'
+                  ? frontPoints.length < 3 || topSidePoints.length < 3
+                  : !isClosed || points.length < 3
+              }
               onClick={handleExportGLB}
               className="flex-1 sm:flex-none py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-teal-300 hover:text-teal-200 border border-teal-500/40 text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-              title={creationMode === 'inflate' ? 'Download Inflated 3D Mesh directly as a .GLB file' : 'Download Extruded Vector Face directly as a .GLB file'}
+              title="Download 3D Mesh directly as a .GLB file"
             >
               <span className="material-symbols-outlined text-base">download</span>
               <span>Export .GLB</span>
             </button>
             <button
               type="button"
-              disabled={!isClosed || points.length < 3}
+              disabled={
+                creationMode === 'carve'
+                  ? frontPoints.length < 3 || topSidePoints.length < 3
+                  : !isClosed || points.length < 3
+              }
               onClick={handleExtrudeAction}
               className={`flex-1 sm:flex-none py-2.5 px-6 rounded-xl text-white text-xs font-bold shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed active:scale-98 ${
                 creationMode === 'inflate'
                   ? 'bg-gradient-to-r from-pink-600 via-purple-600 to-indigo-600 hover:opacity-95 shadow-pink-500/25'
+                  : creationMode === 'revolve'
+                  ? 'bg-gradient-to-r from-sky-600 via-indigo-600 to-purple-600 hover:opacity-95 shadow-sky-500/25'
+                  : creationMode === 'sweep'
+                  ? 'bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:opacity-95 shadow-indigo-500/25'
+                  : creationMode === 'carve'
+                  ? 'bg-gradient-to-r from-amber-600 via-orange-600 to-purple-600 hover:opacity-95 shadow-amber-500/25'
                   : 'bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:opacity-95 shadow-purple-500/25'
               }`}
             >
               <span className="material-symbols-outlined text-base">
-                {creationMode === 'inflate' ? 'bubble_chart' : 'view_in_ar'}
+                {creationMode === 'inflate'
+                  ? 'bubble_chart'
+                  : creationMode === 'revolve'
+                  ? 'rotate_right'
+                  : creationMode === 'sweep'
+                  ? 'timeline'
+                  : creationMode === 'carve'
+                  ? 'interests'
+                  : 'view_in_ar'}
               </span>
               <span>
-                {creationMode === 'inflate' ? 'Inflate Shape to 3D Scene' : 'Extrude Vector Face to 3D Scene'}
+                {creationMode === 'inflate'
+                  ? 'Inflate Shape to 3D Scene'
+                  : creationMode === 'revolve'
+                  ? 'Revolve Shape to 3D Scene'
+                  : creationMode === 'sweep'
+                  ? 'Sweep Shape to 3D Scene'
+                  : creationMode === 'carve'
+                  ? 'Carve 3D Visual Hull to Scene'
+                  : 'Extrude Vector Face to 3D Scene'}
               </span>
             </button>
           </div>

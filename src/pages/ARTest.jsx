@@ -624,7 +624,26 @@ const ARTest = () => {
   const [selectedGeometryId, setSelectedGeometryId] = useState(null);
   const [selectedText3DId, setSelectedText3DId] = useState(null);
   const [selectedLightId, setSelectedLightId] = useState(null);
-  const [selectedTargetType, setSelectedTargetType] = useState('model'); // 'model' | 'text3d' | 'light' | 'geometry' | 'mesh' | 'customModel' | null
+  const [selectedTargetType, setSelectedTargetType] = useState('model'); // 'model' | 'text3d' | 'light' | 'geometry' | 'mesh' | 'customModel' | 'group' | 'multi' | null
+
+  // Scene Groups & Multi-Selection States
+  const [sceneGroups, setSceneGroups] = useState([]);
+  const [selectedGroupId, setSelectedGroupId] = useState(null);
+  const [selectedObjects, setSelectedObjects] = useState([]); // Array<{ type: string, id: string }>
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+  const [groupSelectionMode, setGroupSelectionMode] = useState('group'); // 'group' | 'direct'
+  const activeGroupDragRef = useRef(null);
+
+  const sceneGroupsRef = useRef(sceneGroups);
+  useEffect(() => {
+    sceneGroupsRef.current = sceneGroups;
+  }, [sceneGroups]);
+
+  const selectedObjectsRef = useRef(selectedObjects);
+  useEffect(() => {
+    selectedObjectsRef.current = selectedObjects;
+  }, [selectedObjects]);
+
   const transformControlsRef = useRef(null);
 
   // Unified Scene Object Selector: guarantees atomic target activation and clears old selection states
@@ -636,31 +655,59 @@ const ARTest = () => {
     setSelectedCustomModelId(null);
 
     switch (type) {
+      case 'group':
+        setSelectedGroupId(idOrUuid);
+        setSelectedTargetType('group');
+        if (idOrUuid) {
+          const grp = sceneGroupsRef.current.find((g) => g.id === idOrUuid);
+          if (grp) {
+            setSelectedObjects([...grp.itemIds]);
+          }
+        }
+        break;
+      case 'multi':
+        setSelectedGroupId(null);
+        setSelectedTargetType('multi');
+        break;
       case 'model':
+        setSelectedGroupId(null);
         setSelectedTargetType('model');
+        setSelectedObjects([{ type: 'model', id: 'root-model' }]);
         break;
       case 'mesh':
+        setSelectedGroupId(null);
         setSelectedMeshUuid(idOrUuid);
         setSelectedTargetType('mesh');
+        if (idOrUuid) setSelectedObjects([{ type: 'mesh', id: idOrUuid }]);
         break;
       case 'geometry':
+        setSelectedGroupId(null);
         setSelectedGeometryId(idOrUuid);
         setSelectedTargetType('geometry');
+        if (idOrUuid) setSelectedObjects([{ type: 'geometry', id: idOrUuid }]);
         break;
       case 'customModel':
+        setSelectedGroupId(null);
         setSelectedCustomModelId(idOrUuid);
         setSelectedTargetType('customModel');
+        if (idOrUuid) setSelectedObjects([{ type: 'customModel', id: idOrUuid }]);
         break;
       case 'text3d':
+        setSelectedGroupId(null);
         setSelectedText3DId(idOrUuid);
         setSelectedTargetType('text3d');
+        if (idOrUuid) setSelectedObjects([{ type: 'text3d', id: idOrUuid }]);
         break;
       case 'light':
+        setSelectedGroupId(null);
         setSelectedLightId(idOrUuid);
         setSelectedTargetType('light');
+        if (idOrUuid) setSelectedObjects([{ type: 'light', id: idOrUuid }]);
         break;
       default:
+        setSelectedGroupId(null);
         setSelectedTargetType(null);
+        setSelectedObjects([]);
         if (transformControlsRef.current) {
           try {
             transformControlsRef.current.detach();
@@ -818,26 +865,17 @@ const ARTest = () => {
           });
         }
 
-        // Cleanly dispose renderer and free WebGL drawing context
+        // Cleanly dispose renderer on page unmount
         if (sceneEl.renderer) {
-          const gl = sceneEl.renderer.getContext();
           try {
             sceneEl.renderer.dispose();
           } catch {}
-          if (gl) {
-            try {
-              const loseContextExt = gl.getExtension('WEBGL_lose_context');
-              if (loseContextExt) {
-                loseContextExt.loseContext();
-              }
-            } catch {}
-          }
         }
       } catch (teardownErr) {
         console.warn('[ARTest] Cleanup warning during scene unmount:', teardownErr);
       }
     };
-  }, [batchId]);
+  }, []);
 
   // Target Marker Visual Reference States (MindAR Physical Anchor Plane at 0, 0, 0)
   const [markerVisible, setMarkerVisible] = useState(true);
@@ -1262,6 +1300,13 @@ const ARTest = () => {
 
   const handleDeleteCustomModel = (id) => {
     setCustomModels((prev) => prev.filter((m) => m.id !== id));
+    setSceneGroups((prev) =>
+      prev.map((g) => ({
+        ...g,
+        itemIds: g.itemIds.filter((it) => !(it.type === 'customModel' && it.id === id))
+      }))
+    );
+    setSelectedObjects((prev) => prev.filter((it) => !(it.type === 'customModel' && it.id === id)));
     if (selectedCustomModelId === id) {
       selectSceneObject(null);
     }
@@ -1404,6 +1449,13 @@ const ARTest = () => {
 
   const handleDeleteGeometry = (id) => {
     setAdditionalGeometries((prev) => prev.filter((g) => g.id !== id));
+    setSceneGroups((prev) =>
+      prev.map((g) => ({
+        ...g,
+        itemIds: g.itemIds.filter((it) => !(it.type === 'geometry' && it.id === id))
+      }))
+    );
+    setSelectedObjects((prev) => prev.filter((it) => !(it.type === 'geometry' && it.id === id)));
     if (selectedGeometryId === id) {
       selectSceneObject(null);
     }
@@ -1503,6 +1555,13 @@ const ARTest = () => {
 
   const handleDelete3DText = (id) => {
     setCustom3DTexts((prev) => prev.filter((t) => t.id !== id));
+    setSceneGroups((prev) =>
+      prev.map((g) => ({
+        ...g,
+        itemIds: g.itemIds.filter((it) => !(it.type === 'text3d' && it.id === id))
+      }))
+    );
+    setSelectedObjects((prev) => prev.filter((it) => !(it.type === 'text3d' && it.id === id)));
     if (selectedText3DId === id) {
       selectSceneObject(null);
     }
@@ -1601,6 +1660,13 @@ const ARTest = () => {
 
   const handleDeleteLight = (id) => {
     setCustomLights((prev) => prev.filter((l) => l.id !== id));
+    setSceneGroups((prev) =>
+      prev.map((g) => ({
+        ...g,
+        itemIds: g.itemIds.filter((it) => !(it.type === 'light' && it.id === id))
+      }))
+    );
+    setSelectedObjects((prev) => prev.filter((it) => !(it.type === 'light' && it.id === id)));
     if (selectedLightId === id) {
       selectSceneObject(null);
     }
@@ -1983,6 +2049,596 @@ const ARTest = () => {
     }
   }, []);
 
+  // Helper: Find Three.js Object3D by item type and id
+  const findThreeObject = useCallback((type, id) => {
+    if (!id) return null;
+    const sceneEl = document.querySelector('a-scene');
+    if (!sceneEl || !sceneEl.object3D) return null;
+
+    if (type === 'geometry') {
+      const geomAnchor = document.getElementById('ar-additional-geometries-anchor');
+      const root = geomAnchor?.getObject3D('additionalGeometriesRoot') || geomAnchor?.object3D;
+      if (root) {
+        let found = null;
+        root.traverse((node) => {
+          if (!found && node.userData?.geometryId === id) found = node;
+        });
+        if (found) return found;
+      }
+    } else if (type === 'text3d') {
+      const textAnchor = document.getElementById('ar-3d-texts-anchor');
+      const root = textAnchor?.getObject3D('texts3DRoot') || textAnchor?.object3D;
+      if (root) {
+        let found = null;
+        root.traverse((node) => {
+          if (!found && node.userData?.textId === id) found = node;
+        });
+        if (found) return found;
+      }
+    } else if (type === 'customModel') {
+      const customModelsAnchor = document.getElementById('ar-custom-models-anchor');
+      const root = customModelsAnchor?.getObject3D('customModelsRoot') || customModelsAnchor?.object3D;
+      if (root) {
+        const wrapper = root.children?.find((c) => c.userData?.modelId === id);
+        if (wrapper) return wrapper;
+        let found = null;
+        root.traverse((node) => {
+          if (!found && node.userData?.modelId === id && node.userData?.isCustomModel && node.isGroup) {
+            found = node;
+          }
+        });
+        if (found) return found;
+      }
+    } else if (type === 'light') {
+      const lightsAnchor = document.getElementById('ar-custom-lights-anchor');
+      const root = lightsAnchor?.getObject3D('lightsRoot') || lightsAnchor?.object3D;
+      if (root) {
+        let found = null;
+        root.traverse((node) => {
+          if (!found && node.userData?.lightId === id) {
+            found = node.userData.lightRef || node;
+          }
+        });
+        if (found) return found;
+      }
+    } else if (type === 'mesh') {
+      const modelEl = document.getElementById('ar-model');
+      const model3D = modelEl?.getObject3D('mesh');
+      if (model3D) {
+        let found = null;
+        model3D.traverse((node) => {
+          if (!found && node.uuid === id && node.isMesh) found = node;
+        });
+        if (found) return found;
+      }
+    } else if (type === 'model') {
+      const modelEl = document.getElementById('ar-model');
+      return modelEl?.object3D || null;
+    }
+    return null;
+  }, []);
+
+  // Compute centroid / average world position of an array of objects
+  const computeObjectsCentroid = useCallback((items) => {
+    const center = new THREE.Vector3(0, 0, 0);
+    let count = 0;
+    if (!items || items.length === 0) return center;
+    items.forEach((item) => {
+      const obj = findThreeObject(item.type, item.id);
+      if (obj) {
+        obj.updateWorldMatrix(true, true);
+        const box = new THREE.Box3().setFromObject(obj);
+        if (!box.isEmpty()) {
+          const itemCenter = new THREE.Vector3();
+          box.getCenter(itemCenter);
+          center.add(itemCenter);
+          count++;
+        } else {
+          const worldPos = new THREE.Vector3();
+          obj.getWorldPosition(worldPos);
+          center.add(worldPos);
+          count++;
+        }
+      }
+    });
+    if (count > 0) center.divideScalar(count);
+    return center;
+  }, [findThreeObject]);
+
+  // Sync a single object's Three.js transform to its React state array
+  const syncObjectTransformFromThree = useCallback((type, id, obj) => {
+    if (!obj) return;
+    const px = Number(obj.position.x.toFixed(3));
+    const py = Number(obj.position.y.toFixed(3));
+    const pz = Number(obj.position.z.toFixed(3));
+    const rx = Number(THREE.MathUtils.radToDeg(obj.rotation.x).toFixed(1));
+    const ry = Number(THREE.MathUtils.radToDeg(obj.rotation.y).toFixed(1));
+    const rz = Number(THREE.MathUtils.radToDeg(obj.rotation.z).toFixed(1));
+    const sx = Number(obj.scale.x.toFixed(3));
+    const sy = Number(obj.scale.y.toFixed(3));
+    const sz = Number(obj.scale.z.toFixed(3));
+
+    if (type === 'geometry') {
+      setAdditionalGeometries((prev) =>
+        prev.map((g) => (g.id === id ? { ...g, posX: px, posY: py, posZ: pz, rotX: rx, rotY: ry, rotZ: rz, scale: sx, scaleX: sx, scaleY: sy, scaleZ: sz } : g))
+      );
+    } else if (type === 'text3d') {
+      setCustom3DTexts((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, posX: px, posY: py, posZ: pz, rotX: rx, rotY: ry, rotZ: rz, scale: sx, scaleX: sx, scaleY: sy, scaleZ: sz } : t))
+      );
+    } else if (type === 'customModel') {
+      setCustomModels((prev) =>
+        prev.map((m) => (m.id === id ? { ...m, posX: px, posY: py, posZ: pz, rotX: rx, rotY: ry, rotZ: rz, scale: sx, scaleX: sx, scaleY: sy, scaleZ: sz } : m))
+      );
+    } else if (type === 'light') {
+      setCustomLights((prev) =>
+        prev.map((l) => (l.id === id ? { ...l, posX: px, posY: py, posZ: pz } : l))
+      );
+    } else if (type === 'mesh') {
+      setMeshList((prev) =>
+        prev.map((m) => (m.uuid === id ? { ...m, position: { x: px, y: py, z: pz }, rotation: { x: rx, y: ry, z: rz }, scale: { x: sx, y: sy, z: sz } } : m))
+      );
+    }
+  }, []);
+
+  // Batch commit member transforms from Three.js nodes to React states
+  const commitMemberTransformsToState = useCallback((members) => {
+    if (!members || members.length === 0) return;
+
+    const geomUpdates = new Map();
+    const textUpdates = new Map();
+    const modelUpdates = new Map();
+    const lightUpdates = new Map();
+    const meshUpdates = new Map();
+
+    members.forEach((m) => {
+      if (!m.obj3d) return;
+      const px = Number(m.obj3d.position.x.toFixed(3));
+      const py = Number(m.obj3d.position.y.toFixed(3));
+      const pz = Number(m.obj3d.position.z.toFixed(3));
+      const rx = Number(THREE.MathUtils.radToDeg(m.obj3d.rotation.x).toFixed(1));
+      const ry = Number(THREE.MathUtils.radToDeg(m.obj3d.rotation.y).toFixed(1));
+      const rz = Number(THREE.MathUtils.radToDeg(m.obj3d.rotation.z).toFixed(1));
+      const sx = Number(m.obj3d.scale.x.toFixed(3));
+      const sy = Number(m.obj3d.scale.y.toFixed(3));
+      const sz = Number(m.obj3d.scale.z.toFixed(3));
+
+      if (m.type === 'geometry') {
+        geomUpdates.set(m.id, { posX: px, posY: py, posZ: pz, rotX: rx, rotY: ry, rotZ: rz, scale: sx, scaleX: sx, scaleY: sy, scaleZ: sz });
+      } else if (m.type === 'text3d') {
+        textUpdates.set(m.id, { posX: px, posY: py, posZ: pz, rotX: rx, rotY: ry, rotZ: rz, scale: sx, scaleX: sx, scaleY: sy, scaleZ: sz });
+      } else if (m.type === 'customModel') {
+        modelUpdates.set(m.id, { posX: px, posY: py, posZ: pz, rotX: rx, rotY: ry, rotZ: rz, scale: sx, scaleX: sx, scaleY: sy, scaleZ: sz });
+      } else if (m.type === 'light') {
+        lightUpdates.set(m.id, { posX: px, posY: py, posZ: pz });
+      } else if (m.type === 'mesh') {
+        meshUpdates.set(m.id, { position: { x: px, y: py, z: pz }, rotation: { x: rx, y: ry, z: rz }, scale: { x: sx, y: sy, z: sz } });
+      }
+    });
+
+    if (geomUpdates.size > 0) {
+      setAdditionalGeometries((prev) =>
+        prev.map((g) => (geomUpdates.has(g.id) ? { ...g, ...geomUpdates.get(g.id) } : g))
+      );
+    }
+    if (textUpdates.size > 0) {
+      setCustom3DTexts((prev) =>
+        prev.map((t) => (textUpdates.has(t.id) ? { ...t, ...textUpdates.get(t.id) } : t))
+      );
+    }
+    if (modelUpdates.size > 0) {
+      setCustomModels((prev) =>
+        prev.map((m) => (modelUpdates.has(m.id) ? { ...m, ...modelUpdates.get(m.id) } : m))
+      );
+    }
+    if (lightUpdates.size > 0) {
+      setCustomLights((prev) =>
+        prev.map((l) => (lightUpdates.has(l.id) ? { ...l, ...lightUpdates.get(l.id) } : l))
+      );
+    }
+    if (meshUpdates.size > 0) {
+      setMeshList((prev) =>
+        prev.map((m) => (meshUpdates.has(m.uuid) ? { ...m, ...meshUpdates.get(m.uuid) } : m))
+      );
+    }
+  }, []);
+
+  // Update Group Transform via Delta Matrices (both group & its members move, rotate, and scale synchronously)
+  const handleUpdateGroupTransform = useCallback((groupId, updates) => {
+    setSceneGroups((prev) => {
+      const grp = prev.find((g) => g.id === groupId);
+      if (!grp) return prev;
+
+      const oldPos = new THREE.Vector3(grp.posX || 0, grp.posY || 0, grp.posZ || 0);
+      const oldEuler = new THREE.Euler(
+        THREE.MathUtils.degToRad(grp.rotX || 0),
+        THREE.MathUtils.degToRad(grp.rotY || 0),
+        THREE.MathUtils.degToRad(grp.rotZ || 0)
+      );
+      const oldScale = new THREE.Vector3(
+        grp.scaleX ?? grp.scale ?? 1,
+        grp.scaleY ?? grp.scale ?? 1,
+        grp.scaleZ ?? grp.scale ?? 1
+      );
+      const oldMatrix = new THREE.Matrix4().compose(oldPos, new THREE.Quaternion().setFromEuler(oldEuler), oldScale);
+      const invOldMatrix = new THREE.Matrix4().copy(oldMatrix).invert();
+
+      const newPosX = updates.posX !== undefined ? Number(updates.posX) : grp.posX || 0;
+      const newPosY = updates.posY !== undefined ? Number(updates.posY) : grp.posY || 0;
+      const newPosZ = updates.posZ !== undefined ? Number(updates.posZ) : grp.posZ || 0;
+      const newRotX = updates.rotX !== undefined ? Number(updates.rotX) : grp.rotX || 0;
+      const newRotY = updates.rotY !== undefined ? Number(updates.rotY) : grp.rotY || 0;
+      const newRotZ = updates.rotZ !== undefined ? Number(updates.rotZ) : grp.rotZ || 0;
+      const newScaleX = updates.scaleX !== undefined ? Number(updates.scaleX) : (updates.scale !== undefined ? Number(updates.scale) : (grp.scaleX ?? grp.scale ?? 1));
+      const newScaleY = updates.scaleY !== undefined ? Number(updates.scaleY) : (updates.scale !== undefined ? Number(updates.scale) : (grp.scaleY ?? grp.scale ?? 1));
+      const newScaleZ = updates.scaleZ !== undefined ? Number(updates.scaleZ) : (updates.scale !== undefined ? Number(updates.scale) : (grp.scaleZ ?? grp.scale ?? 1));
+
+      const newPos = new THREE.Vector3(newPosX, newPosY, newPosZ);
+      const newEuler = new THREE.Euler(
+        THREE.MathUtils.degToRad(newRotX),
+        THREE.MathUtils.degToRad(newRotY),
+        THREE.MathUtils.degToRad(newRotZ)
+      );
+      const newScale = new THREE.Vector3(newScaleX, newScaleY, newScaleZ);
+      const newMatrix = new THREE.Matrix4().compose(newPos, new THREE.Quaternion().setFromEuler(newEuler), newScale);
+
+      const deltaMatrix = new THREE.Matrix4().multiplyMatrices(newMatrix, invOldMatrix);
+
+      grp.itemIds.forEach((item) => {
+        const obj3d = findThreeObject(item.type, item.id);
+        if (obj3d) {
+          obj3d.updateMatrixWorld(true);
+          const curWorld = obj3d.matrixWorld.clone();
+          const targetWorld = new THREE.Matrix4().multiplyMatrices(deltaMatrix, curWorld);
+          if (obj3d.parent) {
+            const invParent = new THREE.Matrix4().copy(obj3d.parent.matrixWorld).invert();
+            const targetLocal = new THREE.Matrix4().multiplyMatrices(invParent, targetWorld);
+            targetLocal.decompose(obj3d.position, obj3d.quaternion, obj3d.scale);
+          } else {
+            targetWorld.decompose(obj3d.position, obj3d.quaternion, obj3d.scale);
+          }
+          obj3d.updateMatrixWorld(true);
+          syncObjectTransformFromThree(item.type, item.id, obj3d);
+        }
+      });
+
+      const sceneEl = document.querySelector('a-scene');
+      const pivot = sceneEl?.object3D?.getObjectByName(`starwear-group-pivot-${groupId}`);
+      if (pivot) {
+        pivot.position.copy(newPos);
+        pivot.rotation.copy(newEuler);
+        pivot.scale.copy(newScale);
+        pivot.updateMatrixWorld(true);
+      }
+
+      return prev.map((g) => (g.id === groupId ? {
+        ...g,
+        posX: newPosX,
+        posY: newPosY,
+        posZ: newPosZ,
+        rotX: newRotX,
+        rotY: newRotY,
+        rotZ: newRotZ,
+        scale: newScaleX,
+        scaleX: newScaleX,
+        scaleY: newScaleY,
+        scaleZ: newScaleZ,
+        ...updates
+      } : g));
+    });
+  }, [findThreeObject, syncObjectTransformFromThree]);
+
+  // Multi-Selection Toggle
+  const toggleObjectSelection = useCallback((type, id) => {
+    if (!type || !id) return;
+    setSelectedObjects((prev) => {
+      const exists = prev.some((it) => it.type === type && it.id === id);
+      const updated = exists
+        ? prev.filter((it) => !(it.type === type && it.id === id))
+        : [...prev, { type, id }];
+
+      if (updated.length === 0) {
+        setSelectedMeshUuid(null);
+        setSelectedGeometryId(null);
+        setSelectedText3DId(null);
+        setSelectedLightId(null);
+        setSelectedCustomModelId(null);
+        setSelectedGroupId(null);
+        setSelectedTargetType(null);
+      } else if (updated.length === 1) {
+        const single = updated[0];
+        setSelectedGroupId(null);
+        setSelectedTargetType(single.type);
+        setSelectedMeshUuid(single.type === 'mesh' ? single.id : null);
+        setSelectedGeometryId(single.type === 'geometry' ? single.id : null);
+        setSelectedCustomModelId(single.type === 'customModel' ? single.id : null);
+        setSelectedText3DId(single.type === 'text3d' ? single.id : null);
+        setSelectedLightId(single.type === 'light' ? single.id : null);
+      } else {
+        setSelectedMeshUuid(null);
+        setSelectedGeometryId(null);
+        setSelectedText3DId(null);
+        setSelectedLightId(null);
+        setSelectedCustomModelId(null);
+        setSelectedGroupId(null);
+        setSelectedTargetType('multi');
+      }
+
+      return updated;
+    });
+  }, []);
+
+  const selectGroup = useCallback((groupId) => {
+    selectSceneObject('group', groupId);
+    setActiveTab('hierarchy');
+  }, [selectSceneObject]);
+
+  // Create an Empty Group
+  const handleCreateEmptyGroup = useCallback((customName = null) => {
+    const newId = `group-${Date.now()}`;
+    const groupName = customName || `Group ${sceneGroups.length + 1}`;
+    const newGroup = {
+      id: newId,
+      name: groupName,
+      itemIds: [],
+      posX: 0,
+      posY: 0,
+      posZ: 0,
+      rotX: 0,
+      rotY: 0,
+      rotZ: 0,
+      scale: 1,
+      scaleX: 1,
+      scaleY: 1,
+      scaleZ: 1,
+      visible: true,
+      collapsed: false
+    };
+    setSceneGroups((prev) => [...prev, newGroup]);
+    selectSceneObject('group', newId);
+  }, [sceneGroups.length, selectSceneObject]);
+
+  // Create New Group from currently selected objects
+  const handleCreateGroupFromSelection = useCallback((customName = null) => {
+    if (selectedObjects.length === 0) {
+      handleCreateEmptyGroup(customName);
+      return;
+    }
+    const centroid = computeObjectsCentroid(selectedObjects);
+    const newId = `group-${Date.now()}`;
+    const groupName = customName || `Group ${sceneGroups.length + 1}`;
+    const newGroup = {
+      id: newId,
+      name: groupName,
+      itemIds: [...selectedObjects],
+      posX: Number(centroid.x.toFixed(3)),
+      posY: Number(centroid.y.toFixed(3)),
+      posZ: Number(centroid.z.toFixed(3)),
+      rotX: 0,
+      rotY: 0,
+      rotZ: 0,
+      scale: 1,
+      scaleX: 1,
+      scaleY: 1,
+      scaleZ: 1,
+      visible: true,
+      collapsed: false
+    };
+
+    setSceneGroups((prev) => {
+      const cleaned = prev.map((g) => ({
+        ...g,
+        itemIds: g.itemIds.filter((it) => !selectedObjects.some((sel) => sel.type === it.type && sel.id === it.id))
+      }));
+      return [...cleaned, newGroup];
+    });
+
+    selectSceneObject('group', newId);
+  }, [selectedObjects, computeObjectsCentroid, sceneGroups.length, selectSceneObject, handleCreateEmptyGroup]);
+
+  // Add Item(s) to existing Group
+  const handleAddToGroup = useCallback((groupId, itemOrItems) => {
+    const itemsToAdd = Array.isArray(itemOrItems) ? itemOrItems : [itemOrItems];
+    if (itemsToAdd.length === 0) return;
+
+    setSceneGroups((prev) =>
+      prev.map((g) => {
+        if (g.id === groupId) {
+          const existingKeys = new Set(g.itemIds.map((it) => `${it.type}:${it.id}`));
+          const newItems = itemsToAdd.filter((it) => !existingKeys.has(`${it.type}:${it.id}`));
+          return {
+            ...g,
+            itemIds: [...g.itemIds, ...newItems]
+          };
+        }
+        return {
+          ...g,
+          itemIds: g.itemIds.filter((it) => !itemsToAdd.some((addItem) => addItem.type === it.type && addItem.id === it.id))
+        };
+      })
+    );
+  }, []);
+
+  // Remove Item from Group
+  const handleRemoveFromGroup = useCallback((groupId, itemToRemove) => {
+    setSceneGroups((prev) =>
+      prev.map((g) => {
+        if (g.id === groupId) {
+          return {
+            ...g,
+            itemIds: g.itemIds.filter((it) => !(it.type === itemToRemove.type && it.id === itemToRemove.id))
+          };
+        }
+        return g;
+      })
+    );
+  }, []);
+
+  // Ungroup Group container while preserving all member world transforms
+  const handleUngroup = useCallback((groupId) => {
+    const group = sceneGroups.find((g) => g.id === groupId);
+    if (!group) return;
+
+    const sceneEl = document.querySelector('a-scene');
+    const pivot = sceneEl?.object3D?.getObjectByName(`starwear-group-pivot-${groupId}`);
+    if (pivot && sceneEl?.object3D) {
+      sceneEl.object3D.remove(pivot);
+    }
+
+    setSceneGroups((prev) => prev.filter((g) => g.id !== groupId));
+
+    if (group.itemIds.length > 1) {
+      setSelectedObjects([...group.itemIds]);
+      setSelectedTargetType('multi');
+      setSelectedGroupId(null);
+    } else if (group.itemIds.length === 1) {
+      const single = group.itemIds[0];
+      selectSceneObject(single.type, single.id);
+    } else {
+      selectSceneObject(null);
+    }
+  }, [sceneGroups, selectSceneObject]);
+
+  // Delete Group (and optionally its member objects)
+  const handleDeleteGroup = useCallback((groupId, deleteMembers = false) => {
+    const group = sceneGroups.find((g) => g.id === groupId);
+    if (!group) return;
+
+    if (deleteMembers) {
+      group.itemIds.forEach((it) => {
+        if (it.type === 'geometry') handleDeleteGeometry(it.id);
+        else if (it.type === 'customModel') handleDeleteCustomModel(it.id);
+        else if (it.type === 'text3d') handleDelete3DText(it.id);
+        else if (it.type === 'light') handleDeleteLight(it.id);
+        else if (it.type === 'mesh') {
+          const mesh = meshList.find((m) => m.uuid === it.id);
+          if (mesh) handleDeleteMesh(mesh.uuid, mesh.name);
+        }
+      });
+    }
+
+    const sceneEl = document.querySelector('a-scene');
+    const pivot = sceneEl?.object3D?.getObjectByName(`starwear-group-pivot-${groupId}`);
+    if (pivot && sceneEl?.object3D) {
+      sceneEl.object3D.remove(pivot);
+    }
+
+    setSceneGroups((prev) => prev.filter((g) => g.id !== groupId));
+    if (selectedGroupId === groupId) {
+      selectSceneObject(null);
+    }
+  }, [sceneGroups, selectedGroupId, selectSceneObject, meshList]);
+
+  // Toggle Visibility for all members in a Group
+  const handleToggleGroupVisibility = useCallback((groupId) => {
+    const group = sceneGroups.find((g) => g.id === groupId);
+    if (!group) return;
+    const newVisibility = !(group.visible ?? true);
+
+    setSceneGroups((prev) =>
+      prev.map((g) => (g.id === groupId ? { ...g, visible: newVisibility } : g))
+    );
+
+    group.itemIds.forEach((it) => {
+      if (it.type === 'geometry') {
+        setAdditionalGeometries((prev) =>
+          prev.map((g) => (g.id === it.id ? { ...g, visible: newVisibility } : g))
+        );
+      } else if (it.type === 'customModel') {
+        setCustomModels((prev) =>
+          prev.map((m) => (m.id === it.id ? { ...m, visible: newVisibility } : m))
+        );
+      } else if (it.type === 'text3d') {
+        setCustom3DTexts((prev) =>
+          prev.map((t) => (t.id === it.id ? { ...t, visible: newVisibility } : t))
+        );
+      } else if (it.type === 'light') {
+        setCustomLights((prev) =>
+          prev.map((l) => (l.id === it.id ? { ...l, visible: newVisibility } : l))
+        );
+      } else if (it.type === 'mesh') {
+        const meshNode = findThreeObject('mesh', it.id);
+        if (meshNode) meshNode.visible = newVisibility;
+        setMeshList((prev) =>
+          prev.map((m) => (m.uuid === it.id ? { ...m, visible: newVisibility } : m))
+        );
+      }
+    });
+  }, [sceneGroups, findThreeObject]);
+
+  // Toggle Collapse State of a Group Card in Hierarchy
+  const handleToggleGroupCollapse = useCallback((groupId) => {
+    setSceneGroups((prev) =>
+      prev.map((g) => (g.id === groupId ? { ...g, collapsed: !(g.collapsed ?? false) } : g))
+    );
+  }, []);
+
+  // Update Group Display Name
+  const handleUpdateGroupName = useCallback((groupId, name) => {
+    setSceneGroups((prev) =>
+      prev.map((g) => (g.id === groupId ? { ...g, name } : g))
+    );
+  }, []);
+
+  const getMemberItemDetails = useCallback((item) => {
+    if (!item) return { name: 'Object', icon: 'deployed_code' };
+    if (item.type === 'geometry') {
+      const g = additionalGeometries.find((geom) => geom.id === item.id);
+      return { name: g ? g.name || g.type : '3D Shape', icon: 'deployed_code' };
+    } else if (item.type === 'customModel') {
+      const m = customModels.find((mod) => mod.id === item.id);
+      return { name: m ? m.name : '3D Model', icon: 'view_in_ar' };
+    } else if (item.type === 'text3d') {
+      const t = custom3DTexts.find((txt) => txt.id === item.id);
+      return { name: t ? `"${t.text}"` : '3D Text', icon: 'title' };
+    } else if (item.type === 'light') {
+      const l = customLights.find((lt) => lt.id === item.id);
+      return { name: l ? l.name || `${l.type} Light` : 'Light', icon: 'lightbulb' };
+    } else if (item.type === 'mesh') {
+      const m = meshList.find((mesh) => mesh.uuid === item.id);
+      return { name: m ? m.name : 'Mesh Part', icon: 'interests' };
+    }
+    return { name: 'Object', icon: 'deployed_code' };
+  }, [additionalGeometries, customModels, custom3DTexts, customLights, meshList]);
+
+  const getAvailableObjectsForGroup = useCallback((groupId) => {
+    const grp = sceneGroups.find((g) => g.id === groupId);
+    const currentKeys = new Set((grp?.itemIds || []).map((it) => `${it.type}:${it.id}`));
+    const available = [];
+
+    additionalGeometries.forEach((g) => {
+      if (!currentKeys.has(`geometry:${g.id}`)) {
+        available.push({ type: 'geometry', id: g.id, name: g.name || g.type, icon: 'deployed_code' });
+      }
+    });
+
+    customModels.forEach((m) => {
+      if (!currentKeys.has(`customModel:${m.id}`)) {
+        available.push({ type: 'customModel', id: m.id, name: m.name, icon: 'view_in_ar' });
+      }
+    });
+
+    custom3DTexts.forEach((t) => {
+      if (!currentKeys.has(`text3d:${t.id}`)) {
+        available.push({ type: 'text3d', id: t.id, name: `Text: "${t.text}"`, icon: 'title' });
+      }
+    });
+
+    customLights.forEach((l) => {
+      if (!currentKeys.has(`light:${l.id}`)) {
+        available.push({ type: 'light', id: l.id, name: l.name || `${l.type} Light`, icon: 'lightbulb' });
+      }
+    });
+
+    meshList.forEach((m) => {
+      if (!currentKeys.has(`mesh:${m.uuid}`)) {
+        available.push({ type: 'mesh', id: m.uuid, name: m.name, icon: 'interests' });
+      }
+    });
+
+    return available;
+  }, [sceneGroups, additionalGeometries, customModels, custom3DTexts, customLights, meshList]);
+
   const focusCameraOnSelectedObject = useCallback(() => {
     const tc = transformControlsRef.current;
     if (!tc || !tc.object) {
@@ -1991,7 +2647,28 @@ const ARTest = () => {
     }
     const targetObj = tc.object;
     targetObj.updateWorldMatrix(true, false);
-    const box = new THREE.Box3().setFromObject(targetObj);
+    const box = new THREE.Box3();
+
+    if (targetObj.userData?.isGroupPivot || targetObj.userData?.isMultiPivot) {
+      let memberCount = 0;
+      const targetItems = targetObj.userData?.isGroupPivot
+        ? (sceneGroupsRef.current.find((g) => g.id === targetObj.userData.groupId)?.itemIds || [])
+        : selectedObjectsRef.current;
+      targetItems.forEach((it) => {
+        const obj = findThreeObject(it.type, it.id);
+        if (obj) {
+          obj.updateWorldMatrix(true, false);
+          box.expandByObject(obj);
+          memberCount++;
+        }
+      });
+      if (memberCount === 0 || box.isEmpty()) {
+        box.setFromObject(targetObj);
+      }
+    } else {
+      box.setFromObject(targetObj);
+    }
+
     if (box.isEmpty()) {
       const p = targetObj.getWorldPosition(new THREE.Vector3());
       transitionCamera(new THREE.Vector3(p.x, p.y + 0.8, p.z + 2.0), p, 350);
@@ -2007,9 +2684,28 @@ const ARTest = () => {
     dist = Math.max(0.4, Math.min(dist, 8.0));
     const camPos = new THREE.Vector3(center.x, center.y + (maxDim * 0.25), center.z + dist);
     transitionCamera(camPos, center, 350);
-  }, [transitionCamera]);
+  }, [transitionCamera, findThreeObject]);
 
   const currentSelectedObjectInfo = useMemo(() => {
+    if (selectedTargetType === 'group' && selectedGroupId) {
+      const groupItem = sceneGroups.find((g) => g.id === selectedGroupId);
+      return {
+        type: 'group',
+        id: selectedGroupId,
+        name: groupItem ? groupItem.name : 'Group',
+        icon: 'workspaces',
+        itemCount: groupItem ? groupItem.itemIds.length : 0
+      };
+    }
+    if (selectedTargetType === 'multi' || selectedObjects.length > 1) {
+      return {
+        type: 'multi',
+        id: 'multi-selection',
+        name: `${selectedObjects.length} Objects Selected`,
+        icon: 'checklist',
+        itemCount: selectedObjects.length
+      };
+    }
     if (selectedCustomModelId) {
       const modelItem = customModels.find((m) => m.id === selectedCustomModelId);
       return {
@@ -2064,7 +2760,7 @@ const ARTest = () => {
       };
     }
     return null;
-  }, [selectedCustomModelId, selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, selectedTargetType, customModels, custom3DTexts, customLights, additionalGeometries, meshList]);
+  }, [selectedTargetType, selectedGroupId, selectedObjects, sceneGroups, selectedCustomModelId, selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, customModels, custom3DTexts, customLights, additionalGeometries, meshList]);
 
   // Staged Local Files for Portal
   const [selectedPortalSkyboxFile, setSelectedPortalSkyboxFile] = useState(null);
@@ -2578,60 +3274,118 @@ const ARTest = () => {
 
       if (validHit) {
         let curr = validHit.object;
+        let hitType = null;
+        let hitId = null;
+        let targetTab = null;
 
         // 1. Check for 3D Extruded Typography Text
-        while (curr) {
-          if (curr.userData?.textId) {
-            selectSceneObject('text3d', curr.userData.textId);
-            setActiveTab('text3d');
-            return;
+        let p = curr;
+        while (p) {
+          if (p.userData?.textId) {
+            hitType = 'text3d';
+            hitId = p.userData.textId;
+            targetTab = 'text3d';
+            break;
           }
-          curr = curr.parent;
+          p = p.parent;
         }
 
         // 2. Check for Custom Light Source
-        curr = validHit.object;
-        while (curr) {
-          if (curr.userData?.lightId) {
-            selectSceneObject('light', curr.userData.lightId);
-            setActiveTab('lighting');
-            return;
+        if (!hitType) {
+          p = curr;
+          while (p) {
+            if (p.userData?.lightId) {
+              hitType = 'light';
+              hitId = p.userData.lightId;
+              targetTab = 'lighting';
+              break;
+            }
+            p = p.parent;
           }
-          curr = curr.parent;
         }
 
         // 3. Check for Primitive 3D Geometry
-        curr = validHit.object;
-        while (curr) {
-          const gId = curr.userData?.geometryId || curr.userData?.id;
-          if (gId && (curr.userData?.isAdditionalGeometry || curr.userData?.type)) {
-            selectSceneObject('geometry', gId);
-            setActiveTab('shapes');
-            return;
+        if (!hitType) {
+          p = curr;
+          while (p) {
+            const gId = p.userData?.geometryId || p.userData?.id;
+            if (gId && (p.userData?.isAdditionalGeometry || p.userData?.type)) {
+              hitType = 'geometry';
+              hitId = gId;
+              targetTab = 'shapes';
+              break;
+            }
+            p = p.parent;
           }
-          curr = curr.parent;
         }
 
         // 4. Check for External Custom 3D Model
-        curr = validHit.object;
-        while (curr) {
-          if (curr.userData?.modelId && (curr.userData?.isCustomModel || curr.userData?.url)) {
-            selectSceneObject('customModel', curr.userData.modelId);
-            setActiveTab('hierarchy');
-            return;
+        if (!hitType) {
+          p = curr;
+          while (p) {
+            if (p.userData?.modelId && (p.userData?.isCustomModel || p.userData?.url)) {
+              hitType = 'customModel';
+              hitId = p.userData.modelId;
+              targetTab = 'hierarchy';
+              break;
+            }
+            p = p.parent;
           }
-          curr = curr.parent;
         }
 
         // 5. Center Model Submesh
-        if (validHit.object.isMesh && validHit.object.uuid) {
-          selectSceneObject('mesh', validHit.object.uuid);
+        if (!hitType && validHit.object.isMesh && validHit.object.uuid) {
+          hitType = 'mesh';
+          hitId = validHit.object.uuid;
+        }
+
+        if (hitType && hitId) {
+          const isMultiAction = Boolean(e.shiftKey || e.metaKey || e.ctrlKey || isMultiSelectMode);
+          if (isMultiAction) {
+            const parentGroup = sceneGroupsRef.current.find((g) =>
+              g.itemIds.some((it) => it.type === hitType && it.id === hitId)
+            );
+            if (parentGroup && groupSelectionMode === 'group') {
+              const allSelected = parentGroup.itemIds.every((it) =>
+                selectedObjectsRef.current.some((sel) => sel.type === it.type && sel.id === it.id)
+              );
+              if (allSelected) {
+                parentGroup.itemIds.forEach((it) => toggleObjectSelection(it.type, it.id));
+              } else {
+                parentGroup.itemIds.forEach((it) => {
+                  if (!selectedObjectsRef.current.some((sel) => sel.type === it.type && sel.id === it.id)) {
+                    toggleObjectSelection(it.type, it.id);
+                  }
+                });
+              }
+              return;
+            }
+
+            toggleObjectSelection(hitType, hitId);
+            return;
+          }
+
+          // Check if item belongs to a group and group selection mode is active
+          const parentGroup = sceneGroupsRef.current.find((g) =>
+            g.itemIds.some((it) => it.type === hitType && it.id === hitId)
+          );
+
+          if (parentGroup && groupSelectionMode === 'group') {
+            selectSceneObject('group', parentGroup.id);
+            setActiveTab('hierarchy');
+            return;
+          }
+
+          selectSceneObject(hitType, hitId);
+          if (targetTab) setActiveTab(targetTab);
           return;
         }
       }
 
-      // 6. Empty space clicked: Clear selection and detach gizmo
-      clearSelectionAndDetachGizmo();
+      // 6. Empty space clicked: Clear selection only if not holding modifier keys or multi-select mode
+      if (!e.shiftKey && !e.metaKey && !e.ctrlKey && !isMultiSelectMode) {
+        clearSelectionAndDetachGizmo();
+      }
     };
 
     const sceneContainer = document.getElementById('ar-scene-container');
@@ -2653,7 +3407,7 @@ const ARTest = () => {
       }
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
-  }, [meshList, isGizmoDragging, clearSelectionAndDetachGizmo, selectSceneObject]);
+  }, [meshList, isGizmoDragging, clearSelectionAndDetachGizmo, selectSceneObject, toggleObjectSelection, isMultiSelectMode, groupSelectionMode]);
 
   // =========================================================================
   // TRANSFORM CONTROLS GIZMO LIFECYCLE IN AFRAME/THREE.JS
@@ -2691,11 +3445,102 @@ const ARTest = () => {
           if (orbit) {
             orbit.enabled = !isDragging;
           }
+
+          if (isDragging) {
+            const targetObj = tc.object;
+            if (targetObj && (targetObj.userData?.isGroupPivot || targetObj.userData?.isMultiPivot)) {
+              threeScene.updateMatrixWorld(true);
+              targetObj.updateMatrixWorld(true);
+              const startPivotMatrix = targetObj.matrixWorld.clone();
+              const invStartPivot = new THREE.Matrix4().copy(startPivotMatrix).invert();
+
+              let targetItems = [];
+              const groupId = targetObj.userData?.groupId;
+              if (groupId) {
+                const grp = sceneGroupsRef.current.find((g) => g.id === groupId);
+                if (grp) targetItems = grp.itemIds;
+              } else if (targetObj.userData?.isMultiPivot) {
+                targetItems = selectedObjectsRef.current;
+              }
+
+              const members = [];
+              targetItems.forEach((item) => {
+                const obj3d = findThreeObject(item.type, item.id);
+                if (obj3d) {
+                  obj3d.updateMatrixWorld(true);
+                  const startWorldMatrix = obj3d.matrixWorld.clone();
+                  const relMatrix = new THREE.Matrix4().multiplyMatrices(invStartPivot, startWorldMatrix);
+                  members.push({
+                    type: item.type,
+                    id: item.id,
+                    obj3d,
+                    relMatrix,
+                    startWorldMatrix
+                  });
+                }
+              });
+
+              activeGroupDragRef.current = {
+                pivot: targetObj,
+                startPivotMatrix,
+                invStartPivot,
+                members,
+                groupId: groupId || null,
+                isMulti: Boolean(targetObj.userData?.isMultiPivot)
+              };
+            }
+          } else {
+            if (activeGroupDragRef.current) {
+              const { pivot, members, groupId } = activeGroupDragRef.current;
+              commitMemberTransformsToState(members);
+              if (groupId) {
+                setSceneGroups((prev) =>
+                  prev.map((g) => {
+                    if (g.id === groupId) {
+                      return {
+                        ...g,
+                        posX: Number(pivot.position.x.toFixed(3)),
+                        posY: Number(pivot.position.y.toFixed(3)),
+                        posZ: Number(pivot.position.z.toFixed(3)),
+                        rotX: Number(THREE.MathUtils.radToDeg(pivot.rotation.x).toFixed(1)),
+                        rotY: Number(THREE.MathUtils.radToDeg(pivot.rotation.y).toFixed(1)),
+                        rotZ: Number(THREE.MathUtils.radToDeg(pivot.rotation.z).toFixed(1)),
+                        scale: Number(pivot.scale.x.toFixed(3)),
+                        scaleX: Number(pivot.scale.x.toFixed(3)),
+                        scaleY: Number(pivot.scale.y.toFixed(3)),
+                        scaleZ: Number(pivot.scale.z.toFixed(3))
+                      };
+                    }
+                    return g;
+                  })
+                );
+              }
+              activeGroupDragRef.current = null;
+            }
+          }
         });
 
         tc.addEventListener('objectChange', () => {
           if (tc.object) {
-            handleGizmoObjectChange(tc.object);
+            if (activeGroupDragRef.current && (tc.object.userData?.isGroupPivot || tc.object.userData?.isMultiPivot)) {
+              const { pivot, members } = activeGroupDragRef.current;
+              pivot.updateMatrixWorld(true);
+              const currentPivotWorld = pivot.matrixWorld;
+              members.forEach((m) => {
+                if (!m.obj3d) return;
+                const newWorldMatrix = new THREE.Matrix4().multiplyMatrices(currentPivotWorld, m.relMatrix);
+                if (m.obj3d.parent) {
+                  const invParent = new THREE.Matrix4().copy(m.obj3d.parent.matrixWorld).invert();
+                  const targetLocal = new THREE.Matrix4().multiplyMatrices(invParent, newWorldMatrix);
+                  targetLocal.decompose(m.obj3d.position, m.obj3d.quaternion, m.obj3d.scale);
+                } else {
+                  newWorldMatrix.decompose(m.obj3d.position, m.obj3d.quaternion, m.obj3d.scale);
+                }
+                m.obj3d.updateMatrixWorld(true);
+              });
+            } else {
+              handleGizmoObjectChange(tc.object);
+            }
           }
         });
 
@@ -2736,7 +3581,7 @@ const ARTest = () => {
         window.__activeGizmoTarget = null;
       }
     };
-  }, [handleGizmoObjectChange]);
+  }, [handleGizmoObjectChange, findThreeObject, commitMemberTransformsToState]);
 
   // Update TransformControls Mode, Coordinate Space & Snap
   useEffect(() => {
@@ -2767,7 +3612,52 @@ const ARTest = () => {
     let retryInterval = null;
 
     const resolveTargetObject = () => {
-      if (selectedTargetType === 'text3d' && selectedText3DId) {
+      if (selectedTargetType === 'group' && selectedGroupId) {
+        const currentGroup = sceneGroups.find((g) => g.id === selectedGroupId);
+        if (currentGroup) {
+          const sceneEl = document.querySelector('a-scene');
+          const threeScene = sceneEl?.object3D;
+          if (threeScene) {
+            let pivot = threeScene.getObjectByName(`starwear-group-pivot-${selectedGroupId}`);
+            if (!pivot) {
+              pivot = new THREE.Group();
+              pivot.name = `starwear-group-pivot-${selectedGroupId}`;
+              pivot.userData = { isGroupPivot: true, groupId: selectedGroupId };
+              threeScene.add(pivot);
+            }
+            pivot.position.set(currentGroup.posX || 0, currentGroup.posY || 0, currentGroup.posZ || 0);
+            pivot.rotation.set(
+              THREE.MathUtils.degToRad(currentGroup.rotX || 0),
+              THREE.MathUtils.degToRad(currentGroup.rotY || 0),
+              THREE.MathUtils.degToRad(currentGroup.rotZ || 0)
+            );
+            const sx = currentGroup.scaleX ?? currentGroup.scale ?? 1;
+            const sy = currentGroup.scaleY ?? currentGroup.scale ?? 1;
+            const sz = currentGroup.scaleZ ?? currentGroup.scale ?? 1;
+            pivot.scale.set(sx, sy, sz);
+            pivot.updateMatrixWorld(true);
+            return pivot;
+          }
+        }
+      } else if ((selectedTargetType === 'multi' || selectedObjects.length > 1) && selectedObjects.length > 0) {
+        const sceneEl = document.querySelector('a-scene');
+        const threeScene = sceneEl?.object3D;
+        if (threeScene) {
+          let pivot = threeScene.getObjectByName('starwear-multi-selection-pivot');
+          if (!pivot) {
+            pivot = new THREE.Group();
+            pivot.name = 'starwear-multi-selection-pivot';
+            pivot.userData = { isMultiPivot: true };
+            threeScene.add(pivot);
+          }
+          const center = computeObjectsCentroid(selectedObjects);
+          pivot.position.copy(center);
+          pivot.rotation.set(0, 0, 0);
+          pivot.scale.set(1, 1, 1);
+          pivot.updateMatrixWorld(true);
+          return pivot;
+        }
+      } else if (selectedTargetType === 'text3d' && selectedText3DId) {
         const textAnchor = document.getElementById('ar-3d-texts-anchor');
         const root = textAnchor?.getObject3D('texts3DRoot') || textAnchor?.object3D;
         if (root) {
@@ -2938,54 +3828,97 @@ const ARTest = () => {
       }
       window.removeEventListener('starwear-custom-model-loaded', onModelLoadedEvent);
     };
-  }, [gizmoReady, selectedTargetType, selectedCustomModelId, selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, customModels, custom3DTexts, customLights, additionalGeometries]);
+  }, [gizmoReady, selectedTargetType, selectedGroupId, selectedObjects, sceneGroups, selectedCustomModelId, selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, customModels, custom3DTexts, customLights, additionalGeometries, computeObjectsCentroid]);
 
-  // Visual 3D Selection Box Helper on the selected mesh
+  // Visual 3D Selection Box Helper on the selected object(s) or group
   useEffect(() => {
     const sceneEl = document.querySelector('a-scene');
     if (!sceneEl || !sceneEl.object3D) return;
     const threeScene = sceneEl.object3D;
 
-    const oldHelper = threeScene.getObjectByName('selected-mesh-box-helper');
-    if (oldHelper) {
-      threeScene.remove(oldHelper);
-      if (oldHelper.geometry) oldHelper.geometry.dispose();
-    }
-
-    if (selectedMeshUuid) {
-      const modelEl = document.getElementById('ar-model');
-      if (!modelEl) return;
-      const model3D = modelEl.getObject3D('mesh');
-      if (!model3D) return;
-
-      let targetNode = null;
-      model3D.traverse((node) => {
-        if (node.uuid === selectedMeshUuid && node.isMesh) {
-          targetNode = node;
+    const oldHelperGroup = threeScene.getObjectByName('starwear-selection-box-helpers');
+    if (oldHelperGroup) {
+      threeScene.remove(oldHelperGroup);
+      oldHelperGroup.traverse((c) => {
+        if (c.geometry) c.geometry.dispose();
+        if (c.material) {
+          if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose());
+          else c.material.dispose();
         }
       });
+    }
 
-      if (targetNode) {
-        const helper = new THREE.BoxHelper(targetNode, 0x6366f1);
-        helper.name = 'selected-mesh-box-helper';
-        helper.renderOrder = 999;
-        if (helper.material) {
-          helper.material.depthTest = false;
-          helper.material.transparent = true;
-          helper.material.opacity = 0.85;
-        }
-        threeScene.add(helper);
+    const oldMeshHelper = threeScene.getObjectByName('selected-mesh-box-helper');
+    if (oldMeshHelper) {
+      threeScene.remove(oldMeshHelper);
+      if (oldMeshHelper.geometry) oldMeshHelper.geometry.dispose();
+    }
+
+    let itemsToHighlight = [];
+    let helperColor = 0x6366f1;
+
+    if (selectedTargetType === 'group' && selectedGroupId) {
+      const grp = sceneGroups.find((g) => g.id === selectedGroupId);
+      if (grp) {
+        itemsToHighlight = grp.itemIds;
+        helperColor = 0xa855f7; // purple for groups
       }
+    } else if ((selectedTargetType === 'multi' || selectedObjects.length > 1) && selectedObjects.length > 0) {
+      itemsToHighlight = selectedObjects;
+      helperColor = 0x38bdf8; // sky blue for multi-selection
+    } else if (selectedObjects.length === 1) {
+      itemsToHighlight = selectedObjects;
+    } else if (selectedMeshUuid) {
+      itemsToHighlight = [{ type: 'mesh', id: selectedMeshUuid }];
+    } else if (selectedGeometryId) {
+      itemsToHighlight = [{ type: 'geometry', id: selectedGeometryId }];
+      helperColor = 0x14b8a6;
+    } else if (selectedCustomModelId) {
+      itemsToHighlight = [{ type: 'customModel', id: selectedCustomModelId }];
+      helperColor = 0xa855f7;
+    } else if (selectedText3DId) {
+      itemsToHighlight = [{ type: 'text3d', id: selectedText3DId }];
+      helperColor = 0xf59e0b;
+    } else if (selectedLightId) {
+      itemsToHighlight = [{ type: 'light', id: selectedLightId }];
+      helperColor = 0xf43f5e;
+    }
+
+    if (itemsToHighlight.length === 0) return;
+
+    const helperGroup = new THREE.Group();
+    helperGroup.name = 'starwear-selection-box-helpers';
+
+    itemsToHighlight.forEach((item) => {
+      const targetNode = findThreeObject(item.type, item.id);
+      if (targetNode) {
+        try {
+          const boxHelper = new THREE.BoxHelper(targetNode, helperColor);
+          boxHelper.renderOrder = 999;
+          if (boxHelper.material) {
+            boxHelper.material.depthTest = false;
+            boxHelper.material.transparent = true;
+            boxHelper.material.opacity = 0.85;
+          }
+          helperGroup.add(boxHelper);
+        } catch {}
+      }
+    });
+
+    if (helperGroup.children.length > 0) {
+      threeScene.add(helperGroup);
     }
 
     return () => {
-      const helper = threeScene.getObjectByName('selected-mesh-box-helper');
-      if (helper) {
-        threeScene.remove(helper);
-        if (helper.geometry) helper.geometry.dispose();
+      const hg = threeScene.getObjectByName('starwear-selection-box-helpers');
+      if (hg) {
+        threeScene.remove(hg);
+        hg.traverse((c) => {
+          if (c.geometry) c.geometry.dispose();
+        });
       }
     };
-  }, [selectedMeshUuid, meshList]);
+  }, [selectedTargetType, selectedGroupId, selectedObjects, selectedMeshUuid, selectedGeometryId, selectedCustomModelId, selectedText3DId, selectedLightId, sceneGroups, findThreeObject]);
 
   // Helper: Find selected mesh object metadata from state
   const selectedMesh = meshList.find((m) => m.uuid === selectedMeshUuid) || null;
@@ -3380,10 +4313,26 @@ const ARTest = () => {
 
   // Studio4D4 & AR Keyboard Shortcuts:
   // W: Translate mode, E: Rotate mode, R: Scale mode, Q: Cycle mode, Esc: Deselect, F: Frame, M: Toggle Marker
+  // Ctrl/Cmd+G: Group selected objects, Ctrl/Cmd+Shift+G: Ungroup selected group
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
       const k = e.key.toLowerCase();
+
+      if ((e.metaKey || e.ctrlKey) && k === 'g') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          if (selectedGroupId) {
+            handleUngroup(selectedGroupId);
+          }
+        } else {
+          if (selectedObjects.length > 0) {
+            handleCreateGroupFromSelection();
+          }
+        }
+        return;
+      }
+
       if (k === 'w') {
         setGizmoMode('translate');
       } else if (k === 'e') {
@@ -3406,7 +4355,7 @@ const ARTest = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedMeshUuid, focusCameraOnMesh, focusCameraOnSelectedObject, clearSelectionAndDetachGizmo]);
+  }, [selectedMeshUuid, focusCameraOnMesh, focusCameraOnSelectedObject, clearSelectionAndDetachGizmo, selectedGroupId, selectedObjects, handleUngroup, handleCreateGroupFromSelection]);
 
   // Target Marker Alignment & Calibration Actions
   const MARKER_PRESETS = [
@@ -3672,6 +4621,14 @@ const ARTest = () => {
     }
 
     setMeshList((prev) => prev.filter((m) => m.uuid !== uuid && m.name !== meshName));
+
+    setSceneGroups((prev) =>
+      prev.map((g) => ({
+        ...g,
+        itemIds: g.itemIds.filter((it) => !(it.type === 'mesh' && it.id === uuid))
+      }))
+    );
+    setSelectedObjects((prev) => prev.filter((it) => !(it.type === 'mesh' && it.id === uuid)));
 
     if (selectedMeshUuid === uuid) {
       selectSceneObject('model');
@@ -4738,6 +5695,14 @@ const ARTest = () => {
         setCustomModels([]);
       }
 
+      // Populate Scene Groups if configured on batch
+      const loadedGroups = cfg.sceneGroups || data.sceneGroups || data.arExperience?.sceneGroups || null;
+      if (Array.isArray(loadedGroups)) {
+        setSceneGroups(loadedGroups);
+      } else {
+        setSceneGroups([]);
+      }
+
       if (cfg && cfg.meshOverrides) {
         const loadedDeleted = Object.entries(cfg.meshOverrides)
           .filter(([_, ovr]) => ovr && ovr.deleted)
@@ -4749,11 +5714,13 @@ const ARTest = () => {
 
       // Target Marker Reference Settings
       const markerCfg = cfg?.markerConfig || cfg?.targetMarker || null;
+      let validMarkerUrl = '';
       if (markerCfg) {
         if (markerCfg.visible !== undefined) setMarkerVisible(Boolean(markerCfg.visible));
         if (markerCfg.opacity !== undefined) setMarkerOpacity(Number(markerCfg.opacity));
         if (markerCfg.width !== undefined) setMarkerWidth(Number(markerCfg.width));
-        if (markerCfg.imageUrl) {
+        if (markerCfg.imageUrl && typeof markerCfg.imageUrl === 'string' && !markerCfg.imageUrl.startsWith('blob:')) {
+          validMarkerUrl = markerCfg.imageUrl;
           setMarkerImageUrl(markerCfg.imageUrl);
           if (markerCfg.aspectRatio) setMarkerAspectRatio(Number(markerCfg.aspectRatio));
           setMarkerInfo({ width: markerCfg.widthPx, height: markerCfg.heightPx, source: 'batch_config' });
@@ -4763,7 +5730,7 @@ const ARTest = () => {
       // Automatically load/extract marker from batch (marker image, Firebase Storage path, or .mind file)
       const batchMarkerPayload = {
         batchId: batchId.trim(),
-        customMarkerUrl: markerCfg?.imageUrl || null,
+        customMarkerUrl: validMarkerUrl || null,
         data,
         batchData: (typeof batchSnap !== 'undefined' && batchSnap?.exists()) ? batchSnap.data() : null,
         assetData: (typeof assetSnap !== 'undefined' && assetSnap?.exists()) ? assetSnap.data() : null,
@@ -4901,7 +5868,7 @@ const ARTest = () => {
         opacity: Number(markerOpacity),
         width: Number(markerWidth),
         aspectRatio: Number(markerAspectRatio),
-        imageUrl: (markerImageUrl && !markerImageUrl.startsWith('data:')) ? markerImageUrl : (markerInfo?.source === 'custom' ? markerImageUrl : ''),
+        imageUrl: (markerImageUrl && typeof markerImageUrl === 'string' && !markerImageUrl.startsWith('blob:') && !markerImageUrl.startsWith('data:')) ? markerImageUrl : (markerInfo?.source === 'custom' && !markerImageUrl?.startsWith('blob:') ? markerImageUrl : ''),
         widthPx: markerInfo?.width,
         heightPx: markerInfo?.height,
         source: markerInfo?.source
@@ -4995,6 +5962,7 @@ const ARTest = () => {
       customModels: (customModels || []).map(({ file, ...rest }) => rest),
       custom3DTexts: custom3DTexts || [],
       customLights: customLights || [],
+      sceneGroups: sceneGroups || [],
       updatedAt: new Date().toISOString()
     };
   };
@@ -5024,7 +5992,8 @@ const ARTest = () => {
           customModels: currentConfig.customModels || [],
           additionalGeometries: currentConfig.additionalGeometries || [],
           custom3DTexts: currentConfig.custom3DTexts || [],
-          customLights: currentConfig.customLights || []
+          customLights: currentConfig.customLights || [],
+          sceneGroups: currentConfig.sceneGroups || []
         };
         const launchBatch = writeBatch(db);
         launchBatch.set(batchRef, syncPayload, { merge: true });
@@ -5404,7 +6373,7 @@ const ARTest = () => {
           opacity: Number(markerOpacity),
           width: Number(markerWidth),
           aspectRatio: Number(markerAspectRatio),
-          imageUrl: (finalMarkerImageUrl && !finalMarkerImageUrl.startsWith('data:')) ? finalMarkerImageUrl : (markerInfo?.source === 'custom' ? finalMarkerImageUrl : ''),
+          imageUrl: (finalMarkerImageUrl && typeof finalMarkerImageUrl === 'string' && !finalMarkerImageUrl.startsWith('blob:') && !finalMarkerImageUrl.startsWith('data:')) ? finalMarkerImageUrl : (markerInfo?.source === 'custom' && !finalMarkerImageUrl?.startsWith('blob:') ? finalMarkerImageUrl : ''),
           widthPx: markerInfo?.width,
           heightPx: markerInfo?.height,
           source: markerInfo?.source,
@@ -5414,6 +6383,7 @@ const ARTest = () => {
         customModels: cleanedCustomModels,
         custom3DTexts: custom3DTexts || [],
         customLights: customLights || [],
+        sceneGroups: sceneGroups || [],
         updatedAt: new Date().toISOString()
       };
 
@@ -5438,6 +6408,7 @@ const ARTest = () => {
         customModels: cleanedCustomModels,
         custom3DTexts: custom3DTexts || [],
         customLights: customLights || [],
+        sceneGroups: sceneGroups || [],
         ambientColor,
         ambientIntensity,
         dir1Color,
@@ -6473,6 +7444,643 @@ const ARTest = () => {
                 </div>
               </div>
 
+              {/* Scene Groups & Multi-Select Management Section */}
+              <div className="p-3 bg-neutral-900/70 border border-neutral-800 rounded-xl space-y-3 shadow-xs">
+                {/* Header with Mode Toggles and New Group Action */}
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-base text-amber-400">folder_copy</span>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-200">
+                      Scene Groups ({sceneGroups.length})
+                    </h3>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {/* Multi-Select Mode Toggle */}
+                    <button
+                      type="button"
+                      onClick={() => setIsMultiSelectMode((prev) => !prev)}
+                      className={`px-2 py-1 rounded text-[10px] font-mono font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                        isMultiSelectMode
+                          ? 'bg-amber-500 text-black shadow-xs ring-1 ring-amber-400'
+                          : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border border-neutral-700'
+                      }`}
+                      title={isMultiSelectMode ? 'Multi-select mode is ON. Click objects to select/deselect them.' : 'Enable Multi-select mode (or hold Shift / Cmd / Ctrl while clicking)'}
+                    >
+                      <span className="material-symbols-outlined text-xs">
+                        {isMultiSelectMode ? 'checklist_rtl' : 'checklist'}
+                      </span>
+                      <span>{isMultiSelectMode ? 'Multi-Select [ON]' : 'Multi-Select'}</span>
+                    </button>
+
+                    {/* Group Selection Mode Toggle */}
+                    <button
+                      type="button"
+                      onClick={() => setGroupSelectionMode((prev) => (prev === 'group' ? 'direct' : 'group'))}
+                      className={`px-2 py-1 rounded text-[10px] font-mono font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                        groupSelectionMode === 'group'
+                          ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/50'
+                          : 'bg-neutral-800 text-neutral-400 hover:text-neutral-200 border border-neutral-700'
+                      }`}
+                      title={
+                        groupSelectionMode === 'group'
+                          ? 'Group Selection Mode: Clicking any object in viewport selects its entire parent group.'
+                          : 'Direct Selection Mode: Clicking an object selects only that object directly, even if in a group.'
+                      }
+                    >
+                      <span className="material-symbols-outlined text-xs">
+                        {groupSelectionMode === 'group' ? 'workspaces' : 'near_me'}
+                      </span>
+                      <span>{groupSelectionMode === 'group' ? 'Group Select' : 'Direct Select'}</span>
+                    </button>
+
+                    {/* Create Group Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedObjects.length > 0) {
+                          handleCreateGroupFromSelection();
+                        } else {
+                          handleCreateEmptyGroup();
+                        }
+                      }}
+                      className="px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                      title={
+                        selectedObjects.length > 0
+                          ? `Group ${selectedObjects.length} currently selected objects`
+                          : 'Create a new empty group container'
+                      }
+                    >
+                      <span className="material-symbols-outlined text-xs">create_new_folder</span>
+                      <span>
+                        {selectedObjects.length > 1
+                          ? `Group (${selectedObjects.length})`
+                          : '+ Group'}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Groups List */}
+                {sceneGroups.length === 0 ? (
+                  <div className="p-2.5 rounded-lg bg-black/40 border border-neutral-800/80 text-center space-y-1">
+                    <p className="text-[11px] text-neutral-400">
+                      No groups created yet.
+                    </p>
+                    <p className="text-[10px] text-neutral-500">
+                      Select multiple objects (hold Shift / Cmd or turn on Multi-Select) and click <strong className="text-amber-400">+ Group</strong> to transform them together with a unified gizmo.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 max-h-56 overflow-y-auto pr-0.5">
+                    {sceneGroups.map((group) => {
+                      const isSelected = selectedTargetType === 'group' && selectedGroupId === group.id;
+                      const isCollapsed = Boolean(group.collapsed);
+                      const availableToAdd = getAvailableObjectsForGroup(group.id);
+
+                      return (
+                        <div
+                          key={group.id}
+                          className={`rounded-lg border transition-all ${
+                            isSelected
+                              ? 'bg-amber-950/30 border-amber-500 shadow-md ring-1 ring-amber-500/40'
+                              : 'bg-neutral-900/80 border-neutral-800 hover:border-neutral-700'
+                          }`}
+                        >
+                          {/* Group Header Bar */}
+                          <div
+                            onClick={() => selectGroup(group.id)}
+                            className="p-2 flex items-center justify-between cursor-pointer select-none"
+                          >
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleGroupCollapse(group.id);
+                                }}
+                                className="w-5 h-5 flex items-center justify-center text-neutral-400 hover:text-white rounded hover:bg-neutral-800 transition-colors"
+                                title={isCollapsed ? 'Expand group members' : 'Collapse group members'}
+                              >
+                                <span className="material-symbols-outlined text-sm">
+                                  {isCollapsed ? 'chevron_right' : 'expand_more'}
+                                </span>
+                              </button>
+                              <span className="material-symbols-outlined text-sm text-amber-400 shrink-0">
+                                {isCollapsed ? 'folder' : 'folder_open'}
+                              </span>
+                              <span className="text-xs font-bold text-neutral-200 truncate">
+                                {group.name}
+                              </span>
+                              <span className="text-[9px] bg-neutral-800 text-neutral-400 px-1.5 py-0.2 rounded font-mono shrink-0">
+                                {group.itemIds.length} {group.itemIds.length === 1 ? 'object' : 'objects'}
+                              </span>
+                              {isSelected && (
+                                <span className="text-[8px] bg-amber-500/30 text-amber-300 border border-amber-500/50 px-1 py-0.2 rounded font-mono font-bold shrink-0">
+                                  ACTIVE
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Group Actions */}
+                            <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  selectGroup(group.id);
+                                  focusCameraOnSelectedObject();
+                                }}
+                                className="w-6 h-6 rounded flex items-center justify-center text-cyan-400 hover:text-cyan-200 hover:bg-cyan-950/60 transition-colors cursor-pointer"
+                                title={`Focus camera on ${group.name}`}
+                              >
+                                <span className="material-symbols-outlined text-xs">filter_center_focus</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleGroupVisibility(group.id)}
+                                className={`w-6 h-6 rounded flex items-center justify-center transition-colors cursor-pointer ${
+                                  group.visible !== false
+                                    ? 'text-neutral-400 hover:text-white'
+                                    : 'text-neutral-600 hover:text-neutral-400'
+                                }`}
+                                title={group.visible !== false ? 'Hide group objects' : 'Show group objects'}
+                              >
+                                <span className="material-symbols-outlined text-xs">
+                                  {group.visible !== false ? 'visibility' : 'visibility_off'}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUngroup(group.id)}
+                                className="w-6 h-6 rounded flex items-center justify-center text-amber-400 hover:text-amber-200 hover:bg-amber-950/60 transition-colors cursor-pointer"
+                                title={`Ungroup ${group.name} (preserves member positions)`}
+                              >
+                                <span className="material-symbols-outlined text-xs">layers_clear</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteGroup(group.id, false)}
+                                className="w-6 h-6 rounded flex items-center justify-center text-red-400 hover:text-red-200 hover:bg-red-950/60 transition-colors cursor-pointer"
+                                title={`Delete group container ${group.name}`}
+                              >
+                                <span className="material-symbols-outlined text-xs">delete</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Expanded Group Body */}
+                          {!isCollapsed && (
+                            <div className="px-2.5 pb-2.5 pt-1 border-t border-neutral-800/80 space-y-2">
+                              {/* Member list */}
+                              {group.itemIds.length === 0 ? (
+                                <p className="text-[10px] text-neutral-500 italic py-1">
+                                  No objects in this group yet. Select an object below to add.
+                                </p>
+                              ) : (
+                                <div className="space-y-1">
+                                  {group.itemIds.map((item) => {
+                                    const details = getMemberItemDetails(item);
+                                    const isItemDirectlySelected = selectedTargetType === item.type && (
+                                      (item.type === 'mesh' && selectedMeshUuid === item.id) ||
+                                      (item.type === 'geometry' && selectedGeometryId === item.id) ||
+                                      (item.type === 'customModel' && selectedCustomModelId === item.id) ||
+                                      (item.type === 'text3d' && selectedText3DId === item.id) ||
+                                      (item.type === 'light' && selectedLightId === item.id)
+                                    );
+
+                                    return (
+                                      <div
+                                        key={`${item.type}:${item.id}`}
+                                        className={`flex items-center justify-between p-1.5 rounded text-xs transition-colors ${
+                                          isItemDirectlySelected
+                                            ? 'bg-indigo-950/40 border border-indigo-500/50'
+                                            : 'bg-black/40 border border-neutral-800/70 hover:border-neutral-700'
+                                        }`}
+                                      >
+                                        <div
+                                          onClick={(e) => {
+                                            if (e.shiftKey || e.metaKey || e.ctrlKey || isMultiSelectMode) {
+                                              toggleObjectSelection(item.type, item.id);
+                                            } else {
+                                              selectSceneObject(item.type, item.id);
+                                            }
+                                          }}
+                                          className="flex items-center gap-1.5 min-w-0 cursor-pointer flex-1"
+                                          title={`Click to directly select ${details.name}`}
+                                        >
+                                          <span className="material-symbols-outlined text-xs text-neutral-400 shrink-0">
+                                            {details.icon}
+                                          </span>
+                                          <span className="text-[11px] font-medium text-neutral-300 truncate">
+                                            {details.name}
+                                          </span>
+                                          <span className="text-[9px] text-neutral-500 font-mono capitalize">
+                                            ({item.type})
+                                          </span>
+                                        </div>
+
+                                        <div className="flex items-center gap-1 shrink-0">
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              if (e.shiftKey || e.metaKey || e.ctrlKey || isMultiSelectMode) {
+                                                toggleObjectSelection(item.type, item.id);
+                                              } else {
+                                                selectSceneObject(item.type, item.id);
+                                              }
+                                            }}
+                                            className="px-1.5 py-0.5 text-[9px] bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded font-mono transition-colors cursor-pointer"
+                                            title="Directly select this object"
+                                          >
+                                            Select
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleRemoveFromGroup(group.id, item)}
+                                            className="w-5 h-5 flex items-center justify-center text-neutral-500 hover:text-red-400 rounded hover:bg-red-950/40 transition-colors cursor-pointer"
+                                            title="Remove object from this group"
+                                          >
+                                            <span className="material-symbols-outlined text-xs">close</span>
+                                          </button>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              {/* Add Object to Group Dropdown */}
+                              {availableToAdd.length > 0 && (
+                                <div className="pt-1">
+                                  <select
+                                    defaultValue=""
+                                    onChange={(e) => {
+                                      if (e.target.value) {
+                                        const [type, id] = e.target.value.split('::');
+                                        handleAddToGroup(group.id, { type, id });
+                                        e.target.value = '';
+                                      }
+                                    }}
+                                    className="w-full px-2 py-1 bg-black/60 border border-neutral-800 hover:border-neutral-700 rounded text-[10px] text-neutral-300 font-mono focus:outline-none focus:border-amber-500 cursor-pointer"
+                                  >
+                                    <option value="" disabled>
+                                      + Add Object to Group ({availableToAdd.length} available)...
+                                    </option>
+                                    {availableToAdd.map((obj) => (
+                                      <option key={`${obj.type}::${obj.id}`} value={`${obj.type}::${obj.id}`}>
+                                        [{obj.type.toUpperCase()}] {obj.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Selected Group Inspector (Transform Controls & Details) */}
+                {(() => {
+                  if (selectedTargetType !== 'group' || !selectedGroupId) return null;
+                  const currentGroup = sceneGroups.find((g) => g.id === selectedGroupId);
+                  if (!currentGroup) return null;
+
+                  return (
+                    <div className="p-3 bg-neutral-900/95 rounded-xl border border-amber-500/40 space-y-3 shadow-sm">
+                      <div className="flex items-center justify-between border-b border-neutral-800 pb-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="material-symbols-outlined text-amber-400 text-sm">tune</span>
+                          <div>
+                            <h4 className="text-xs font-bold text-white truncate max-w-[180px]">
+                              {currentGroup.name}
+                            </h4>
+                            <span className="text-[9px] text-amber-400 font-mono">
+                              Group Transform Inspector ({currentGroup.itemIds.length} objects)
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={focusCameraOnSelectedObject}
+                            className="px-2 py-1 bg-cyan-600/30 hover:bg-cyan-600/50 text-cyan-300 border border-cyan-500/40 rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Focus camera on this group"
+                          >
+                            <span className="material-symbols-outlined text-xs">filter_center_focus</span>
+                            Focus
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleUngroup(currentGroup.id)}
+                            className="px-2 py-1 bg-amber-600/30 hover:bg-amber-600/50 text-amber-300 border border-amber-500/40 rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                            title="Ungroup objects"
+                          >
+                            <span className="material-symbols-outlined text-xs">layers_clear</span>
+                            Ungroup
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Group Name Input */}
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                          Group Name
+                        </label>
+                        <input
+                          type="text"
+                          value={currentGroup.name}
+                          onChange={(e) => handleUpdateGroupName(currentGroup.id, e.target.value)}
+                          className="w-full px-2.5 py-1.5 bg-black/60 border border-neutral-800 rounded text-xs text-neutral-200 focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+
+                      {/* Position X, Y, Z */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                          <span>Group Position (X, Y, Z)</span>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateGroupTransform(currentGroup.id, { posX: 0, posY: 0, posZ: 0 })}
+                            className="text-[9px] text-amber-400 hover:underline cursor-pointer"
+                          >
+                            Reset (0,0,0)
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <NumberSliderInput
+                            label="X"
+                            value={currentGroup.posX ?? 0}
+                            onChange={(val) => handleUpdateGroupTransform(currentGroup.id, { posX: val })}
+                            min={-10}
+                            max={10}
+                            step={0.05}
+                            color="rose"
+                            showRange={false}
+                            stepButtons={false}
+                          />
+                          <NumberSliderInput
+                            label="Y"
+                            value={currentGroup.posY ?? 0}
+                            onChange={(val) => handleUpdateGroupTransform(currentGroup.id, { posY: val })}
+                            min={-10}
+                            max={10}
+                            step={0.05}
+                            color="emerald"
+                            showRange={false}
+                            stepButtons={false}
+                          />
+                          <NumberSliderInput
+                            label="Z"
+                            value={currentGroup.posZ ?? 0}
+                            onChange={(val) => handleUpdateGroupTransform(currentGroup.id, { posZ: val })}
+                            min={-10}
+                            max={10}
+                            step={0.05}
+                            color="sky"
+                            showRange={false}
+                            stepButtons={false}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Rotation Pitch, Yaw, Roll */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                          <span>Group Rotation (Degrees)</span>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateGroupTransform(currentGroup.id, { rotX: 0, rotY: 0, rotZ: 0 })}
+                            className="text-[9px] text-amber-400 hover:underline cursor-pointer"
+                          >
+                            Reset
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <NumberSliderInput
+                            label="Rot X"
+                            value={currentGroup.rotX ?? 0}
+                            onChange={(val) => handleUpdateGroupTransform(currentGroup.id, { rotX: val })}
+                            min={-180}
+                            max={180}
+                            step={5}
+                            color="rose"
+                            showRange={false}
+                            stepButtons={false}
+                          />
+                          <NumberSliderInput
+                            label="Rot Y"
+                            value={currentGroup.rotY ?? 0}
+                            onChange={(val) => handleUpdateGroupTransform(currentGroup.id, { rotY: val })}
+                            min={-180}
+                            max={180}
+                            step={5}
+                            color="emerald"
+                            showRange={false}
+                            stepButtons={false}
+                          />
+                          <NumberSliderInput
+                            label="Rot Z"
+                            value={currentGroup.rotZ ?? 0}
+                            onChange={(val) => handleUpdateGroupTransform(currentGroup.id, { rotZ: val })}
+                            min={-180}
+                            max={180}
+                            step={5}
+                            color="sky"
+                            showRange={false}
+                            stepButtons={false}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Group Scale */}
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                          <span>Group Scale</span>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateGroupTransform(currentGroup.id, { scale: 1, scaleX: 1, scaleY: 1, scaleZ: 1 })}
+                            className="text-[9px] text-amber-400 hover:underline cursor-pointer"
+                          >
+                            Reset 1x
+                          </button>
+                        </div>
+                        <NumberSliderInput
+                          label="Uniform Scale"
+                          value={currentGroup.scale ?? 1}
+                          onChange={(val) => handleUpdateGroupTransform(currentGroup.id, { scale: val, scaleX: val, scaleY: val, scaleZ: val })}
+                          min={0.01}
+                          max={20}
+                          step={0.05}
+                          precision={2}
+                          color="amber"
+                          description="Scales all objects in the group synchronously around the group center"
+                        />
+                      </div>
+
+                      {/* Group Danger Actions */}
+                      <div className="flex items-center justify-between pt-2 border-t border-neutral-800 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => handleUngroup(currentGroup.id)}
+                          className="px-2.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                        >
+                          <span className="material-symbols-outlined text-xs">layers_clear</span>
+                          Ungroup
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteGroup(currentGroup.id, false)}
+                          className="px-2.5 py-1.5 bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-500/30 rounded text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                        >
+                          <span className="material-symbols-outlined text-xs">delete</span>
+                          Delete Group
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Active Multi-Selection Card */}
+              {selectedObjects.length > 1 && selectedTargetType !== 'group' && (
+                <div className="p-3 bg-gradient-to-b from-amber-950/30 via-neutral-900/90 to-neutral-950 border border-amber-500/40 rounded-xl space-y-3 shadow-md animate-fadeIn">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-6 h-6 rounded-md bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
+                        <span className="material-symbols-outlined text-sm">checklist_rtl</span>
+                      </span>
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <h4 className="text-xs font-bold text-neutral-100">
+                            Multi-Selection Active
+                          </h4>
+                          <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1.5 py-0.2 rounded-full font-mono font-bold">
+                            {selectedObjects.length} items
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-neutral-400">
+                          Unified transform gizmo active at selection centroid
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={focusCameraOnSelectedObject}
+                        className="px-2 py-1 bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-500/30 rounded text-[10px] font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Focus camera view on selected objects"
+                      >
+                        <span className="material-symbols-outlined text-xs">filter_center_focus</span>
+                        Focus
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearSelectionAndDetachGizmo}
+                        className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white rounded text-[10px] font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Deselect all selected objects"
+                      >
+                        <span className="material-symbols-outlined text-xs">close</span>
+                        Deselect All
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Selected Objects Chips */}
+                  <div className="space-y-1">
+                    <span className="text-[9px] uppercase font-bold text-neutral-400 tracking-wider">
+                      Selected Objects ({selectedObjects.length})
+                    </span>
+                    <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-0.5">
+                      {selectedObjects.map((item) => {
+                        const details = getMemberItemDetails(item);
+                        return (
+                          <div
+                            key={`${item.type}-${item.id}`}
+                            className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-neutral-900/90 border border-amber-500/30 text-neutral-200 text-xs shadow-xs"
+                          >
+                            <span className="material-symbols-outlined text-xs text-amber-400">
+                              {details.icon}
+                            </span>
+                            <span className="font-medium truncate max-w-[120px]" title={details.name}>
+                              {details.name}
+                            </span>
+                            <span className="text-[9px] text-neutral-500 uppercase font-mono">
+                              ({item.type})
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleObjectSelection(item.type, item.id);
+                              }}
+                              className="w-4 h-4 rounded hover:bg-neutral-800 text-neutral-400 hover:text-red-400 flex items-center justify-center transition-colors cursor-pointer ml-0.5"
+                              title={`Remove ${details.name} from selection`}
+                            >
+                              <span className="material-symbols-outlined text-[11px]">close</span>
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Actions Bar */}
+                  <div className="flex items-center justify-between pt-1 border-t border-neutral-800 text-xs">
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] text-neutral-400">Gizmo:</span>
+                      <button
+                        type="button"
+                        onClick={() => setGizmoMode('translate')}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${
+                          gizmoMode === 'translate'
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+                        }`}
+                        title="Translate (W)"
+                      >
+                        Move
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGizmoMode('rotate')}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${
+                          gizmoMode === 'rotate'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+                        }`}
+                        title="Rotate (E)"
+                      >
+                        Rotate
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGizmoMode('scale')}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${
+                          gizmoMode === 'scale'
+                            ? 'bg-rose-600 text-white'
+                            : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+                        }`}
+                        title="Scale (R)"
+                      >
+                        Scale
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleCreateGroupFromSelection()}
+                      className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer shadow-xs"
+                      title="Create a Scene Group containing all selected objects"
+                    >
+                      <span className="material-symbols-outlined text-xs">create_new_folder</span>
+                      <span>+ Create Group</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Search Filter */}
               {meshList.length > 3 && (
                 <div className="relative">
@@ -6559,7 +8167,9 @@ const ARTest = () => {
               {/* List of Detected Meshes */}
               <div className="space-y-1.5 max-h-[50vh] overflow-y-auto pr-1">
                 {filteredMeshes.map((mesh, i) => {
-                  const isSelected = selectedMeshUuid === mesh.uuid;
+                  const isSelected = selectedMeshUuid === mesh.uuid && selectedTargetType === 'mesh';
+                  const isMultiSelected = selectedObjects.some((it) => it.type === 'mesh' && it.id === mesh.uuid);
+                  const meshGroup = sceneGroups.find((g) => g.itemIds.some((it) => it.type === 'mesh' && it.id === mesh.uuid));
                   const isVideoTarget = Boolean(activeVideoUrl) && (
                     videoTargetMesh === mesh.name ||
                     videoTargetMesh === mesh.uuid ||
@@ -6573,14 +8183,33 @@ const ARTest = () => {
                   return (
                     <div
                       key={mesh.uuid}
-                      onClick={() => selectSceneObject('mesh', mesh.uuid)}
+                      onClick={(e) => {
+                        if (e.shiftKey || e.metaKey || e.ctrlKey || isMultiSelectMode) {
+                          toggleObjectSelection('mesh', mesh.uuid);
+                        } else {
+                          selectSceneObject('mesh', mesh.uuid);
+                        }
+                      }}
                       className={`p-2.5 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${isSelected
                         ? 'bg-indigo-950/50 border-indigo-500 shadow-md ring-1 ring-indigo-500/50'
+                        : isMultiSelected
+                        ? 'bg-amber-950/20 border-amber-500/50 shadow-xs'
                         : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700'
                         }`}
                     >
                       <div className="flex items-center gap-2 min-w-0">
-                        <div className={`w-7 h-7 rounded flex items-center justify-center font-mono text-[11px] font-bold ${isSelected ? 'bg-indigo-500/30 text-indigo-300' : 'bg-neutral-800 text-neutral-400 group-hover:text-neutral-200'
+                        <input
+                          type="checkbox"
+                          checked={isMultiSelected}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            toggleObjectSelection('mesh', mesh.uuid);
+                          }}
+                          className="w-3.5 h-3.5 rounded bg-neutral-800 border-neutral-700 text-amber-500 focus:ring-amber-400 cursor-pointer shrink-0"
+                          title="Toggle selection for multi-object editing or grouping"
+                        />
+                        <div className={`w-7 h-7 rounded flex items-center justify-center font-mono text-[11px] font-bold shrink-0 ${isSelected || isMultiSelected ? 'bg-indigo-500/30 text-indigo-300' : 'bg-neutral-800 text-neutral-400 group-hover:text-neutral-200'
                           }`}>
                           {i + 1}
                         </div>
@@ -6591,6 +8220,25 @@ const ARTest = () => {
                               <span className="text-[8px] bg-indigo-500/30 text-indigo-300 px-1 py-0.2 rounded font-mono font-bold">
                                 SELECTED
                               </span>
+                            )}
+                            {isMultiSelected && !isSelected && (
+                              <span className="text-[8px] bg-amber-500/30 text-amber-300 px-1 py-0.2 rounded font-mono font-bold">
+                                MULTI
+                              </span>
+                            )}
+                            {meshGroup && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  selectGroup(meshGroup.id);
+                                }}
+                                className="text-[8px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1 py-0.2 rounded font-mono font-bold flex items-center gap-0.5 hover:bg-amber-500/30 transition-colors cursor-pointer"
+                                title={`Part of group "${meshGroup.name}". Click to select group.`}
+                              >
+                                <span className="material-symbols-outlined text-[10px]">folder</span>
+                                {meshGroup.name}
+                              </button>
                             )}
                             {isVideoTarget && (
                               <span className="text-[8px] bg-red-500/30 text-red-300 border border-red-500/50 px-1 py-0.2 rounded font-mono font-bold flex items-center gap-0.5">
@@ -6834,28 +8482,68 @@ const ARTest = () => {
                 ) : (
                   <div className="space-y-1">
                     {additionalGeometries.map((geom) => {
-                      const isSelected = selectedGeometryId === geom.id;
+                      const isSelected = selectedGeometryId === geom.id && selectedTargetType === 'geometry';
+                      const isMultiSelected = selectedObjects.some((it) => it.type === 'geometry' && it.id === geom.id);
+                      const geomGroup = sceneGroups.find((g) => g.itemIds.some((it) => it.type === 'geometry' && it.id === geom.id));
                       return (
                         <div
                           key={geom.id}
-                          onClick={() => {
-                            selectSceneObject('geometry', geom.id);
-                            setActiveTab('shapes');
+                          onClick={(e) => {
+                            if (e.shiftKey || e.metaKey || e.ctrlKey || isMultiSelectMode) {
+                              toggleObjectSelection('geometry', geom.id);
+                            } else {
+                              selectSceneObject('geometry', geom.id);
+                              setActiveTab('shapes');
+                            }
                           }}
                           className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${isSelected
                             ? 'bg-teal-950/50 border-teal-500 shadow-md ring-1 ring-teal-500/50'
+                            : isMultiSelected
+                            ? 'bg-amber-950/20 border-amber-500/50 shadow-xs'
                             : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700'
                             }`}
                         >
                           <div className="flex items-center gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={isMultiSelected}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                toggleObjectSelection('geometry', geom.id);
+                              }}
+                              className="w-3.5 h-3.5 rounded bg-neutral-800 border-neutral-700 text-amber-500 focus:ring-amber-400 cursor-pointer shrink-0"
+                              title="Toggle selection for multi-object editing or grouping"
+                            />
                             <div
                               className="w-3.5 h-3.5 rounded-full border border-white/20 shrink-0"
                               style={{ backgroundColor: geom.color || '#38bdf8' }}
                             />
                             <div className="min-w-0">
-                              <span className="text-xs font-bold text-neutral-200 truncate block">
-                                {geom.name}
-                              </span>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-xs font-bold text-neutral-200 truncate block">
+                                  {geom.name}
+                                </span>
+                                {isMultiSelected && !isSelected && (
+                                  <span className="text-[8px] bg-amber-500/30 text-amber-300 px-1 py-0.2 rounded font-mono font-bold">
+                                    MULTI
+                                  </span>
+                                )}
+                                {geomGroup && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      selectGroup(geomGroup.id);
+                                    }}
+                                    className="text-[8px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1 py-0.2 rounded font-mono font-bold flex items-center gap-0.5 hover:bg-amber-500/30 transition-colors cursor-pointer"
+                                    title={`Part of group "${geomGroup.name}". Click to select group.`}
+                                  >
+                                    <span className="material-symbols-outlined text-[10px]">folder</span>
+                                    {geomGroup.name}
+                                  </button>
+                                )}
+                              </div>
                               <span className="text-[9px] text-teal-400 font-mono capitalize">
                                 {geom.type}
                               </span>
@@ -6933,24 +8621,66 @@ const ARTest = () => {
                 ) : (
                   <div className="space-y-1.5">
                     {customModels.map((model) => {
-                      const isSelected = selectedCustomModelId === model.id;
+                      const isSelected = selectedCustomModelId === model.id && selectedTargetType === 'customModel';
+                      const isMultiSelected = selectedObjects.some((it) => it.type === 'customModel' && it.id === model.id);
+                      const modelGroup = sceneGroups.find((g) => g.itemIds.some((it) => it.type === 'customModel' && it.id === model.id));
                       return (
                         <div
                           key={model.id}
-                          onClick={() => selectSceneObject('customModel', model.id)}
+                          onClick={(e) => {
+                            if (e.shiftKey || e.metaKey || e.ctrlKey || isMultiSelectMode) {
+                              toggleObjectSelection('customModel', model.id);
+                            } else {
+                              selectSceneObject('customModel', model.id);
+                            }
+                          }}
                           className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${isSelected
                             ? 'bg-purple-950/50 border-purple-500 shadow-md ring-1 ring-purple-500/50'
+                            : isMultiSelected
+                            ? 'bg-amber-950/20 border-amber-500/50 shadow-xs'
                             : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700'
                           }`}
                         >
                           <div className="flex items-center gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={isMultiSelected}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                toggleObjectSelection('customModel', model.id);
+                              }}
+                              className="w-3.5 h-3.5 rounded bg-neutral-800 border-neutral-700 text-amber-500 focus:ring-amber-400 cursor-pointer shrink-0"
+                              title="Toggle selection for multi-object editing or grouping"
+                            />
                             <div className="w-7 h-7 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30 flex items-center justify-center shrink-0">
                               <span className="material-symbols-outlined text-sm">view_in_ar</span>
                             </div>
                             <div className="min-w-0">
-                              <span className="text-xs font-bold text-neutral-200 truncate block">
-                                {model.name}
-                              </span>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-xs font-bold text-neutral-200 truncate block">
+                                  {model.name}
+                                </span>
+                                {isMultiSelected && !isSelected && (
+                                  <span className="text-[8px] bg-amber-500/30 text-amber-300 px-1 py-0.2 rounded font-mono font-bold">
+                                    MULTI
+                                  </span>
+                                )}
+                                {modelGroup && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      selectGroup(modelGroup.id);
+                                    }}
+                                    className="text-[8px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1 py-0.2 rounded font-mono font-bold flex items-center gap-0.5 hover:bg-amber-500/30 transition-colors cursor-pointer"
+                                    title={`Part of group "${modelGroup.name}". Click to select group.`}
+                                  >
+                                    <span className="material-symbols-outlined text-[10px]">folder</span>
+                                    {modelGroup.name}
+                                  </button>
+                                )}
+                              </div>
                               <span className="text-[9px] text-purple-400 font-mono truncate block">
                                 {model.fileName || '3D Model'} • {model.scale || 1}x {model.autoRotate ? '• ⟳ Auto' : ''}
                               </span>
@@ -7343,25 +9073,62 @@ const ARTest = () => {
                     </span>
                     <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto pr-1">
                       {additionalGeometries.map((g) => {
-                        const isSelected = selectedGeometryId === g.id;
+                        const isSelected = selectedGeometryId === g.id && selectedTargetType === 'geometry';
+                        const isMultiSelected = selectedObjects.some((it) => it.type === 'geometry' && it.id === g.id);
+                        const shapeGroup = sceneGroups.find((grp) => grp.itemIds.some((it) => it.type === 'geometry' && it.id === g.id));
                         return (
                           <div
                             key={g.id}
-                            onClick={() => selectSceneObject('geometry', g.id)}
+                            onClick={(e) => {
+                              if (e.shiftKey || e.metaKey || e.ctrlKey || isMultiSelectMode) {
+                                toggleObjectSelection('geometry', g.id);
+                              } else {
+                                selectSceneObject('geometry', g.id);
+                              }
+                            }}
                             className={`p-2 rounded-lg border text-left cursor-pointer transition-all flex items-center justify-between group ${isSelected
                               ? 'bg-teal-950/60 border-teal-400 ring-1 ring-teal-500/50 shadow'
+                              : isMultiSelected
+                              ? 'bg-amber-950/20 border-amber-500/50 shadow-xs'
                               : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700'
                               }`}
                           >
                             <div className="flex items-center gap-2 min-w-0">
+                              <input
+                                type="checkbox"
+                                checked={isMultiSelected}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  toggleObjectSelection('geometry', g.id);
+                                }}
+                                className="w-3.5 h-3.5 rounded bg-neutral-800 border-neutral-700 text-amber-500 focus:ring-amber-400 cursor-pointer shrink-0"
+                                title="Toggle selection for multi-object editing or grouping"
+                              />
                               <span
                                 className="w-3 h-3 rounded-full shrink-0 border border-white/20"
                                 style={{ backgroundColor: g.color || '#38bdf8' }}
                               />
                               <div className="min-w-0">
-                                <span className="text-xs font-bold text-neutral-200 truncate block">
-                                  {g.name}
-                                </span>
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  <span className="text-xs font-bold text-neutral-200 truncate block">
+                                    {g.name}
+                                  </span>
+                                  {shapeGroup && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        selectGroup(shapeGroup.id);
+                                      }}
+                                      className="text-[8px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1 py-0.2 rounded font-mono font-bold flex items-center gap-0.5 hover:bg-amber-500/30 transition-colors cursor-pointer"
+                                      title={`Part of group "${shapeGroup.name}". Click to select group.`}
+                                    >
+                                      <span className="material-symbols-outlined text-[10px]">folder</span>
+                                      {shapeGroup.name}
+                                    </button>
+                                  )}
+                                </div>
                                 <span className="text-[9px] text-teal-400 font-mono capitalize">
                                   {g.type}
                                 </span>
@@ -7453,12 +9220,24 @@ const ARTest = () => {
                           </div>
                         </div>
 
-                        {/* Vector Silhouette & Curvature / Volumetric Inflation Tool */}
+                        {/* Procedural Vector-to-3D Geometry Inspector (5 Modes) */}
                         {(() => {
-                          const isVectorShape = currentGeom.type === 'vectorExtrude' || currentGeom.type === 'vectorInflate' || Boolean(currentGeom.params?.points);
+                          const isVectorShape =
+                            currentGeom.type === 'vectorExtrude' ||
+                            currentGeom.type === 'vectorInflate' ||
+                            currentGeom.type === 'vectorRevolve' ||
+                            currentGeom.type === 'vectorSweep' ||
+                            currentGeom.type === 'vectorCarve' ||
+                            Boolean(currentGeom.params?.points);
                           if (!isVectorShape) return null;
 
-                          const isInflate = currentGeom.type === 'vectorInflate' || Boolean(currentGeom.params?.inflateEnabled);
+                          let currentMode = 'extrude';
+                          if (currentGeom.type === 'vectorInflate' || currentGeom.params?.inflateEnabled) currentMode = 'inflate';
+                          else if (currentGeom.type === 'vectorRevolve') currentMode = 'revolve';
+                          else if (currentGeom.type === 'vectorSweep') currentMode = 'sweep';
+                          else if (currentGeom.type === 'vectorCarve') currentMode = 'carve';
+                          else if (currentGeom.type === 'vectorExtrude') currentMode = 'extrude';
+
                           const activeProfileKey = currentGeom.params?.curvatureProfile || currentGeom.params?.profile || 'elliptic';
                           const activeProfile =
                             (Array.isArray(INFLATION_PROFILES)
@@ -7470,23 +9249,47 @@ const ARTest = () => {
                               description: 'Classic organic puff with vertical boundary tangents and soft central dome'
                             };
 
+                          const modeTitles = {
+                            extrude: 'Extrude & Solidify Studio',
+                            inflate: 'Organic Inflation Engine',
+                            revolve: 'Rotational Lathe Studio',
+                            sweep: 'Cross-Section Sweep & Loft',
+                            carve: 'Visual Hull Constructive Carve'
+                          };
+
+                          const modeBadges = {
+                            extrude: 'Solid / Shell',
+                            inflate: 'Poisson 3D',
+                            revolve: '360° Lathe',
+                            sweep: 'Rail Guide',
+                            carve: 'Visual Hull'
+                          };
+
                           return (
-                            <div className="p-3.5 bg-gradient-to-b from-purple-950/40 via-neutral-900 to-teal-950/30 border border-teal-500/40 rounded-xl space-y-3.5 shadow-md">
+                            <div className="p-3.5 bg-gradient-to-b from-purple-950/40 via-neutral-900 to-indigo-950/30 border border-purple-500/40 rounded-xl space-y-3.5 shadow-md">
                               {/* Header & Anchor Points Count */}
                               <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
                                 <div className="flex items-center gap-2">
-                                  <span className={`material-symbols-outlined text-base ${isInflate ? 'text-teal-400' : 'text-purple-400'}`}>
-                                    {isInflate ? 'bubble_chart' : 'gesture'}
+                                  <span className="material-symbols-outlined text-base text-purple-400">
+                                    {currentMode === 'inflate'
+                                      ? 'bubble_chart'
+                                      : currentMode === 'revolve'
+                                      ? 'rotate_right'
+                                      : currentMode === 'sweep'
+                                      ? 'timeline'
+                                      : currentMode === 'carve'
+                                      ? 'interests'
+                                      : 'straighten'}
                                   </span>
                                   <div>
                                     <div className="text-xs font-bold text-neutral-100 flex items-center gap-1.5">
-                                      <span>{isInflate ? 'Volumetric Inflation Engine' : 'Vector Extrusion Studio'}</span>
-                                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-teal-500/20 text-teal-300 font-mono">
-                                        Poisson 3D
+                                      <span>{modeTitles[currentMode]}</span>
+                                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 font-mono">
+                                        {modeBadges[currentMode]}
                                       </span>
                                     </div>
                                     <span className="text-[10px] text-neutral-400">
-                                      {currentGeom.params?.points?.length || 0} vector anchor points
+                                      {currentGeom.params?.points?.length || currentGeom.params?.frontPoints?.length || 0} vector anchor nodes
                                     </span>
                                   </div>
                                 </div>
@@ -7495,7 +9298,7 @@ const ARTest = () => {
                                   type="button"
                                   onClick={() => {
                                     setEditingVectorGeom(currentGeom);
-                                    setVectorPenInitialMode(isInflate ? 'inflate' : 'extrude');
+                                    setVectorPenInitialMode(currentMode);
                                     setVectorPenModalOpen(true);
                                   }}
                                   className="px-2.5 py-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-90 text-white font-semibold text-[11px] rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-sm"
@@ -7506,65 +9309,241 @@ const ARTest = () => {
                                 </button>
                               </div>
 
-                              {/* Mode Switcher Pill Tabs: Extrusion vs Curvature Inflation */}
-                              <div className="grid grid-cols-2 gap-1.5 bg-neutral-950 p-1 rounded-lg border border-neutral-800">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    handleUpdateGeometry(currentGeom.id, {
-                                      type: 'vectorInflate',
-                                      params: {
-                                        ...(currentGeom.params || {}),
-                                        inflateEnabled: true,
-                                        depth: currentGeom.params?.depth ?? 0.35,
-                                        curvatureProfile: currentGeom.params?.curvatureProfile || 'elliptic',
-                                        symmetric: currentGeom.params?.symmetric !== false,
-                                        smoothPasses: currentGeom.params?.smoothPasses ?? 2,
-                                        resolution: currentGeom.params?.resolution ?? 24,
-                                        rimDepth: currentGeom.params?.rimDepth ?? 0.0,
-                                        connectEdges: currentGeom.params?.connectEdges !== false
-                                      }
-                                    });
-                                  }}
-                                  className={`py-1.5 px-2 rounded-md text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                                    isInflate
-                                      ? 'bg-gradient-to-r from-teal-500 to-emerald-600 text-white shadow-md shadow-teal-950/50'
-                                      : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900'
-                                  }`}
-                                >
-                                  <span className="material-symbols-outlined text-sm">bubble_chart</span>
-                                  <span>Curvature Inflation</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    handleUpdateGeometry(currentGeom.id, {
-                                      type: 'vectorExtrude',
-                                      params: {
-                                        ...(currentGeom.params || {}),
-                                        inflateEnabled: false,
-                                        depth: currentGeom.params?.depth ?? 0.25,
-                                        bevelEnabled: currentGeom.params?.bevelEnabled !== false,
-                                        bevelThickness: currentGeom.params?.bevelThickness ?? 0.03,
-                                        bevelSize: currentGeom.params?.bevelSize ?? 0.02,
-                                        bevelSegments: currentGeom.params?.bevelSegments ?? 3,
-                                        curveSegments: currentGeom.params?.curveSegments ?? 24
-                                      }
-                                    });
-                                  }}
-                                  className={`py-1.5 px-2 rounded-md text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                                    !isInflate
-                                      ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-purple-950/50'
-                                      : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900'
-                                  }`}
-                                >
-                                  <span className="material-symbols-outlined text-sm">gesture</span>
-                                  <span>Flat Extrude & Bevel</span>
-                                </button>
+                              {/* Mode Switcher Pill Tabs (5 Modes) */}
+                              <div className="grid grid-cols-5 gap-1 bg-neutral-950 p-1 rounded-lg border border-neutral-800">
+                                {[
+                                  { id: 'extrude', name: 'Extrude', icon: 'straighten' },
+                                  { id: 'inflate', name: 'Inflate', icon: 'bubble_chart' },
+                                  { id: 'revolve', name: 'Revolve', icon: 'rotate_right' },
+                                  { id: 'sweep', name: 'Sweep', icon: 'timeline' },
+                                  { id: 'carve', name: 'Carve', icon: 'interests' }
+                                ].map((m) => {
+                                  const isSelected = currentMode === m.id;
+                                  return (
+                                    <button
+                                      key={m.id}
+                                      type="button"
+                                      onClick={() => {
+                                        if (m.id === 'extrude') {
+                                          handleUpdateGeometry(currentGeom.id, {
+                                            type: 'vectorExtrude',
+                                            params: {
+                                              ...(currentGeom.params || {}),
+                                              inflateEnabled: false,
+                                              depth: currentGeom.params?.depth ?? 0.25,
+                                              taper: currentGeom.params?.taper ?? 1.0,
+                                              twist: currentGeom.params?.twist ?? 0,
+                                              shellEnabled: Boolean(currentGeom.params?.shellEnabled),
+                                              shellThickness: currentGeom.params?.shellThickness ?? 0.04,
+                                              bevelEnabled: currentGeom.params?.bevelEnabled !== false,
+                                              bevelThickness: currentGeom.params?.bevelThickness ?? 0.03,
+                                              bevelSize: currentGeom.params?.bevelSize ?? 0.02,
+                                              bevelSegments: currentGeom.params?.bevelSegments ?? 3,
+                                              curveSegments: currentGeom.params?.curveSegments ?? 24
+                                            }
+                                          });
+                                        } else if (m.id === 'inflate') {
+                                          handleUpdateGeometry(currentGeom.id, {
+                                            type: 'vectorInflate',
+                                            params: {
+                                              ...(currentGeom.params || {}),
+                                              inflateEnabled: true,
+                                              depth: currentGeom.params?.depth ?? 0.35,
+                                              depthFront: currentGeom.params?.depthFront ?? currentGeom.params?.depth ?? 0.35,
+                                              depthBack: currentGeom.params?.depthBack ?? 0.35,
+                                              curvatureProfile: currentGeom.params?.curvatureProfile || 'elliptic',
+                                              symmetric: currentGeom.params?.symmetric !== false,
+                                              smoothPasses: currentGeom.params?.smoothPasses ?? 2,
+                                              resolution: currentGeom.params?.resolution ?? 24,
+                                              rimDepth: currentGeom.params?.rimDepth ?? 0.0,
+                                              connectEdges: currentGeom.params?.connectEdges !== false
+                                            }
+                                          });
+                                        } else if (m.id === 'revolve') {
+                                          handleUpdateGeometry(currentGeom.id, {
+                                            type: 'vectorRevolve',
+                                            params: {
+                                              ...(currentGeom.params || {}),
+                                              revolveAngle: currentGeom.params?.revolveAngle ?? 360,
+                                              revolveAxis: currentGeom.params?.revolveAxis || 'Y',
+                                              revolveSegments: currentGeom.params?.revolveSegments ?? 32,
+                                              axisOffset: currentGeom.params?.axisOffset ?? 0.0,
+                                              capEnds: currentGeom.params?.capEnds !== false,
+                                              curveSegments: currentGeom.params?.curveSegments ?? 32
+                                            }
+                                          });
+                                        } else if (m.id === 'sweep') {
+                                          handleUpdateGeometry(currentGeom.id, {
+                                            type: 'vectorSweep',
+                                            params: {
+                                              ...(currentGeom.params || {}),
+                                              spineType: currentGeom.params?.spineType || 'arc',
+                                              spineLength: currentGeom.params?.spineLength ?? 1.2,
+                                              spineCurvature: currentGeom.params?.spineCurvature ?? 0.5,
+                                              spineTwist: currentGeom.params?.spineTwist ?? 0,
+                                              scaleStart: currentGeom.params?.scaleStart ?? 1.0,
+                                              scaleEnd: currentGeom.params?.scaleEnd ?? 0.5,
+                                              scaleProfile: currentGeom.params?.scaleProfile || 'linear',
+                                              capEnds: currentGeom.params?.capEnds !== false
+                                            }
+                                          });
+                                        } else if (m.id === 'carve') {
+                                          handleUpdateGeometry(currentGeom.id, {
+                                            type: 'vectorCarve',
+                                            params: {
+                                              ...(currentGeom.params || {}),
+                                              carveView: currentGeom.params?.carveView || 'top',
+                                              carveResolution: currentGeom.params?.carveResolution ?? 32,
+                                              carveSmooth: currentGeom.params?.carveSmooth ?? 2,
+                                              frontPoints: currentGeom.params?.frontPoints || currentGeom.params?.points,
+                                              topSidePoints: currentGeom.params?.topSidePoints || currentGeom.params?.points
+                                            }
+                                          });
+                                        }
+                                      }}
+                                      className={`py-1.5 px-0.5 rounded-md text-[10px] font-bold flex flex-col items-center justify-center gap-0.5 transition-all cursor-pointer ${
+                                        isSelected
+                                          ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md'
+                                          : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900'
+                                      }`}
+                                      title={m.name}
+                                    >
+                                      <span className="material-symbols-outlined text-sm">{m.icon}</span>
+                                      <span className="truncate">{m.name}</span>
+                                    </button>
+                                  );
+                                })}
                               </div>
 
-                              {/* Curvature & Volumetric Inflation Controls */}
-                              {isInflate ? (
+                              {/* MODE 1: Extrude & Solidify Modifier Controls */}
+                              {currentMode === 'extrude' && (
+                                <div className="space-y-3 pt-1">
+                                  <NumberSliderInput
+                                    label="Extrude Depth"
+                                    value={currentGeom.params?.depth ?? 0.25}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'depth', val)}
+                                    min={0.02}
+                                    max={2.0}
+                                    step={0.02}
+                                    unit="m"
+                                    color="purple"
+                                  />
+
+                                  <NumberSliderInput
+                                    label="Directional Taper"
+                                    value={currentGeom.params?.taper ?? 1.0}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'taper', val)}
+                                    min={0.1}
+                                    max={2.5}
+                                    step={0.05}
+                                    color="indigo"
+                                    description="Scale factor across extrusion (1.0 = straight, <1 = taper, >1 = flare)"
+                                  />
+
+                                  <NumberSliderInput
+                                    label="Extrusion Twist"
+                                    value={currentGeom.params?.twist ?? 0}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'twist', val)}
+                                    min={-180}
+                                    max={180}
+                                    step={5}
+                                    unit="°"
+                                    color="purple"
+                                  />
+
+                                  {/* Solidify / Shell Modifier Toggle */}
+                                  <div className="p-2.5 rounded-lg bg-neutral-950/80 border border-neutral-800 space-y-2">
+                                    <label className="flex items-center justify-between cursor-pointer">
+                                      <div className="space-y-0.5">
+                                        <span className="text-xs font-semibold text-neutral-200 block">
+                                          Solidify / Shell Modifier
+                                        </span>
+                                        <span className="text-[10px] text-neutral-400 block">
+                                          Hollows interior geometry with solid perimeter rim
+                                        </span>
+                                      </div>
+                                      <input
+                                        type="checkbox"
+                                        checked={Boolean(currentGeom.params?.shellEnabled)}
+                                        onChange={(e) => handleUpdateGeometryParam(currentGeom.id, 'shellEnabled', e.target.checked)}
+                                        className="rounded text-purple-500 focus:ring-purple-400 w-4 h-4"
+                                      />
+                                    </label>
+                                    {Boolean(currentGeom.params?.shellEnabled) && (
+                                      <div className="pt-1 border-t border-neutral-800">
+                                        <NumberSliderInput
+                                          label="Shell Wall Thickness"
+                                          value={currentGeom.params?.shellThickness ?? 0.04}
+                                          onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'shellThickness', val)}
+                                          min={0.01}
+                                          max={0.15}
+                                          step={0.005}
+                                          unit="m"
+                                          color="purple"
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Bevel Settings */}
+                                  <label className="flex items-center gap-2 p-2 rounded bg-neutral-950 border border-neutral-800 text-xs text-neutral-300 cursor-pointer hover:bg-neutral-900">
+                                    <input
+                                      type="checkbox"
+                                      checked={currentGeom.params?.bevelEnabled !== false}
+                                      onChange={(e) => handleUpdateGeometryParam(currentGeom.id, 'bevelEnabled', e.target.checked)}
+                                      className="rounded text-purple-500 focus:ring-purple-400"
+                                    />
+                                    <span>Chamfer Beveling</span>
+                                  </label>
+
+                                  {currentGeom.params?.bevelEnabled !== false && (
+                                    <div className="space-y-2 pl-2 border-l-2 border-purple-500/30">
+                                      <NumberSliderInput
+                                        label="Bevel Thickness"
+                                        value={currentGeom.params?.bevelThickness ?? 0.03}
+                                        onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'bevelThickness', val)}
+                                        min={0.0}
+                                        max={0.2}
+                                        step={0.01}
+                                        unit="m"
+                                        color="purple"
+                                      />
+                                      <NumberSliderInput
+                                        label="Bevel Size"
+                                        value={currentGeom.params?.bevelSize ?? 0.02}
+                                        onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'bevelSize', val)}
+                                        min={0.0}
+                                        max={0.2}
+                                        step={0.01}
+                                        unit="m"
+                                        color="purple"
+                                      />
+                                      <NumberSliderInput
+                                        label="Bevel Segments"
+                                        value={currentGeom.params?.bevelSegments ?? 3}
+                                        onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'bevelSegments', val)}
+                                        min={1}
+                                        max={8}
+                                        step={1}
+                                        color="purple"
+                                      />
+                                    </div>
+                                  )}
+
+                                  <NumberSliderInput
+                                    label="Curve Smoothness"
+                                    value={currentGeom.params?.curveSegments ?? 24}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'curveSegments', val)}
+                                    min={6}
+                                    max={48}
+                                    step={2}
+                                    color="indigo"
+                                  />
+                                </div>
+                              )}
+
+                              {/* MODE 2: Curvature & Volumetric Inflation Controls */}
+                              {currentMode === 'inflate' && (
                                 <div className="space-y-3 pt-1">
                                   {/* Curvature Profiles Selector */}
                                   <div className="space-y-1.5">
@@ -7604,9 +9583,12 @@ const ARTest = () => {
 
                                   {/* Inflation Depth Slider */}
                                   <NumberSliderInput
-                                    label="Volumetric Thickness (Depth)"
-                                    value={currentGeom.params?.depth ?? 0.35}
-                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'depth', val)}
+                                    label="Volumetric Thickness (Front)"
+                                    value={currentGeom.params?.depthFront ?? currentGeom.params?.depth ?? 0.35}
+                                    onChange={(val) => {
+                                      handleUpdateGeometryParam(currentGeom.id, 'depth', val);
+                                      handleUpdateGeometryParam(currentGeom.id, 'depthFront', val);
+                                    }}
                                     min={0.02}
                                     max={2.0}
                                     step={0.02}
@@ -7614,6 +9596,20 @@ const ARTest = () => {
                                     color="teal"
                                     description="Maximum balloon elevation at distance field centroid"
                                   />
+
+                                  {/* Asymmetric Back Depth Slider when not symmetric */}
+                                  {currentGeom.params?.symmetric === false && (
+                                    <NumberSliderInput
+                                      label="Rear Volumetric Depth (Back)"
+                                      value={currentGeom.params?.depthBack ?? 0.35}
+                                      onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'depthBack', val)}
+                                      min={0.0}
+                                      max={2.0}
+                                      step={0.02}
+                                      unit="m"
+                                      color="purple"
+                                    />
+                                  )}
 
                                   {/* Laplacian Curvature Smoothing */}
                                   <NumberSliderInput
@@ -7692,127 +9688,215 @@ const ARTest = () => {
                                     />
                                   </label>
                                 </div>
-                              ) : (
+                              )}
+
+                              {/* MODE 3: Revolve (Lathe) Controls */}
+                              {currentMode === 'revolve' && (
                                 <div className="space-y-3 pt-1">
-                                  {/* Extrude Depth Slider */}
+                                  <div className="space-y-1">
+                                    <span className="text-[10px] text-neutral-400 font-medium">Revolution Axis</span>
+                                    <div className="grid grid-cols-2 gap-1.5">
+                                      {['Y', 'X'].map((axis) => (
+                                        <button
+                                          key={axis}
+                                          type="button"
+                                          onClick={() => handleUpdateGeometryParam(currentGeom.id, 'revolveAxis', axis)}
+                                          className={`py-1.5 rounded text-xs font-bold border transition-all cursor-pointer ${
+                                            (currentGeom.params?.revolveAxis || 'Y') === axis
+                                              ? 'bg-sky-600 text-white border-sky-400 shadow-sm'
+                                              : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'
+                                          }`}
+                                        >
+                                          {axis === 'Y' ? 'Vertical (Y)' : 'Horizontal (X)'}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+
                                   <NumberSliderInput
-                                    label="Extrude Depth"
-                                    value={currentGeom.params?.depth ?? 0.25}
-                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'depth', val)}
-                                    min={0.02}
-                                    max={2.0}
-                                    step={0.02}
-                                    unit="m"
+                                    label="Revolution Angle"
+                                    value={currentGeom.params?.revolveAngle ?? 360}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'revolveAngle', val)}
+                                    min={15}
+                                    max={360}
+                                    step={15}
+                                    unit="°"
+                                    color="sky"
+                                  />
+
+                                  <NumberSliderInput
+                                    label="Radial Segments"
+                                    value={currentGeom.params?.revolveSegments ?? 32}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'revolveSegments', val)}
+                                    min={12}
+                                    max={64}
+                                    step={2}
                                     color="purple"
                                   />
 
-                                  {/* Bevel Settings */}
-                                  <label className="flex items-center gap-2 p-2 rounded bg-neutral-950 border border-neutral-800 text-xs text-neutral-300 cursor-pointer hover:bg-neutral-900">
-                                    <input
-                                      type="checkbox"
-                                      checked={currentGeom.params?.bevelEnabled !== false}
-                                      onChange={(e) => handleUpdateGeometryParam(currentGeom.id, 'bevelEnabled', e.target.checked)}
-                                      className="rounded text-purple-500 focus:ring-purple-400"
-                                    />
-                                    <span>Chamfer Beveling</span>
-                                  </label>
-
-                                  {currentGeom.params?.bevelEnabled !== false && (
-                                    <div className="space-y-2 pl-2 border-l-2 border-purple-500/30">
-                                      <NumberSliderInput
-                                        label="Bevel Thickness"
-                                        value={currentGeom.params?.bevelThickness ?? 0.03}
-                                        onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'bevelThickness', val)}
-                                        min={0.0}
-                                        max={0.2}
-                                        step={0.01}
-                                        unit="m"
-                                        color="purple"
-                                      />
-                                      <NumberSliderInput
-                                        label="Bevel Size"
-                                        value={currentGeom.params?.bevelSize ?? 0.02}
-                                        onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'bevelSize', val)}
-                                        min={0.0}
-                                        max={0.2}
-                                        step={0.01}
-                                        unit="m"
-                                        color="purple"
-                                      />
-                                      <NumberSliderInput
-                                        label="Bevel Segments"
-                                        value={currentGeom.params?.bevelSegments ?? 3}
-                                        onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'bevelSegments', val)}
-                                        min={1}
-                                        max={8}
-                                        step={1}
-                                        color="purple"
-                                      />
-                                    </div>
-                                  )}
-
                                   <NumberSliderInput
-                                    label="Curve Smoothness"
-                                    value={currentGeom.params?.curveSegments ?? 24}
-                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'curveSegments', val)}
-                                    min={6}
-                                    max={48}
-                                    step={2}
+                                    label="Axis Radial Offset (Hole Size)"
+                                    value={currentGeom.params?.axisOffset ?? 0.0}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'axisOffset', val)}
+                                    min={-0.2}
+                                    max={0.8}
+                                    step={0.02}
+                                    unit="m"
                                     color="indigo"
                                   />
 
-                                  {/* Procedural Dome Curvature Warp (Pipeline D) */}
-                                  <div className="p-2.5 rounded-lg bg-neutral-950/80 border border-neutral-800 space-y-2">
-                                    <label className="flex items-center justify-between cursor-pointer">
-                                      <div className="space-y-0.5">
-                                        <span className="text-xs font-semibold text-neutral-200 block">
-                                          Procedural Dome Curvature Warp
-                                        </span>
-                                        <span className="text-[10px] text-neutral-400 block">
-                                          Parabolic lattice deformation across extruded face
-                                        </span>
-                                      </div>
-                                      <input
-                                        type="checkbox"
-                                        checked={Boolean(currentGeom.params?.domeWarpEnabled)}
-                                        onChange={(e) => handleUpdateGeometryParam(currentGeom.id, 'domeWarpEnabled', e.target.checked)}
-                                        className="rounded text-indigo-500 focus:ring-indigo-400 w-4 h-4"
-                                      />
-                                    </label>
+                                  <label className="flex items-center justify-between p-2 rounded-lg bg-neutral-950 border border-neutral-800 cursor-pointer hover:bg-neutral-900">
+                                    <span className="text-xs font-semibold text-neutral-200">Cap Planar Ends</span>
+                                    <input
+                                      type="checkbox"
+                                      checked={currentGeom.params?.capEnds !== false}
+                                      onChange={(e) => handleUpdateGeometryParam(currentGeom.id, 'capEnds', e.target.checked)}
+                                      className="rounded text-sky-500 focus:ring-sky-400 w-4 h-4"
+                                    />
+                                  </label>
+                                </div>
+                              )}
 
-                                    {Boolean(currentGeom.params?.domeWarpEnabled) && (
-                                      <div className="space-y-2 pt-1 border-t border-neutral-800">
-                                        <NumberSliderInput
-                                          label="Curvature Dome Height"
-                                          value={currentGeom.params?.domeCurvature ?? 0.3}
-                                          onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'domeCurvature', val)}
-                                          min={0.05}
-                                          max={1.0}
-                                          step={0.05}
-                                          color="indigo"
-                                        />
-                                        <div className="space-y-1">
-                                          <span className="text-[10px] text-neutral-400 font-medium">Falloff Curve</span>
-                                          <div className="grid grid-cols-4 gap-1">
-                                            {['smoothstep', 'cosine', 'gaussian', 'linear'].map((falloff) => (
-                                              <button
-                                                key={falloff}
-                                                type="button"
-                                                onClick={() => handleUpdateGeometryParam(currentGeom.id, 'domeFalloff', falloff)}
-                                                className={`py-1 px-1 rounded text-[10px] font-medium border text-center transition-all cursor-pointer ${
-                                                  (currentGeom.params?.domeFalloff || 'smoothstep') === falloff
-                                                    ? 'bg-indigo-500/20 border-indigo-400 text-indigo-300 font-bold'
-                                                    : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-neutral-200'
-                                                }`}
-                                              >
-                                                {falloff}
-                                              </button>
-                                            ))}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    )}
+                              {/* MODE 4: Sweep & Loft Controls */}
+                              {currentMode === 'sweep' && (
+                                <div className="space-y-3 pt-1">
+                                  <div className="space-y-1">
+                                    <span className="text-[10px] text-neutral-400 font-medium">Guide Spine Curve</span>
+                                    <div className="grid grid-cols-5 gap-1">
+                                      {['arc', 's-curve', 'helix', 'wave', 'linear'].map((sp) => (
+                                        <button
+                                          key={sp}
+                                          type="button"
+                                          onClick={() => handleUpdateGeometryParam(currentGeom.id, 'spineType', sp)}
+                                          className={`py-1 rounded text-[10px] font-bold border capitalize transition-all cursor-pointer ${
+                                            (currentGeom.params?.spineType || 'arc') === sp
+                                              ? 'bg-indigo-600 text-white border-indigo-400 shadow-sm'
+                                              : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'
+                                          }`}
+                                        >
+                                          {sp}
+                                        </button>
+                                      ))}
+                                    </div>
                                   </div>
+
+                                  <NumberSliderInput
+                                    label="Spine Length"
+                                    value={currentGeom.params?.spineLength ?? 1.2}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'spineLength', val)}
+                                    min={0.3}
+                                    max={3.0}
+                                    step={0.1}
+                                    unit="m"
+                                    color="indigo"
+                                  />
+
+                                  <NumberSliderInput
+                                    label="Spine Curvature"
+                                    value={currentGeom.params?.spineCurvature ?? 0.5}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'spineCurvature', val)}
+                                    min={0.0}
+                                    max={2.0}
+                                    step={0.05}
+                                    color="purple"
+                                  />
+
+                                  <NumberSliderInput
+                                    label="Spine Twist"
+                                    value={currentGeom.params?.spineTwist ?? 0}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'spineTwist', val)}
+                                    min={-360}
+                                    max={360}
+                                    step={15}
+                                    unit="°"
+                                    color="teal"
+                                  />
+
+                                  <div className="space-y-1">
+                                    <span className="text-[10px] text-neutral-400 font-medium">Scale Falloff</span>
+                                    <div className="grid grid-cols-4 gap-1">
+                                      {['linear', 'bell', 'pinch', 'flare'].map((p) => (
+                                        <button
+                                          key={p}
+                                          type="button"
+                                          onClick={() => handleUpdateGeometryParam(currentGeom.id, 'scaleProfile', p)}
+                                          className={`py-1 rounded text-[10px] font-bold border capitalize transition-all cursor-pointer ${
+                                            (currentGeom.params?.scaleProfile || 'linear') === p
+                                              ? 'bg-indigo-500/20 border-indigo-400 text-indigo-300'
+                                              : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'
+                                          }`}
+                                        >
+                                          {p}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <NumberSliderInput
+                                      label="Start Scale"
+                                      value={currentGeom.params?.scaleStart ?? 1.0}
+                                      onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'scaleStart', val)}
+                                      min={0.1}
+                                      max={2.5}
+                                      step={0.05}
+                                      color="indigo"
+                                    />
+                                    <NumberSliderInput
+                                      label="End Scale"
+                                      value={currentGeom.params?.scaleEnd ?? 0.5}
+                                      onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'scaleEnd', val)}
+                                      min={0.1}
+                                      max={2.5}
+                                      step={0.05}
+                                      color="purple"
+                                    />
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* MODE 5: Silhouette Carve Controls */}
+                              {currentMode === 'carve' && (
+                                <div className="space-y-3 pt-1">
+                                  <div className="space-y-1">
+                                    <span className="text-[10px] text-neutral-400 font-medium">Orthogonal View Axis</span>
+                                    <div className="grid grid-cols-2 gap-1.5">
+                                      {['top', 'side'].map((vw) => (
+                                        <button
+                                          key={vw}
+                                          type="button"
+                                          onClick={() => handleUpdateGeometryParam(currentGeom.id, 'carveView', vw)}
+                                          className={`py-1.5 rounded text-xs font-bold border transition-all cursor-pointer ${
+                                            (currentGeom.params?.carveView || 'top') === vw
+                                              ? 'bg-amber-600 text-white border-amber-400 shadow-sm'
+                                              : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'
+                                          }`}
+                                        >
+                                          {vw === 'top' ? 'Top (XZ)' : 'Side (YZ)'}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  <NumberSliderInput
+                                    label="Marching Cubes Resolution"
+                                    value={currentGeom.params?.carveResolution ?? 32}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'carveResolution', val)}
+                                    min={16}
+                                    max={48}
+                                    step={4}
+                                    color="amber"
+                                  />
+
+                                  <NumberSliderInput
+                                    label="Isosurface Smoothing"
+                                    value={currentGeom.params?.carveSmooth ?? 2}
+                                    onChange={(val) => handleUpdateGeometryParam(currentGeom.id, 'carveSmooth', val)}
+                                    min={0}
+                                    max={4}
+                                    step={1}
+                                    color="purple"
+                                  />
                                 </div>
                               )}
                             </div>
@@ -8180,18 +10264,39 @@ const ARTest = () => {
                   </span>
                   <div className="space-y-1 max-h-48 overflow-y-auto pr-0.5">
                     {custom3DTexts.map((textItem) => {
-                      const isSelected = selectedText3DId === textItem.id;
+                      const isSelected = selectedText3DId === textItem.id && selectedTargetType === 'text3d';
+                      const isMultiSelected = selectedObjects.some((it) => it.type === 'text3d' && it.id === textItem.id);
+                      const textGroup = sceneGroups.find((g) => g.itemIds.some((it) => it.type === 'text3d' && it.id === textItem.id));
                       return (
                         <div
                           key={textItem.id}
-                          onClick={() => selectSceneObject('text3d', textItem.id)}
+                          onClick={(e) => {
+                            if (e.shiftKey || e.metaKey || e.ctrlKey || isMultiSelectMode) {
+                              toggleObjectSelection('text3d', textItem.id);
+                            } else {
+                              selectSceneObject('text3d', textItem.id);
+                            }
+                          }}
                           className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer transition-all ${
                             isSelected
                               ? 'bg-pink-950/40 border-pink-500/60 text-white shadow-sm'
+                              : isMultiSelected
+                              ? 'bg-amber-950/20 border-amber-500/50 shadow-xs'
                               : 'bg-neutral-900/70 border-neutral-800/80 hover:border-neutral-700 text-neutral-300'
                           }`}
                         >
                           <div className="flex items-center gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={isMultiSelected}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                toggleObjectSelection('text3d', textItem.id);
+                              }}
+                              className="w-3.5 h-3.5 rounded bg-neutral-800 border-neutral-700 text-amber-500 focus:ring-amber-400 cursor-pointer shrink-0"
+                              title="Toggle selection for multi-object editing or grouping"
+                            />
                             <span
                               className="w-3 h-3 rounded-full shrink-0 border border-black/40"
                               style={{ backgroundColor: textItem.color || '#38bdf8' }}
@@ -8199,6 +10304,25 @@ const ARTest = () => {
                             <span className="font-semibold truncate max-w-[140px]">
                               {textItem.text || '3D Text'}
                             </span>
+                            {isMultiSelected && !isSelected && (
+                              <span className="text-[8px] bg-amber-500/30 text-amber-300 px-1 py-0.2 rounded font-mono font-bold">
+                                MULTI
+                              </span>
+                            )}
+                            {textGroup && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  selectGroup(textGroup.id);
+                                }}
+                                className="text-[8px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1 py-0.2 rounded font-mono font-bold flex items-center gap-0.5 hover:bg-amber-500/30 transition-colors cursor-pointer"
+                                title={`Part of group "${textGroup.name}". Click to select group.`}
+                              >
+                                <span className="material-symbols-outlined text-[10px]">folder</span>
+                                {textGroup.name}
+                              </button>
+                            )}
                             <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-black/50 text-neutral-400 border border-neutral-800 shrink-0">
                               {(textItem.fontFamily || 'helvetiker').split('_')[0]}
                             </span>
@@ -8701,7 +10825,9 @@ const ARTest = () => {
                 {customLights.length > 0 && (
                   <div className="space-y-1 max-h-40 overflow-y-auto pr-0.5">
                     {customLights.map((l) => {
-                      const isSelected = selectedLightId === l.id;
+                      const isSelected = selectedLightId === l.id && selectedTargetType === 'light';
+                      const isMultiSelected = selectedObjects.some((it) => it.type === 'light' && it.id === l.id);
+                      const lightGroup = sceneGroups.find((g) => g.itemIds.some((it) => it.type === 'light' && it.id === l.id));
                       const icon =
                         l.type === 'spot'
                           ? 'highlight'
@@ -8713,14 +10839,33 @@ const ARTest = () => {
                       return (
                         <div
                           key={l.id}
-                          onClick={() => selectSceneObject('light', l.id)}
+                          onClick={(e) => {
+                            if (e.shiftKey || e.metaKey || e.ctrlKey || isMultiSelectMode) {
+                              toggleObjectSelection('light', l.id);
+                            } else {
+                              selectSceneObject('light', l.id);
+                            }
+                          }}
                           className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer transition-all ${
                             isSelected
                               ? 'bg-amber-950/40 border-amber-500/60 text-white shadow-sm'
+                              : isMultiSelected
+                              ? 'bg-amber-950/20 border-amber-500/50 shadow-xs'
                               : 'bg-neutral-900/70 border-neutral-800/80 hover:border-neutral-700 text-neutral-300'
                           }`}
                         >
                           <div className="flex items-center gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={isMultiSelected}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                toggleObjectSelection('light', l.id);
+                              }}
+                              className="w-3.5 h-3.5 rounded bg-neutral-800 border-neutral-700 text-amber-500 focus:ring-amber-400 cursor-pointer shrink-0"
+                              title="Toggle selection for multi-object editing or grouping"
+                            />
                             <span
                               className="w-3 h-3 rounded-full shrink-0 border border-black/40"
                               style={{ backgroundColor: l.color || '#ffffff' }}
@@ -8729,6 +10874,25 @@ const ARTest = () => {
                               {icon}
                             </span>
                             <span className="font-semibold truncate max-w-[130px]">{l.name}</span>
+                            {isMultiSelected && !isSelected && (
+                              <span className="text-[8px] bg-amber-500/30 text-amber-300 px-1 py-0.2 rounded font-mono font-bold">
+                                MULTI
+                              </span>
+                            )}
+                            {lightGroup && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  selectGroup(lightGroup.id);
+                                }}
+                                className="text-[8px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1 py-0.2 rounded font-mono font-bold flex items-center gap-0.5 hover:bg-amber-500/30 transition-colors cursor-pointer"
+                                title={`Part of group "${lightGroup.name}". Click to select group.`}
+                              >
+                                <span className="material-symbols-outlined text-[10px]">folder</span>
+                                {lightGroup.name}
+                              </button>
+                            )}
                           </div>
                           <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                             <button
@@ -13080,6 +15244,84 @@ const ARTest = () => {
       >
         {/* Floating Viewport Controls: Camera View Angles on Top, 3D Transform Gizmo Toolbar Directly Beneath */}
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 pointer-events-none select-none max-w-[95vw]">
+          {/* Floating Multi-Select & Active Group Viewport Pill Banner */}
+          {(selectedObjects.length > 1 || (selectedTargetType === 'group' && selectedGroupId)) && (
+            <div className="pointer-events-auto flex items-center gap-2 px-3 py-1.5 bg-neutral-900/95 backdrop-blur-md border border-neutral-700/80 rounded-xl shadow-2xl animate-fade-in text-xs">
+              {selectedTargetType === 'group' && selectedGroupId ? (
+                <>
+                  <span className="material-symbols-outlined text-purple-400 text-sm">workspaces</span>
+                  <span className="font-bold text-white">
+                    {sceneGroups.find((g) => g.id === selectedGroupId)?.name || 'Group'} ({selectedObjects.length} objects)
+                  </span>
+                  <div className="h-3 w-px bg-neutral-700 mx-1" />
+                  <button
+                    type="button"
+                    onClick={() => handleUngroup(selectedGroupId)}
+                    className="font-semibold text-purple-300 hover:text-white px-2 py-0.5 rounded bg-purple-900/40 hover:bg-purple-800/60 border border-purple-500/40 transition-colors cursor-pointer flex items-center gap-1"
+                    title="Dissolve group into individual objects (Ctrl+Shift+G)"
+                  >
+                    <span className="material-symbols-outlined text-xs">folder_off</span>
+                    <span>Ungroup</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={focusCameraOnSelectedObject}
+                    className="font-semibold text-neutral-300 hover:text-white px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 transition-colors cursor-pointer flex items-center gap-1"
+                    title="Focus camera on group (F)"
+                  >
+                    <span className="material-symbols-outlined text-xs">filter_center_focus</span>
+                    <span>Focus</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearSelectionAndDetachGizmo}
+                    className="w-5 h-5 flex items-center justify-center text-neutral-400 hover:text-white transition-colors cursor-pointer ml-1"
+                    title="Deselect (Esc)"
+                  >
+                    <span className="material-symbols-outlined text-xs">close</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="material-symbols-outlined text-indigo-400 text-sm">checklist</span>
+                  <span className="font-bold text-white">
+                    {selectedObjects.length} Objects Selected
+                  </span>
+                  <div className="h-3 w-px bg-neutral-700 mx-1" />
+                  <button
+                    type="button"
+                    onClick={() => handleCreateGroupFromSelection()}
+                    className="font-bold text-white px-2.5 py-0.5 rounded bg-purple-600 hover:bg-purple-500 border border-purple-400 shadow-xs transition-colors cursor-pointer flex items-center gap-1"
+                    title="Group selected objects (Ctrl+G)"
+                  >
+                    <span className="material-symbols-outlined text-xs">workspaces</span>
+                    <span>Group</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsMultiSelectMode((prev) => !prev)}
+                    className={`font-semibold px-2 py-0.5 rounded border transition-colors cursor-pointer ${
+                      isMultiSelectMode
+                        ? 'bg-indigo-600/40 border-indigo-400 text-indigo-200'
+                        : 'bg-neutral-800 border-neutral-700 text-neutral-300 hover:text-white'
+                    }`}
+                    title="Toggle Multi-Select Mode"
+                  >
+                    {isMultiSelectMode ? 'Multi: ON' : 'Multi: OFF'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearSelectionAndDetachGizmo}
+                    className="w-5 h-5 flex items-center justify-center text-neutral-400 hover:text-white transition-colors cursor-pointer ml-1"
+                    title="Deselect All (Esc)"
+                  >
+                    <span className="material-symbols-outlined text-xs">close</span>
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Top: Interactive Camera View Angle Presets Toolbar (Studio4D4 Style) */}
           {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
             <div className="pointer-events-auto bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-xl p-1 flex items-center gap-1 shadow-2xl overflow-x-auto max-w-full">
@@ -13259,6 +15501,49 @@ const ARTest = () => {
               {gizmoSnap ? `Snap: ${gizmoSnap}m` : 'Snap: Off'}
             </button>
 
+            {/* Multi-Select Mode Toggle */}
+            <button
+              type="button"
+              onClick={() => setIsMultiSelectMode((prev) => !prev)}
+              title={isMultiSelectMode ? 'Multi-Select Mode: ON (Click objects to add/remove)' : 'Toggle Multi-Select Mode'}
+              className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold border transition-all flex items-center gap-1 cursor-pointer ${
+                isMultiSelectMode
+                  ? 'bg-indigo-600/90 border-indigo-400 text-white shadow-md ring-1 ring-indigo-400/50'
+                  : 'bg-black/60 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+              }`}
+            >
+              <span className="material-symbols-outlined text-xs">
+                {isMultiSelectMode ? 'checklist' : 'select_all'}
+              </span>
+              <span>{isMultiSelectMode ? 'Multi: ON' : 'Multi'}</span>
+            </button>
+
+            {/* Group Selected Objects Button (when multiple items selected) */}
+            {selectedObjects.length > 1 && (
+              <button
+                type="button"
+                onClick={() => handleCreateGroupFromSelection()}
+                title="Group selected objects into a movable group (Ctrl+G)"
+                className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white border border-purple-400 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-sm transition-all"
+              >
+                <span className="material-symbols-outlined text-xs">workspaces</span>
+                <span>Group ({selectedObjects.length})</span>
+              </button>
+            )}
+
+            {/* Ungroup Button (when a group is selected) */}
+            {selectedTargetType === 'group' && selectedGroupId && (
+              <button
+                type="button"
+                onClick={() => handleUngroup(selectedGroupId)}
+                title="Ungroup (Ctrl+Shift+G)"
+                className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-purple-300 border border-purple-500/40 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-all"
+              >
+                <span className="material-symbols-outlined text-xs">folder_off</span>
+                <span>Ungroup</span>
+              </button>
+            )}
+
             {/* Selection Info Badge */}
             {currentSelectedObjectInfo && (
               <div className="flex items-center gap-1.5 pl-1.5 border-l border-neutral-800">
@@ -13268,15 +15553,17 @@ const ARTest = () => {
                   </span>
                   <span className="truncate font-semibold">{currentSelectedObjectInfo.name}</span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => handleExportShapeAsGLB()}
-                  title="Export Selected Object as .GLB"
-                  className="p-1 px-2 rounded-lg bg-teal-950/80 hover:bg-teal-900 border border-teal-500/40 text-teal-300 hover:text-white transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer"
-                >
-                  <span className="material-symbols-outlined text-sm">download</span>
-                  <span className="hidden sm:inline">.GLB</span>
-                </button>
+                {selectedTargetType !== 'group' && selectedTargetType !== 'multi' && (
+                  <button
+                    type="button"
+                    onClick={() => handleExportShapeAsGLB()}
+                    title="Export Selected Object as .GLB"
+                    className="p-1 px-2 rounded-lg bg-teal-950/80 hover:bg-teal-900 border border-teal-500/40 text-teal-300 hover:text-white transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-sm">download</span>
+                    <span className="hidden sm:inline">.GLB</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={focusCameraOnSelectedObject}
@@ -13298,20 +15585,19 @@ const ARTest = () => {
           </div>
         </div>
 
-        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0 || customModels.length > 0 || custom3DTexts.length > 0 || customLights.length > 0 || (markerVisible && markerImageUrl) || (websiteEnabled && websiteUrl)) ? (
-          <a-scene
-            ref={sceneRef}
-            key={batchId || 'ar-portal-scene'}
-            embedded
-            color-space="sRGB"
-            renderer="colorManagement: true; antialias: true; stencil: true; preserveDrawingBuffer: true;"
-            light="defaultLightsEnabled: false"
-            vr-mode-ui="enabled: false"
-            device-orientation-permission-ui="enabled: false"
-            scene-environment="exposure: 1.1; hdrIntensity: 0.0; enabled: false"
-            fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
-            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
-          >
+        <a-scene
+          ref={sceneRef}
+          key="ar-portal-scene"
+          embedded
+          color-space="sRGB"
+          renderer="colorManagement: true; antialias: true; stencil: true; preserveDrawingBuffer: true;"
+          light="defaultLightsEnabled: false"
+          vr-mode-ui="enabled: false"
+          device-orientation-permission-ui="enabled: false"
+          scene-environment="exposure: 1.1; hdrIntensity: 0.0; enabled: false"
+          fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
+          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+        >
             <a-entity
               id="scene-camera"
               camera="active: true; fov: 45; near: 0.01; far: 1000"
@@ -13435,18 +15721,17 @@ const ARTest = () => {
               ></a-entity>
             )}
           </a-scene>
-        ) : (
-          !loading && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-500 space-y-4 p-8 text-center pointer-events-none">
-              <div className="w-16 h-16 rounded-2xl bg-neutral-800/80 border border-neutral-700 flex items-center justify-center text-indigo-400 shadow-xl">
-                <span className="material-symbols-outlined text-3xl">view_in_ar</span>
-              </div>
-              <div className="max-w-md space-y-1">
-                <p className="text-base font-semibold text-neutral-300">Ready for 3D Scene Inspection</p>
-                <p className="text-xs text-neutral-500">Enter a Batch ID or pick a local .glb 3D model above to calibrate orientation, positioning, and individual mesh parts.</p>
-              </div>
+
+        {!loading && !(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0 || customModels.length > 0 || custom3DTexts.length > 0 || customLights.length > 0 || (markerVisible && markerImageUrl) || (websiteEnabled && websiteUrl)) && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-500 space-y-4 p-8 text-center pointer-events-none z-10">
+            <div className="w-16 h-16 rounded-2xl bg-neutral-800/80 border border-neutral-700 flex items-center justify-center text-indigo-400 shadow-xl">
+              <span className="material-symbols-outlined text-3xl">view_in_ar</span>
             </div>
-          )
+            <div className="max-w-md space-y-1">
+              <p className="text-base font-semibold text-neutral-300">Ready for 3D Scene Inspection</p>
+              <p className="text-xs text-neutral-500">Enter a Batch ID or pick a local .glb 3D model above to calibrate orientation, positioning, and individual mesh parts.</p>
+            </div>
+          </div>
         )}
 
 
@@ -13699,18 +15984,34 @@ const ARTest = () => {
           }}
           onExtrude={handleCommitVectorExtrude}
           initialMode={
-            vectorPenInitialMode === 'inflate' ||
-            editingVectorGeom?.type === 'vectorInflate' ||
-            editingVectorGeom?.params?.inflateEnabled
+            vectorPenInitialMode === 'revolve' || editingVectorGeom?.type === 'vectorRevolve'
+              ? 'revolve'
+              : vectorPenInitialMode === 'sweep' || editingVectorGeom?.type === 'vectorSweep'
+              ? 'sweep'
+              : vectorPenInitialMode === 'carve' || editingVectorGeom?.type === 'vectorCarve'
+              ? 'carve'
+              : vectorPenInitialMode === 'inflate' || editingVectorGeom?.type === 'vectorInflate' || editingVectorGeom?.params?.inflateEnabled
               ? 'inflate'
               : 'extrude'
           }
-          initialPoints={editingVectorGeom?.params?.points || null}
+          initialPoints={
+            editingVectorGeom?.params?.points ||
+            editingVectorGeom?.params?.frontPoints ||
+            null
+          }
           initialParams={editingVectorGeom?.params || null}
           initialColor={editingVectorGeom?.color || '#38bdf8'}
           initialName={
             editingVectorGeom?.name ||
-            (vectorPenInitialMode === 'inflate' ? 'Inflated Vector Volume' : 'Extruded Vector Shape')
+            (vectorPenInitialMode === 'inflate'
+              ? 'Inflated Vector Volume'
+              : vectorPenInitialMode === 'revolve'
+              ? 'Revolved Vector Lathe'
+              : vectorPenInitialMode === 'sweep'
+              ? 'Swept Vector Shape'
+              : vectorPenInitialMode === 'carve'
+              ? 'Visual Hull Carve'
+              : 'Extruded Vector Shape')
           }
         />
       )}
