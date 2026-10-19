@@ -3020,6 +3020,122 @@ const ARTest = () => {
     }
   }, [sceneGroups, selectedGroupId, selectSceneObject, meshList]);
 
+  // Duplicate Group container and clone all its constituent member objects
+  const handleDuplicateGroup = useCallback((groupId) => {
+    const group = sceneGroups.find((g) => g.id === groupId);
+    if (!group) return;
+
+    const offsetDistance = 0.4;
+    const newGroupId = `group-${Date.now()}`;
+    const duplicatedGroupTitle = `${group.name || 'Group'} (Copy)`;
+
+    const newGeometries = [];
+    const newCustomModels = [];
+    const new3DTexts = [];
+    const newLights = [];
+    const newItemIds = [];
+
+    (group.itemIds || []).forEach((item, index) => {
+      if (item.type === 'geometry') {
+        const origGeom = additionalGeometries.find((g) => g.id === item.id);
+        if (origGeom) {
+          const newId = `geom_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 6)}`;
+          const clonedGeom = {
+            ...origGeom,
+            id: newId,
+            name: origGeom.name ? `${origGeom.name} (Copy)` : 'Shape (Copy)',
+            posX: Number(((origGeom.posX ?? 0) + offsetDistance).toFixed(3)),
+            posZ: Number(((origGeom.posZ ?? 0) + offsetDistance).toFixed(3))
+          };
+          newGeometries.push(clonedGeom);
+          newItemIds.push({ type: 'geometry', id: newId });
+        }
+      } else if (item.type === 'customModel') {
+        const origModel = customModels.find((m) => m.id === item.id);
+        if (origModel) {
+          const newId = `model_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 6)}`;
+          const clonedModel = {
+            ...origModel,
+            id: newId,
+            name: origModel.name ? `${origModel.name} (Copy)` : 'Model (Copy)',
+            posX: Number(((origModel.posX ?? 0) + offsetDistance).toFixed(3)),
+            posZ: Number(((origModel.posZ ?? 0) + offsetDistance).toFixed(3))
+          };
+          newCustomModels.push(clonedModel);
+          newItemIds.push({ type: 'customModel', id: newId });
+        }
+      } else if (item.type === 'text3d') {
+        const origText = custom3DTexts.find((t) => t.id === item.id);
+        if (origText) {
+          const newId = `text_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 6)}`;
+          const clonedText = {
+            ...origText,
+            id: newId,
+            name: origText.name ? `${origText.name} (Copy)` : '3D Text (Copy)',
+            posX: Number(((origText.posX ?? 0) + offsetDistance).toFixed(3)),
+            posZ: Number(((origText.posZ ?? 0) + offsetDistance).toFixed(3))
+          };
+          new3DTexts.push(clonedText);
+          newItemIds.push({ type: 'text3d', id: newId });
+        }
+      } else if (item.type === 'light') {
+        const origLight = customLights.find((l) => l.id === item.id);
+        if (origLight) {
+          const newId = `light_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 6)}`;
+          const clonedLight = {
+            ...origLight,
+            id: newId,
+            name: origLight.name ? `${origLight.name} (Copy)` : 'Light (Copy)',
+            posX: Number(((origLight.posX ?? 0) + offsetDistance).toFixed(3)),
+            posZ: Number(((origLight.posZ ?? 0) + offsetDistance).toFixed(3))
+          };
+          newLights.push(clonedLight);
+          newItemIds.push({ type: 'light', id: newId });
+        }
+      }
+    });
+
+    if (newGeometries.length > 0) {
+      setAdditionalGeometries((prev) => [...prev, ...newGeometries]);
+    }
+    if (newCustomModels.length > 0) {
+      setCustomModels((prev) => [...prev, ...newCustomModels]);
+    }
+    if (new3DTexts.length > 0) {
+      setCustom3DTexts((prev) => [...prev, ...new3DTexts]);
+    }
+    if (newLights.length > 0) {
+      setCustomLights((prev) => [...prev, ...newLights]);
+    }
+
+    const newGroup = {
+      ...group,
+      id: newGroupId,
+      name: duplicatedGroupTitle,
+      itemIds: newItemIds,
+      posX: Number(((group.posX ?? 0) + offsetDistance).toFixed(3)),
+      posZ: Number(((group.posZ ?? 0) + offsetDistance).toFixed(3)),
+      collapsed: false
+    };
+
+    if (sceneGroupsRef?.current) {
+      sceneGroupsRef.current = [...sceneGroupsRef.current, newGroup];
+    }
+    setSceneGroups((prev) => [...prev, newGroup]);
+    setSelectedObjects(newItemIds);
+    selectSceneObject('group', newGroupId);
+
+    setSaveSuccessMsg(`Duplicated group "${group.name}" with ${newItemIds.length} object${newItemIds.length === 1 ? '' : 's'}.`);
+    setTimeout(() => setSaveSuccessMsg(''), 4000);
+  }, [
+    sceneGroups,
+    additionalGeometries,
+    customModels,
+    custom3DTexts,
+    customLights,
+    selectSceneObject
+  ]);
+
   // Toggle Visibility for all members in a Group
   const handleToggleGroupVisibility = useCallback((groupId) => {
     const group = sceneGroups.find((g) => g.id === groupId);
@@ -4924,10 +5040,27 @@ const ARTest = () => {
   // Studio4D4 & AR Keyboard Shortcuts:
   // W: Translate mode, E: Rotate mode, R: Scale mode, Q: Cycle mode, Esc: Deselect, F: Frame, M: Toggle Marker
   // Ctrl/Cmd+G: Group selected objects, Ctrl/Cmd+Shift+G: Ungroup selected group
+  // Ctrl/Cmd+D: Duplicate selected group or object
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
       const k = e.key.toLowerCase();
+
+      if ((e.metaKey || e.ctrlKey) && k === 'd') {
+        e.preventDefault();
+        if (selectedTargetType === 'group' && selectedGroupId) {
+          handleDuplicateGroup(selectedGroupId);
+        } else if (selectedTargetType === 'geometry' && selectedGeometryId) {
+          handleDuplicateGeometry(selectedGeometryId);
+        } else if (selectedTargetType === 'customModel' && selectedCustomModelId) {
+          handleDuplicateCustomModel(selectedCustomModelId);
+        } else if (selectedTargetType === 'text3d' && selectedText3DId) {
+          handleDuplicate3DText(selectedText3DId);
+        } else if (selectedTargetType === 'light' && selectedLightId) {
+          handleDuplicateLight(selectedLightId);
+        }
+        return;
+      }
 
       if ((e.metaKey || e.ctrlKey) && k === 'g') {
         e.preventDefault();
@@ -4971,7 +5104,7 @@ const ARTest = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [faceSketchStudioOpen, selectedMeshUuid, focusCameraOnMesh, focusCameraOnSelectedObject, clearSelectionAndDetachGizmo, selectedGroupId, selectedObjects, handleUngroup, handleCreateGroupFromSelection]);
+  }, [faceSketchStudioOpen, selectedMeshUuid, focusCameraOnMesh, focusCameraOnSelectedObject, clearSelectionAndDetachGizmo, selectedGroupId, selectedObjects, handleUngroup, handleCreateGroupFromSelection, selectedTargetType, selectedGeometryId, selectedCustomModelId, selectedText3DId, selectedLightId, handleDuplicateGroup]);
 
   // Target Marker Alignment & Calibration Actions
   const MARKER_PRESETS = [
@@ -8358,6 +8491,14 @@ const ARTest = () => {
                               </button>
                               <button
                                 type="button"
+                                onClick={() => handleDuplicateGroup(group.id)}
+                                className="w-6 h-6 rounded flex items-center justify-center text-cyan-400 hover:text-cyan-300 hover:bg-cyan-950/40 transition-colors cursor-pointer"
+                                title={`Duplicate group "${group.name}" (Ctrl+D)`}
+                              >
+                                <span className="material-symbols-outlined text-xs">content_copy</span>
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => handleUngroup(group.id)}
                                 className="w-6 h-6 rounded flex items-center justify-center text-amber-400 hover:text-amber-200 hover:bg-amber-950/60 transition-colors cursor-pointer"
                                 title={`Ungroup ${group.name} (preserves member positions)`}
@@ -8529,6 +8670,15 @@ const ARTest = () => {
                           </button>
                           <button
                             type="button"
+                            onClick={() => handleDuplicateGroup(currentGroup.id)}
+                            className="px-2 py-1 bg-cyan-600/30 hover:bg-cyan-600/50 text-cyan-300 border border-cyan-500/40 rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                            title={`Duplicate group "${currentGroup.name}" (Ctrl+D)`}
+                          >
+                            <span className="material-symbols-outlined text-xs">content_copy</span>
+                            Duplicate
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => handleUngroup(currentGroup.id)}
                             className="px-2 py-1 bg-amber-600/30 hover:bg-amber-600/50 text-amber-300 border border-amber-500/40 rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
                             title="Ungroup objects"
@@ -8677,14 +8827,25 @@ const ARTest = () => {
 
                       {/* Group Danger Actions */}
                       <div className="flex items-center justify-between pt-2 border-t border-neutral-800 text-xs">
-                        <button
-                          type="button"
-                          onClick={() => handleUngroup(currentGroup.id)}
-                          className="px-2.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
-                        >
-                          <span className="material-symbols-outlined text-xs">layers_clear</span>
-                          Ungroup
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleDuplicateGroup(currentGroup.id)}
+                            className="px-2.5 py-1.5 bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 border border-cyan-500/30 rounded text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                            title={`Duplicate group "${currentGroup.name}" (Ctrl+D)`}
+                          >
+                            <span className="material-symbols-outlined text-xs">content_copy</span>
+                            Duplicate
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleUngroup(currentGroup.id)}
+                            className="px-2.5 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                          >
+                            <span className="material-symbols-outlined text-xs">layers_clear</span>
+                            Ungroup
+                          </button>
+                        </div>
                         <button
                           type="button"
                           onClick={() => handleDeleteGroup(currentGroup.id, false)}
@@ -16374,6 +16535,15 @@ const ARTest = () => {
                   </button>
                   <button
                     type="button"
+                    onClick={() => handleDuplicateGroup(selectedGroupId)}
+                    className="font-semibold text-cyan-300 hover:text-white px-2 py-0.5 rounded bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-500/40 transition-colors cursor-pointer flex items-center gap-1"
+                    title={`Duplicate group "${sceneGroups.find((g) => g.id === selectedGroupId)?.name || 'Group'}" (Ctrl+D)`}
+                  >
+                    <span className="material-symbols-outlined text-xs">content_copy</span>
+                    <span>Duplicate</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={focusCameraOnSelectedObject}
                     className="font-semibold text-neutral-300 hover:text-white px-2 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 transition-colors cursor-pointer flex items-center gap-1"
                     title="Focus camera on group (F)"
@@ -16657,17 +16827,28 @@ const ARTest = () => {
               </button>
             )}
 
-            {/* Ungroup Button (when a group is selected) */}
+            {/* Duplicate & Ungroup Buttons (when a group is selected) */}
             {selectedTargetType === 'group' && selectedGroupId && (
-              <button
-                type="button"
-                onClick={() => handleUngroup(selectedGroupId)}
-                title="Ungroup (Ctrl+Shift+G)"
-                className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-purple-300 border border-purple-500/40 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-all"
-              >
-                <span className="material-symbols-outlined text-xs">folder_off</span>
-                <span>Ungroup</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleDuplicateGroup(selectedGroupId)}
+                  title="Duplicate Group (Ctrl+D)"
+                  className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-cyan-300 border border-cyan-500/40 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-all"
+                >
+                  <span className="material-symbols-outlined text-xs">content_copy</span>
+                  <span>Duplicate</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleUngroup(selectedGroupId)}
+                  title="Ungroup (Ctrl+Shift+G)"
+                  className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-purple-300 border border-purple-500/40 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-all"
+                >
+                  <span className="material-symbols-outlined text-xs">folder_off</span>
+                  <span>Ungroup</span>
+                </button>
+              </>
             )}
 
             {/* Selection Info Badge */}
