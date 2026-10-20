@@ -419,6 +419,111 @@ export async function uploadModelTemplate({
 }
 
 /**
+ * Saves modifications made to a model template (e.g. from AR Test),
+ * replacing the template's 3D model (GLB) and thumbnail in storage and Firestore.
+ */
+export async function saveEditedModelTemplate({
+  template,
+  glbBlob,
+  thumbnailBlob = null,
+  onProgress = () => {}
+}) {
+  if (!template || !template.id) {
+    throw new Error('Invalid template reference for update.');
+  }
+  if (!glbBlob) {
+    throw new Error('No 3D model binary (GLB) provided for template save.');
+  }
+
+  const timestamp = Date.now();
+  const safeFilename = (template.filename || `${template.cleanName || 'template'}.glb`)
+    .replace(/[^a-zA-Z0-9._-]/g, '_');
+  const formattedCategory = formatTitle(template.category) || 'General';
+  const formattedSubcategory = formatTitle(template.subcategory) || 'General';
+
+  // 1. Determine model storage path in Firebase Storage
+  let modelStoragePath = template.storagePath;
+  if (!modelStoragePath) {
+    modelStoragePath = `model_templates/${formattedCategory}/${formattedSubcategory}/${timestamp}_${safeFilename}`;
+  }
+
+  onProgress({
+    step: 'MODEL_UPLOAD',
+    progress: 30,
+    message: `Uploading updated 3D model (${(glbBlob.size / 1024 / 1024).toFixed(2)} MB)...`
+  });
+
+  const modelStorageRef = ref(storage, modelStoragePath);
+  await uploadBytes(modelStorageRef, glbBlob, {
+    contentType: 'model/gltf-binary',
+    customMetadata: {
+      templateId: template.id,
+      updatedAt: new Date().toISOString()
+    }
+  });
+  const modelUrl = await getDownloadURL(modelStorageRef);
+
+  // 2. Upload thumbnail if provided
+  let thumbnailUrl = template.thumbnailUrl || null;
+  let thumbnailStoragePath = template.thumbnailStoragePath || null;
+
+  if (thumbnailBlob) {
+    onProgress({
+      step: 'THUMBNAIL_UPLOAD',
+      progress: 70,
+      message: 'Uploading updated template preview thumbnail...'
+    });
+    if (!thumbnailStoragePath) {
+      thumbnailStoragePath = `model_templates/thumbnails/${timestamp}_${template.id}_thumb.png`;
+    }
+    const thumbStorageRef = ref(storage, thumbnailStoragePath);
+    await uploadBytes(thumbStorageRef, thumbnailBlob, {
+      contentType: 'image/png'
+    });
+    thumbnailUrl = await getDownloadURL(thumbStorageRef);
+  }
+
+  // 3. Update Firestore `model_templates` document
+  onProgress({
+    step: 'SAVING_METADATA',
+    progress: 90,
+    message: 'Updating template catalog record in Firestore...'
+  });
+
+  const updatedDocData = {
+    id: template.id,
+    name: template.name || template.cleanName,
+    cleanName: template.cleanName || template.name,
+    category: formattedCategory,
+    subcategory: formattedSubcategory,
+    filename: safeFilename,
+    ext: 'GLB',
+    size: glbBlob.size,
+    url: modelUrl,
+    storagePath: modelStoragePath,
+    thumbnailUrl: thumbnailUrl || template.thumbnailUrl || null,
+    thumbnailStoragePath: thumbnailStoragePath || template.thumbnailStoragePath || null,
+    description: template.description || '',
+    tags: Array.isArray(template.tags) ? template.tags : [],
+    isHumanoid: Boolean(template.isHumanoid),
+    source: 'uploaded',
+    updatedAt: new Date().toISOString()
+  };
+
+  await setDoc(doc(db, 'model_templates', template.id), updatedDocData, { merge: true });
+
+  // 4. Trigger catalog refresh so all views immediately update
+  onProgress({
+    step: 'SYNCING',
+    progress: 100,
+    message: 'Template successfully updated & catalog refreshed!'
+  });
+  await fetchTemplatesFromBucket();
+
+  return updatedDocData;
+}
+
+/**
  * Delete a custom uploaded model template from Firestore and Firebase Storage.
  */
 export async function deleteModelTemplate(template) {

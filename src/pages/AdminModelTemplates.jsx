@@ -721,6 +721,22 @@ export default function AdminModelTemplates() {
                       <span>Studio 44</span>
                     </Link>
 
+                    <Link
+                      to={`/ar-test?templateId=${encodeURIComponent(template.id)}`}
+                      onClick={() => {
+                        try {
+                          sessionStorage.setItem('starwear_edit_template', JSON.stringify(template));
+                        } catch (e) {
+                          console.warn(e);
+                        }
+                      }}
+                      className="py-1 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1 shadow-sm transition-all cursor-pointer"
+                      title="Open template in AR Test for 3D design and styling"
+                    >
+                      <span className="material-symbols-outlined text-xs">tune</span>
+                      <span>AR Test</span>
+                    </Link>
+
                     {template.url && (
                       <a
                         href={template.url}
@@ -840,6 +856,21 @@ export default function AdminModelTemplates() {
                       </td>
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          <Link
+                            to={`/ar-test?templateId=${encodeURIComponent(template.id)}`}
+                            onClick={() => {
+                              try {
+                                sessionStorage.setItem('starwear_edit_template', JSON.stringify(template));
+                              } catch (e) {
+                                console.warn(e);
+                              }
+                            }}
+                            className="p-1.5 rounded-lg hover:bg-surface-container text-indigo-400 hover:text-indigo-300 transition-colors"
+                            title="Open in AR Test for design"
+                          >
+                            <span className="material-symbols-outlined text-base">tune</span>
+                          </Link>
+
                           <Link
                             to="/studio44"
                             target="_blank"

@@ -32,6 +32,7 @@ import {
   invalidateThumbnailCache,
   batchUpdateAllAssetThumbnails
 } from '../utils/modelThumbnailRenderer';
+import { fetchTemplatesFromBucket, saveEditedModelTemplate } from '../utils/meshTemplates';
 
 const SHAPE_TEXTURE_SAMPLES = [
   {
@@ -659,6 +660,9 @@ const ARTest = () => {
   const isSavingConfigRef = useRef(false);
   const lastSaveTimeRef = useRef(0);
   const [showDiagnosticsDrawer, setShowDiagnosticsDrawer] = useState(false);
+
+  // Model Template Editing Mode State
+  const [editingTemplate, setEditingTemplate] = useState(null);
 
   // Active Control Panel Tab: 'transform' | 'hierarchy' | 'lighting' | 'materials' | 'scene'
   const [activeTab, setActiveTab] = useState('transform');
@@ -1422,6 +1426,63 @@ const ARTest = () => {
       setTimeout(() => setSaveSuccessMsg(''), 4000);
     }
   };
+
+  // Detect if a 3D Model Template is being edited from URL parameter (?templateId=...)
+  useEffect(() => {
+    let isMounted = true;
+    const detectTemplateParam = async () => {
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const templateId = urlParams.get('templateId') || urlParams.get('template');
+        if (!templateId) return;
+
+        // 1. Check sessionStorage first for instantaneous hydration
+        let targetTemplate = null;
+        try {
+          const cached = sessionStorage.getItem('starwear_edit_template');
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (parsed?.id === templateId) {
+              targetTemplate = parsed;
+            }
+          }
+        } catch (e) {
+          console.warn('[ARTest] Could not parse sessionStorage template:', e);
+        }
+
+        // 2. Fallback: fetch from catalog or Firestore
+        if (!targetTemplate) {
+          const all = await fetchTemplatesFromBucket();
+          targetTemplate = all.find((t) => t.id === templateId);
+          if (!targetTemplate) {
+            const snap = await getDoc(doc(db, 'model_templates', templateId));
+            if (snap.exists()) {
+              targetTemplate = { id: snap.id, ...snap.data(), source: 'uploaded' };
+            }
+          }
+        }
+
+        if (targetTemplate && isMounted) {
+          setEditingTemplate(targetTemplate);
+          if (targetTemplate.url) {
+            setLocalGlbUrl(targetTemplate.url);
+            setLocalGlbName(targetTemplate.cleanName || targetTemplate.name || targetTemplate.filename || 'Template Model');
+            setSelectedGlbFile(null);
+            selectSceneObject('model');
+          }
+          setSaveSuccessMsg(`Editing Model Template: "${targetTemplate.cleanName || targetTemplate.name}".`);
+          setTimeout(() => setSaveSuccessMsg(''), 5000);
+        }
+      } catch (err) {
+        console.error('[ARTest] Failed to load model template for editing:', err);
+      }
+    };
+
+    detectTemplateParam();
+    return () => {
+      isMounted = false;
+    };
+  }, [selectSceneObject]);
 
   // =========================================================================
   // ADDITIONAL 3D PRIMITIVE GEOMETRIES STATES & HANDLERS (Studio4D4 parity)
@@ -7377,8 +7438,243 @@ const ARTest = () => {
     }
   };
 
+  // Dedicated handler to save modifications made to a model template back to its catalog storage & Firestore
+  const handleSaveTemplate = async () => {
+    if (!editingTemplate) return;
+
+    const now = Date.now();
+    if (isSavingConfigRef.current || (now - lastSaveTimeRef.current < 1500)) {
+      console.warn('[ARTest] handleSaveTemplate throttled or already running');
+      return;
+    }
+    isSavingConfigRef.current = true;
+    lastSaveTimeRef.current = now;
+
+    setSavingConfig(true);
+    setSaveSuccessMsg('');
+    setUploadProgress('Preparing 3D model template composition...');
+
+    try {
+      const exportContainer = new THREE.Group();
+      const safeTemplateName = (editingTemplate.cleanName || editingTemplate.name || 'template')
+        .replace(/[^a-zA-Z0-9_-]/g, '_');
+      exportContainer.name = safeTemplateName;
+
+      // 1. Primary Model with all material/texture modifications
+      const modelEl = document.getElementById('ar-model');
+      const primaryModel3D = modelEl?.getObject3D('mesh');
+      if (primaryModel3D) {
+        primaryModel3D.updateWorldMatrix(true, true);
+        const clonedPrimary = primaryModel3D.clone(true);
+        const toRemove = [];
+        clonedPrimary.traverse((c) => {
+          if (c.name && /helper|picker|gizmo|__starwear/i.test(c.name)) {
+            toRemove.push(c);
+          }
+        });
+        toRemove.forEach((c) => c.parent && c.parent.remove(c));
+
+        // Strip deleted meshes
+        deletedMeshNames.forEach((name) => {
+          const deadNode = clonedPrimary.getObjectByName(name);
+          if (deadNode && deadNode.parent) {
+            deadNode.parent.remove(deadNode);
+          }
+        });
+
+        exportContainer.add(clonedPrimary);
+      }
+
+      // 2. Additional Geometries (Shapes / Extrusions)
+      if (Array.isArray(additionalGeometries)) {
+        additionalGeometries.forEach((g) => {
+          if (g.visible === false) return;
+          const liveObj = findThreeObject('geometry', g.id);
+          let primMesh = null;
+          if (liveObj) {
+            liveObj.updateWorldMatrix(true, true);
+            primMesh = liveObj.clone(true);
+            const toRemove = [];
+            primMesh.traverse((c) => {
+              if (c.name && /helper|picker|gizmo|__starwear/i.test(c.name)) toRemove.push(c);
+            });
+            toRemove.forEach((c) => c.parent && c.parent.remove(c));
+            primMesh.position.set(0, 0, 0);
+            primMesh.quaternion.set(0, 0, 0, 1);
+            primMesh.scale.set(1, 1, 1);
+            liveObj.matrixWorld.decompose(primMesh.position, primMesh.quaternion, primMesh.scale);
+          } else {
+            primMesh = createPrimitiveMesh(g, THREE);
+            primMesh.position.set(g.posX || 0, g.posY || 0, g.posZ || 0);
+            primMesh.rotation.set(
+              THREE.MathUtils.degToRad(g.rotX || 0),
+              THREE.MathUtils.degToRad(g.rotY || 0),
+              THREE.MathUtils.degToRad(g.rotZ || 0)
+            );
+            primMesh.scale.set(g.scaleX ?? g.scale ?? 1, g.scaleY ?? g.scale ?? 1, g.scaleZ ?? g.scale ?? 1);
+          }
+          primMesh.name = (g.name || g.type || 'shape').replace(/[^a-zA-Z0-9_-]/g, '_');
+          exportContainer.add(primMesh);
+        });
+      }
+
+      // 3. Custom 3D Typography Texts
+      const textAnchor = document.getElementById('ar-3d-texts-anchor');
+      const textsRoot = textAnchor?.getObject3D('texts3DRoot') || textAnchor?.object3D;
+      if (textsRoot && Array.isArray(custom3DTexts)) {
+        custom3DTexts.forEach((t) => {
+          if (t.visible === false) return;
+          textsRoot.traverse((node) => {
+            if (node.userData?.textId === t.id) {
+              node.updateWorldMatrix(true, true);
+              const clonedText = node.clone(true);
+              node.matrixWorld.decompose(clonedText.position, clonedText.quaternion, clonedText.scale);
+              exportContainer.add(clonedText);
+            }
+          });
+        });
+      }
+
+      // 4. Custom 3D Models
+      const customModelsAnchor = document.getElementById('ar-custom-models-anchor');
+      const modelsRoot = customModelsAnchor?.getObject3D('customModelsRoot') || customModelsAnchor?.object3D;
+      if (modelsRoot && Array.isArray(customModels)) {
+        customModels.forEach((m) => {
+          if (m.visible === false) return;
+          modelsRoot.traverse((node) => {
+            if (node.userData?.modelId === m.id && node.userData?.isCustomModel) {
+              node.updateWorldMatrix(true, true);
+              const clonedMod = node.clone(true);
+              node.matrixWorld.decompose(clonedMod.position, clonedMod.quaternion, clonedMod.scale);
+              exportContainer.add(clonedMod);
+            }
+          });
+        });
+      }
+
+      exportContainer.updateMatrixWorld(true);
+
+      // Export to binary .glb using GLTFExporter
+      setUploadProgress('Exporting designed 3D model (.glb)...');
+      const glbBlob = await new Promise((resolve, reject) => {
+        const exporter = new GLTFExporter();
+        exporter.parse(
+          exportContainer,
+          (result) => {
+            if (result instanceof ArrayBuffer) {
+              resolve(new Blob([result], { type: 'model/gltf-binary' }));
+            } else {
+              resolve(new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' }));
+            }
+          },
+          (err) => reject(err),
+          { binary: true, embedImages: true }
+        );
+      });
+
+      // Capture scene canvas snapshot for template thumbnail
+      setUploadProgress('Capturing updated template thumbnail...');
+      let thumbnailBlob = null;
+      const sceneContainer = document.getElementById('ar-scene-container');
+      const sceneEl = sceneContainer?.querySelector('a-scene');
+      if (sceneEl) {
+        try {
+          const thumbResult = await captureSceneCanvasThumbnail(sceneEl, {
+            width: 512,
+            height: 512,
+            hideMarkers: true
+          });
+          if (thumbResult?.blob) {
+            thumbnailBlob = thumbResult.blob;
+          }
+        } catch (thumbErr) {
+          console.warn('[ARTest] Canvas thumbnail capture warning:', thumbErr);
+        }
+      }
+
+      // Upload and replace template in Firebase Storage and Firestore
+      setUploadProgress('Saving to template storage and updating catalog...');
+      const updatedTemplate = await saveEditedModelTemplate({
+        template: editingTemplate,
+        glbBlob,
+        thumbnailBlob,
+        onProgress: ({ message }) => setUploadProgress(message)
+      });
+
+      setEditingTemplate(updatedTemplate);
+      setLocalGlbUrl(updatedTemplate.url);
+      try {
+        sessionStorage.setItem('starwear_edit_template', JSON.stringify(updatedTemplate));
+      } catch (e) {
+        console.warn(e);
+      }
+
+      setSaveSuccessMsg(`Template "${updatedTemplate.cleanName || updatedTemplate.name}" successfully updated & replaced in catalog!`);
+      setTimeout(() => setSaveSuccessMsg(''), 5000);
+    } catch (err) {
+      console.error('[ARTest] Failed to save model template:', err);
+      alert('Failed to save model template: ' + (err?.message || err));
+    } finally {
+      setSavingConfig(false);
+      setUploadProgress('');
+      isSavingConfigRef.current = false;
+    }
+  };
+
   // Dedicated one-click handler to capture current live camera viewport angle as 3D asset thumbnail
   const handleCaptureThumbnail = async () => {
+    if (editingTemplate) {
+      setSavingConfig(true);
+      setUploadProgress('Capturing template thumbnail snapshot...');
+      try {
+        const sceneContainer = document.getElementById('ar-scene-container');
+        const sceneEl = sceneContainer?.querySelector('a-scene');
+        let thumbResult = null;
+        if (sceneEl) {
+          thumbResult = await captureSceneCanvasThumbnail(sceneEl, {
+            width: 512,
+            height: 512,
+            hideMarkers: true
+          });
+        }
+        if (thumbResult?.blob) {
+          setUploadProgress('Uploading fresh template thumbnail...');
+          const timestamp = Date.now();
+          const thumbnailStoragePath = editingTemplate.thumbnailStoragePath || `model_templates/thumbnails/${timestamp}_${editingTemplate.id}_thumb.png`;
+          const thumbRef = ref(storage, thumbnailStoragePath);
+          await uploadBytes(thumbRef, thumbResult.blob, { contentType: 'image/png' });
+          const newUrl = await getDownloadURL(thumbRef);
+
+          await setDoc(doc(db, 'model_templates', editingTemplate.id), {
+            thumbnailUrl: newUrl,
+            thumbnailStoragePath,
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+
+          await fetchTemplatesFromBucket();
+          const updated = { ...editingTemplate, thumbnailUrl: newUrl, thumbnailStoragePath };
+          setEditingTemplate(updated);
+          try {
+            sessionStorage.setItem('starwear_edit_template', JSON.stringify(updated));
+          } catch (e) {
+            console.warn(e);
+          }
+
+          setSaveSuccessMsg(`Fresh 3D template thumbnail saved!`);
+          setTimeout(() => setSaveSuccessMsg(''), 4000);
+        } else {
+          alert('Could not capture scene snapshot. Ensure the 3D model is visible.');
+        }
+      } catch (err) {
+        console.error('[ARTest] Error capturing template thumbnail:', err);
+        alert('Error capturing template thumbnail: ' + err.message);
+      } finally {
+        setSavingConfig(false);
+        setUploadProgress('');
+      }
+      return;
+    }
+
     if (!batchId.trim()) {
       alert('Please enter a Batch ID in the input above before capturing a thumbnail.');
       return;
@@ -7683,11 +7979,50 @@ const ARTest = () => {
             </span>
           </div>
 
+          {/* Model Template Editing Mode Banner */}
+          {editingTemplate && (
+            <div className="mb-2.5 p-2.5 rounded-xl bg-gradient-to-r from-indigo-950 via-purple-950/80 to-amber-950/60 border border-indigo-500/50 flex flex-col gap-1.5 shadow-md">
+              <div className="flex items-center justify-between">
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-400 text-black uppercase tracking-wider flex items-center gap-1 shadow-xs">
+                  <span className="material-symbols-outlined text-[13px]">tune</span>
+                  Template Design Mode
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingTemplate(null);
+                    try {
+                      sessionStorage.removeItem('starwear_edit_template');
+                    } catch (e) {
+                      console.warn(e);
+                    }
+                    const url = new URL(window.location.href);
+                    url.searchParams.delete('templateId');
+                    url.searchParams.delete('template');
+                    window.history.replaceState({}, '', url.pathname);
+                  }}
+                  className="text-[10px] text-neutral-400 hover:text-white px-2 py-0.5 rounded bg-neutral-900/80 hover:bg-neutral-800 border border-neutral-700/80 transition-colors cursor-pointer"
+                  title="Exit template editing mode"
+                >
+                  Exit
+                </button>
+              </div>
+              <div className="flex items-center justify-between min-w-0">
+                <span className="font-bold text-white text-xs truncate">
+                  {editingTemplate.cleanName || editingTemplate.name}
+                </span>
+                <span className="text-[10px] font-mono text-neutral-400 truncate ml-2">
+                  {editingTemplate.category} › {editingTemplate.subcategory}
+                </span>
+              </div>
+            </div>
+          )}
+
           <form onSubmit={handleLoad} className="flex flex-col gap-2">
             <div className="flex gap-1.5">
               <input
                 type="text"
-                placeholder="Enter Batch ID"
+                placeholder={editingTemplate ? `Batch ID (Optional in Template Mode)` : "Enter Batch ID"}
                 value={batchId}
                 onChange={(e) => setBatchId(e.target.value)}
                 className="flex-1 px-3 py-1.5 bg-neutral-900 text-white border border-neutral-700 rounded text-xs focus:outline-none focus:border-indigo-400 font-mono transition-colors"
@@ -7723,33 +8058,46 @@ const ARTest = () => {
             <button
               type="button"
               onClick={handleCaptureThumbnail}
-              disabled={savingConfig || !batchId.trim()}
-              className="px-2.5 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-cyan-950/40"
-              title="Capture & Save 3D Thumbnail from Current View"
+              disabled={savingConfig || (!editingTemplate && !batchId.trim())}
+              className="px-2.5 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-cyan-950/40 cursor-pointer"
+              title={editingTemplate ? `Capture & Update Template Thumbnail Preview` : "Capture & Save 3D Thumbnail from Current View"}
             >
               <span className="material-symbols-outlined text-[15px]">photo_camera</span>
               <span>Snap</span>
             </button>
 
-            <button
-              type="button"
-              onClick={handleSaveConfig}
-              disabled={savingConfig || !batchId.trim()}
-              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-emerald-950/40"
-              title="Save Configuration to Firebase Batch"
-            >
-              <span className="material-symbols-outlined text-sm">save</span>
-              <span>{savingConfig ? 'Saving...' : 'Save'}</span>
-            </button>
+            {editingTemplate ? (
+              <button
+                type="button"
+                onClick={handleSaveTemplate}
+                disabled={savingConfig}
+                className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-indigo-600 hover:from-amber-400 hover:to-indigo-500 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-indigo-950/40 cursor-pointer"
+                title={`Save all design updates directly back to template "${editingTemplate.cleanName || editingTemplate.name}"`}
+              >
+                <span className="material-symbols-outlined text-sm">cloud_upload</span>
+                <span>{savingConfig ? 'Saving...' : 'Save Template'}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSaveConfig}
+                disabled={savingConfig || !batchId.trim()}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-emerald-950/40"
+                title="Save Configuration to Firebase Batch"
+              >
+                <span className="material-symbols-outlined text-sm">save</span>
+                <span>{savingConfig ? 'Saving...' : 'Save'}</span>
+              </button>
+            )}
           </div>
 
           {/* Active 3D Thumbnail Chip Preview */}
-          {(arData?.thumbnailUrl || arData?.thumbnail_url) && (
+          {((editingTemplate && editingTemplate.thumbnailUrl) || arData?.thumbnailUrl || arData?.thumbnail_url) && (
             <div className="mt-2 pt-2 border-t border-neutral-800/80 flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <div className="w-7 h-7 rounded bg-black/60 border border-cyan-500/40 overflow-hidden flex-shrink-0 shadow-sm">
                   <img
-                    src={arData?.thumbnailUrl || arData?.thumbnail_url}
+                    src={editingTemplate ? editingTemplate.thumbnailUrl : (arData?.thumbnailUrl || arData?.thumbnail_url)}
                     alt="Active Thumbnail"
                     className="w-full h-full object-cover"
                   />
@@ -7757,20 +8105,24 @@ const ARTest = () => {
                 <div className="min-w-0">
                   <p className="text-[10px] font-mono font-bold text-cyan-300 flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
-                    3D Thumbnail
+                    <span>{editingTemplate ? 'Template Thumbnail' : '3D Thumbnail Active'}</span>
                   </p>
-                  <p className="text-[9px] text-neutral-400 font-mono truncate">Updated & Live</p>
+                  <p className="text-[9px] text-neutral-400 truncate">
+                    {editingTemplate ? `${editingTemplate.cleanName || editingTemplate.name}` : (arData?.thumbnail_url || arData?.thumbnailUrl ? 'Custom Viewport Angle' : 'Generated')}
+                  </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={handleBatchSyncThumbnails}
-                disabled={savingConfig}
-                className="text-[10px] text-neutral-400 hover:text-white font-mono underline hover:no-underline cursor-pointer"
-                title="Sync 3D thumbnails for all catalog assets"
-              >
-                Sync Catalog
-              </button>
+              {!editingTemplate && (
+                <button
+                  type="button"
+                  onClick={handleBatchSyncThumbnails}
+                  disabled={savingConfig}
+                  className="text-[10px] text-neutral-400 hover:text-white font-mono underline hover:no-underline cursor-pointer"
+                  title="Sync 3D thumbnails for all catalog assets"
+                >
+                  Sync Catalog
+                </button>
+              )}
             </div>
           )}
 
@@ -11393,15 +11745,17 @@ const ARTest = () => {
                   <div className="pt-2 border-t border-neutral-800/80 space-y-2">
                     <button
                       type="button"
-                      disabled={savingConfig}
-                      onClick={handleSaveConfig}
+                      disabled={savingConfig || (!editingTemplate && !batchId.trim())}
+                      onClick={editingTemplate ? handleSaveTemplate : handleSaveConfig}
                       className="w-full py-2.5 px-4 bg-gradient-to-r from-teal-600 via-sky-600 to-indigo-600 hover:from-teal-500 hover:to-indigo-500 text-white font-bold rounded-lg shadow-lg shadow-teal-500/20 text-xs flex items-center justify-center gap-2 transition-all disabled:opacity-50 active:scale-[0.99] cursor-pointer"
                     >
-                      <span className="material-symbols-outlined text-sm">save</span>
+                      <span className="material-symbols-outlined text-sm">{editingTemplate ? 'cloud_upload' : 'save'}</span>
                       <span>
                         {savingConfig
-                          ? 'Saving Geometries Configuration...'
-                          : `Save Shapes to Batch (${batchId || 'Active'})`}
+                          ? (editingTemplate ? 'Saving Changes to Template...' : 'Saving Geometries Configuration...')
+                          : (editingTemplate
+                              ? `Save Shapes to Template (${editingTemplate.cleanName || editingTemplate.name})`
+                              : `Save Shapes to Batch (${batchId || 'Active'})`)}
                       </span>
                     </button>
                   </div>
@@ -11965,17 +12319,21 @@ const ARTest = () => {
                       </div>
                     </div>
 
-                    {/* Save to Batch */}
+                    {/* Save to Batch / Template */}
                     <div className="pt-2">
                       <button
                         type="button"
-                        onClick={handleSaveConfig}
-                        disabled={savingConfig}
-                        className="w-full py-2.5 px-3 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-pink-900/30 transition-all disabled:opacity-50"
+                        onClick={editingTemplate ? handleSaveTemplate : handleSaveConfig}
+                        disabled={savingConfig || (!editingTemplate && !batchId.trim())}
+                        className="w-full py-2.5 px-3 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-pink-900/30 transition-all disabled:opacity-50 cursor-pointer"
                       >
-                        <span className="material-symbols-outlined text-sm">save</span>
+                        <span className="material-symbols-outlined text-sm">{editingTemplate ? 'cloud_upload' : 'save'}</span>
                         <span>
-                          {savingConfig ? 'Saving 3D Text Configuration...' : `Save 3D Text to Batch (${batchId || 'Active'})`}
+                          {savingConfig
+                            ? (editingTemplate ? 'Saving 3D Text to Template...' : 'Saving 3D Text Configuration...')
+                            : (editingTemplate
+                                ? `Save 3D Text to Template (${editingTemplate.cleanName || editingTemplate.name})`
+                                : `Save 3D Text to Batch (${batchId || 'Active'})`)}
                         </span>
                       </button>
                     </div>
@@ -16705,9 +17063,9 @@ const ARTest = () => {
               <button
                 type="button"
                 onClick={handleCaptureThumbnail}
-                disabled={savingConfig || !batchId.trim()}
+                disabled={savingConfig || (!editingTemplate && !batchId.trim())}
                 className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-cyan-700 hover:bg-cyan-600 text-white transition-all shadow-sm flex items-center gap-1 cursor-pointer shrink-0"
-                title="Capture & Save Current 3D View Angle as Asset Thumbnail"
+                title={editingTemplate ? "Capture & Update Template Thumbnail" : "Capture & Save Current 3D View Angle as Asset Thumbnail"}
               >
                 <span className="material-symbols-outlined text-xs">photo_camera</span>
                 <span>Snap Thumb</span>
@@ -17124,9 +17482,11 @@ const ARTest = () => {
         {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
           <div className="absolute top-5 left-[184px] z-40 pointer-events-none">
             <div className="px-3 py-1.5 rounded-full bg-black/80 backdrop-blur-md border border-neutral-700 text-xs font-medium text-neutral-200 shadow-xl flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full ${selectedMesh ? 'bg-indigo-400 animate-ping' : 'bg-emerald-400 animate-pulse'}`}></span>
+              <span className={`w-2 h-2 rounded-full ${editingTemplate ? 'bg-amber-400 animate-pulse' : selectedMesh ? 'bg-indigo-400 animate-ping' : 'bg-emerald-400 animate-pulse'}`}></span>
               <span>
-                {selectedMesh ? (
+                {editingTemplate ? (
+                  <>Template Mode: <strong className="text-amber-300">{editingTemplate.cleanName || editingTemplate.name}</strong></>
+                ) : selectedMesh ? (
                   <>Selected Mesh: <strong className="text-indigo-300">{selectedMesh.name}</strong></>
                 ) : (
                   <>Active Target: <strong className="text-emerald-300">Entire 3D Model</strong></>
