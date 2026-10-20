@@ -107,7 +107,20 @@ export default function AdminModelTemplates() {
       }
     };
     window.addEventListener('3dtemplates-updated', handleUpdate);
-    return () => window.removeEventListener('3dtemplates-updated', handleUpdate);
+
+    // Auto-refresh when tab/window regains focus or visibility (e.g. returning from AR Test)
+    const handleFocus = () => loadTemplates();
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') loadTemplates();
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.removeEventListener('3dtemplates-updated', handleUpdate);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [loadTemplates]);
 
   // Derived categories from available templates + default presets

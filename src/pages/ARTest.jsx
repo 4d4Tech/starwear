@@ -1441,6 +1441,17 @@ const ARTest = () => {
     }
   };
 
+  // Helper to append/update cache-busting timestamp to prevent browser & A-Frame from caching 3D GLB assets
+  const withCacheBuster = (url, timestamp) => {
+    if (!url) return '';
+    const token = timestamp || Date.now();
+    const sep = url.includes('?') ? '&' : '?';
+    if (/([?&])_t=\d+/.test(url)) {
+      return url.replace(/([?&])_t=\d+/, `$1_t=${token}`);
+    }
+    return `${url}${sep}_t=${token}`;
+  };
+
   // Detect if a 3D Model Template is being edited from URL parameter (?templateId=...)
   useEffect(() => {
     let isMounted = true;
@@ -1450,39 +1461,66 @@ const ARTest = () => {
         const templateId = urlParams.get('templateId') || urlParams.get('template');
         if (!templateId) return;
 
-        // 1. Check sessionStorage first for instantaneous hydration
+        // 1. Server-First: Check Firestore directly so we ALWAYS get the latest edited version
         let targetTemplate = null;
         try {
-          const cached = sessionStorage.getItem('starwear_edit_template');
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            if (parsed?.id === templateId) {
-              targetTemplate = parsed;
-            }
+          const snap = await getDocFromServer(doc(db, 'model_templates', templateId));
+          if (snap.exists()) {
+            targetTemplate = { id: snap.id, ...snap.data(), source: 'uploaded' };
           }
-        } catch (e) {
-          console.warn('[ARTest] Could not parse sessionStorage template:', e);
-        }
-
-        // 2. Fallback: fetch from catalog or Firestore
-        if (!targetTemplate) {
-          const all = await fetchTemplatesFromBucket();
-          targetTemplate = all.find((t) => t.id === templateId);
-          if (!targetTemplate) {
+        } catch {
+          try {
             const snap = await getDoc(doc(db, 'model_templates', templateId));
             if (snap.exists()) {
               targetTemplate = { id: snap.id, ...snap.data(), source: 'uploaded' };
             }
+          } catch (e) {
+            console.warn('[ARTest] Firestore template fetch warning:', e);
+          }
+        }
+
+        // 2. Fallback: fetch from catalog bucket
+        if (!targetTemplate) {
+          const all = await fetchTemplatesFromBucket();
+          targetTemplate = all.find((t) => t.id === templateId);
+        }
+
+        // 3. Last fallback: sessionStorage cache
+        if (!targetTemplate) {
+          try {
+            const cached = sessionStorage.getItem('starwear_edit_template');
+            if (cached) {
+              const parsed = JSON.parse(cached);
+              if (parsed?.id === templateId) {
+                targetTemplate = parsed;
+              }
+            }
+          } catch (e) {
+            console.warn('[ARTest] Could not parse sessionStorage template:', e);
           }
         }
 
         if (targetTemplate && isMounted) {
           setEditingTemplate(targetTemplate);
           if (targetTemplate.url) {
-            setLocalGlbUrl(targetTemplate.url);
+            const ts = targetTemplate.updatedAt ? new Date(targetTemplate.updatedAt).getTime() : Date.now();
+            const bustedUrl = withCacheBuster(targetTemplate.url, ts);
+            setLocalGlbUrl(bustedUrl);
             setLocalGlbName(targetTemplate.cleanName || targetTemplate.name || targetTemplate.filename || 'Template Model');
             setSelectedGlbFile(null);
+            setModelPosX(0);
+            setModelPosY(0);
+            setModelPosZ(0);
+            setModelScale(1);
+            setModelRotX(0);
+            setModelRotY(0);
+            setModelRotZ(0);
             selectSceneObject('model');
+          }
+          try {
+            sessionStorage.setItem('starwear_edit_template', JSON.stringify(targetTemplate));
+          } catch (e) {
+            console.warn(e);
           }
           setSaveSuccessMsg(`Editing Model Template: "${targetTemplate.cleanName || targetTemplate.name}".`);
           setTimeout(() => setSaveSuccessMsg(''), 5000);
@@ -7497,6 +7535,18 @@ const ARTest = () => {
           }
         });
 
+        // Apply entity transforms so user transformations are baked directly into the saved model
+        if (modelEl?.object3D) {
+          clonedPrimary.position.set(Number(modelPosX) || 0, Number(modelPosY) || 0, Number(modelPosZ) || 0);
+          clonedPrimary.rotation.set(
+            THREE.MathUtils.degToRad(Number(modelRotX) || 0),
+            THREE.MathUtils.degToRad(Number(modelRotY) || 0),
+            THREE.MathUtils.degToRad(Number(modelRotZ) || 0)
+          );
+          const s = Number(modelScale) || 1;
+          clonedPrimary.scale.set(s, s, s);
+        }
+
         exportContainer.add(clonedPrimary);
       }
 
@@ -7627,7 +7677,21 @@ const ARTest = () => {
       });
 
       setEditingTemplate(updatedTemplate);
-      setLocalGlbUrl(updatedTemplate.url);
+      const ts = updatedTemplate.updatedAt ? new Date(updatedTemplate.updatedAt).getTime() : Date.now();
+      const freshUrl = withCacheBuster(updatedTemplate.url, ts);
+      setLocalGlbUrl(freshUrl);
+      // Reset entity transforms and baked additions since they are now unified inside the primary GLB
+      setModelPosX(0);
+      setModelPosY(0);
+      setModelPosZ(0);
+      setModelScale(1);
+      setModelRotX(0);
+      setModelRotY(0);
+      setModelRotZ(0);
+      setAdditionalGeometries([]);
+      setCustom3DTexts([]);
+      setCustomModels([]);
+      setDeletedMeshNames([]);
       try {
         sessionStorage.setItem('starwear_edit_template', JSON.stringify(updatedTemplate));
       } catch (e) {

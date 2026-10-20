@@ -1,7 +1,7 @@
 // src/utils/meshTemplates.js
 
 import { db, storage, templatesStorage } from '../firebase';
-import { collection, getDocs, doc, setDoc, deleteDoc, query } from 'firebase/firestore';
+import { collection, getDocs, getDocsFromServer, doc, setDoc, deleteDoc, query } from 'firebase/firestore';
 import { ref, listAll, getDownloadURL, uploadBytes, deleteObject } from 'firebase/storage';
 import { getPreRenderedThumbnail, captureModelThumbnail } from './modelThumbnailRenderer';
 
@@ -193,7 +193,12 @@ export async function fetchFirestoreTemplates() {
   try {
     if (!db) return [];
     const q = query(collection(db, 'model_templates'));
-    const snap = await getDocs(q);
+    let snap;
+    try {
+      snap = await getDocsFromServer(q);
+    } catch {
+      snap = await getDocs(q);
+    }
     const firestoreTemplates = [];
 
     snap.forEach((docSnap) => {
@@ -442,10 +447,9 @@ export async function saveEditedModelTemplate({
   const formattedSubcategory = formatTitle(template.subcategory) || 'General';
 
   // 1. Determine model storage path in Firebase Storage
-  let modelStoragePath = template.storagePath;
-  if (!modelStoragePath) {
-    modelStoragePath = `model_templates/${formattedCategory}/${formattedSubcategory}/${timestamp}_${safeFilename}`;
-  }
+  // Always assign a fresh unique timestamped path so CDNs and browser caches never serve stale GLB binaries
+  const oldStoragePath = template.storagePath;
+  const modelStoragePath = `model_templates/${formattedCategory}/${formattedSubcategory}/${timestamp}_${safeFilename}`;
 
   onProgress({
     step: 'MODEL_UPLOAD',
@@ -462,6 +466,16 @@ export async function saveEditedModelTemplate({
     }
   });
   const modelUrl = await getDownloadURL(modelStorageRef);
+
+  // Clean up previous storage file if it exists and differs from the new path
+  if (oldStoragePath && oldStoragePath !== modelStoragePath) {
+    try {
+      const oldRef = ref(storage, oldStoragePath);
+      await deleteObject(oldRef);
+    } catch (cleanErr) {
+      console.warn('Could not remove previous template GLB version:', cleanErr);
+    }
+  }
 
   // 2. Upload thumbnail if provided
   let thumbnailUrl = template.thumbnailUrl || null;
