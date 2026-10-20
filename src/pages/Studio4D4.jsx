@@ -23,6 +23,7 @@ import AddGeometryModal from '../components/AddGeometryModal';
 import { createInstagramFrameMesh } from '../utils/instagramFrameRenderer';
 import { getMeshTemplates, fetchTemplatesFromBucket } from '../utils/meshTemplates';
 import { CharacterAnimationManager } from '../utils/CharacterAnimationManager';
+import { sanitizeHierarchyForGLTFExport } from '../utils/geometryHelper';
 import {
   DEFAULT_TRIPO_KEY,
   TRIPO_ANIMATION_PRESETS,
@@ -4561,6 +4562,8 @@ export default function Studio4D4() {
           });
         }
 
+        sanitizeHierarchyForGLTFExport(exportScene, THREE);
+
         exporter.parse(
           exportScene,
           (gltf) => {
@@ -4756,6 +4759,8 @@ export default function Studio4D4() {
         const exportScene = new THREE.Scene();
         const prep = appRef.current.prepareMeshForExport(selectedObj);
         if (prep) exportScene.add(prep);
+
+        sanitizeHierarchyForGLTFExport(exportScene, THREE);
 
         const glbBlob = await new Promise((resolve, reject) => {
           exporter.parse(

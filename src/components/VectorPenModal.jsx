@@ -10,7 +10,8 @@ import {
   VECTOR_GENERATION_MODES,
   REVOLVE_PRESETS,
   SWEEP_SPINE_PRESETS,
-  CARVE_PRESETS
+  CARVE_PRESETS,
+  sanitizeHierarchyForGLTFExport
 } from '../utils/geometryHelper';
 
 // Presets with Photoshop-style anchor points and bezier handles
@@ -1584,6 +1585,7 @@ export default function VectorPenModal({
 
       const scene = new THREE.Scene();
       scene.add(mesh);
+      sanitizeHierarchyForGLTFExport(scene, THREE);
 
       const exporter = new GLTFExporter();
       exporter.parse(

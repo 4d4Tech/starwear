@@ -13,6 +13,20 @@ if (typeof THREE !== 'undefined' && THREE.Cache) {
   THREE.Cache.enabled = false;
   THREE.Cache.clear();
 }
+// Polyfill Object3D prototype with pivot = null.
+// Three.js GLTFExporter expects (object.pivot !== null) to imply that pivot is a Vector3.
+// Cloned A-Frame entities and older Three instances have pivot === undefined,
+// which causes GLTFExporter to execute _processNodeWithPivotAsync and crash with "Cannot read properties of undefined (reading 'x')".
+if (typeof THREE !== 'undefined' && THREE.Object3D?.prototype) {
+  if (THREE.Object3D.prototype.pivot === undefined) {
+    THREE.Object3D.prototype.pivot = null;
+  }
+}
+if (typeof window !== 'undefined' && window.AFRAME?.THREE?.Object3D?.prototype) {
+  if (window.AFRAME.THREE.Object3D.prototype.pivot === undefined) {
+    window.AFRAME.THREE.Object3D.prototype.pivot = null;
+  }
+}
 import { httpsCallable } from 'firebase/functions';
 import { logEvent } from 'firebase/analytics';
 import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfaceFrame, purgeAllSceneVideoLayers, PORTAL_PRESETS, PARTICLE_PRESETS } from '../utils/aframe-components';
@@ -23,7 +37,7 @@ import Add3DTextModal from '../components/Add3DTextModal';
 import ARLightDiagnosticsDrawer from '../components/ARLightDiagnosticsDrawer';
 import FaceSketchExtrudeStudio from '../components/FaceSketchExtrudeStudio';
 import { AVAILABLE_FONTS, TEXT_MATERIAL_PRESETS } from '../utils/text3DHelper';
-import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES, createPrimitiveMesh, INFLATION_PROFILES } from '../utils/geometryHelper';
+import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES, createPrimitiveMesh, INFLATION_PROFILES, sanitizeHierarchyForGLTFExport } from '../utils/geometryHelper';
 import { loadMarkerForBatch, createDefaultMarkerDataUrl, getImageDimensions } from '../utils/markerHelper';
 import {
   captureSceneCanvasThumbnail,
@@ -2330,6 +2344,7 @@ const ARTest = () => {
 
       const exportScene = new THREE.Scene();
       exportScene.add(targetMesh);
+      sanitizeHierarchyForGLTFExport(exportScene, THREE);
 
       exporter.parse(
         exportScene,
@@ -7554,10 +7569,20 @@ const ARTest = () => {
 
       exportContainer.updateMatrixWorld(true);
 
+      // Deeply sanitize hierarchy to eliminate undefined pivot and invalid texture transforms
+      sanitizeHierarchyForGLTFExport(exportContainer, THREE);
+
       // Export to binary .glb using GLTFExporter
       setUploadProgress('Exporting designed 3D model (.glb)...');
       const glbBlob = await new Promise((resolve, reject) => {
         const exporter = new GLTFExporter();
+        const exportOptions = {
+          binary: true,
+          embedImages: true
+        };
+        if (primaryModel3D?.animations?.length > 0) {
+          exportOptions.animations = primaryModel3D.animations;
+        }
         exporter.parse(
           exportContainer,
           (result) => {
@@ -7568,7 +7593,7 @@ const ARTest = () => {
             }
           },
           (err) => reject(err),
-          { binary: true, embedImages: true }
+          exportOptions
         );
       });
 

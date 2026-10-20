@@ -908,3 +908,55 @@ export function computeGeometrySurfaceFrame(mesh, slotIndex = 0, THREE_LIB = THR
   };
 }
 
+// Polyfill Object3D prototype with pivot = null.
+// Three.js GLTFExporter expects (object.pivot !== null) to imply that pivot is a Vector3.
+// Cloned A-Frame entities and older Three instances have pivot === undefined,
+// which causes GLTFExporter to execute _processNodeWithPivotAsync and crash with "Cannot read properties of undefined (reading 'x')".
+if (typeof THREE !== 'undefined' && THREE.Object3D?.prototype) {
+  if (THREE.Object3D.prototype.pivot === undefined) {
+    THREE.Object3D.prototype.pivot = null;
+  }
+}
+if (typeof window !== 'undefined' && window.AFRAME?.THREE?.Object3D?.prototype) {
+  if (window.AFRAME.THREE.Object3D.prototype.pivot === undefined) {
+    window.AFRAME.THREE.Object3D.prototype.pivot = null;
+  }
+}
+
+/**
+ * Deeply sanitizes a Three.js Object3D hierarchy prior to passing it to GLTFExporter.
+ * Prevents runtime exceptions in Three.js GLTFExporter caused by:
+ * 1. node.pivot === undefined (checked via `node.pivot !== null` in GLTFExporter)
+ * 2. textures missing standard Vector2 transforms (offset, repeat, center)
+ */
+export function sanitizeHierarchyForGLTFExport(rootNode, THREE_LIB = THREE) {
+  if (!rootNode) return;
+  rootNode.traverse((node) => {
+    // Ensure pivot is strictly null unless it is a valid Vector-like object with numeric coordinates
+    if (!node.pivot || typeof node.pivot.x !== 'number' || typeof node.pivot.y !== 'number' || typeof node.pivot.z !== 'number') {
+      node.pivot = null;
+    }
+    // Ensure materials and their texture transforms are well-formed Vector2 instances
+    if (node.isMesh && node.material) {
+      const mats = Array.isArray(node.material) ? node.material : [node.material];
+      mats.forEach((mat) => {
+        if (!mat) return;
+        const textureProps = [
+          'map', 'alphaMap', 'aoMap', 'bumpMap', 'displacementMap',
+          'emissiveMap', 'envMap', 'lightMap', 'metalnessMap',
+          'normalMap', 'roughnessMap', 'specularMap'
+        ];
+        textureProps.forEach((prop) => {
+          const tex = mat[prop];
+          if (tex && typeof tex === 'object') {
+            if (!tex.offset || typeof tex.offset.x !== 'number') tex.offset = new THREE_LIB.Vector2(0, 0);
+            if (!tex.repeat || typeof tex.repeat.x !== 'number') tex.repeat = new THREE_LIB.Vector2(1, 1);
+            if (!tex.center || typeof tex.center.x !== 'number') tex.center = new THREE_LIB.Vector2(0, 0);
+          }
+        });
+      });
+    }
+  });
+}
+
+
