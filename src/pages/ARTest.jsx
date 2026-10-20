@@ -47,6 +47,13 @@ import {
   batchUpdateAllAssetThumbnails
 } from '../utils/modelThumbnailRenderer';
 import { fetchTemplatesFromBucket, saveEditedModelTemplate } from '../utils/meshTemplates';
+import {
+  SCATTER_PRESETS,
+  PROTOTYPE_OPTIONS,
+  registerSurfaceScatterComponent
+} from '../utils/surfaceScatter';
+
+registerSurfaceScatterComponent();
 
 const SHAPE_TEXTURE_SAMPLES = [
   {
@@ -1326,6 +1333,46 @@ const ARTest = () => {
   };
 
   // =========================================================================
+  // SURFACE SCATTERING & FOLIAGE INSTANCING STATE
+  // =========================================================================
+  const [scatterEnabled, setScatterEnabled] = useState(false);
+  const [scatterTarget, setScatterTarget] = useState('#ar-model');
+  const [scatterPrototype, setScatterPrototype] = useState('leaf');
+  const [scatterCount, setScatterCount] = useState(200);
+  const [scatterMinScale, setScatterMinScale] = useState(0.8);
+  const [scatterMaxScale, setScatterMaxScale] = useState(1.2);
+  const [scatterRandomRotation, setScatterRandomRotation] = useState(45);
+  const [scatterNormalAlign, setScatterNormalAlign] = useState(true);
+  const [scatterNormalOffset, setScatterNormalOffset] = useState(0.005);
+  const [scatterColor, setScatterColor] = useState('#4ade80');
+  const [scatterColorVariation, setScatterColorVariation] = useState(0.2);
+  const [scatterRoughness, setScatterRoughness] = useState(0.7);
+  const [scatterMetalness, setScatterMetalness] = useState(0.1);
+  const [scatterSeed, setScatterSeed] = useState(1);
+  const [scatterSelectedPreset, setScatterSelectedPreset] = useState('lush_foliage');
+
+  const handleApplyScatterPreset = (presetId) => {
+    const p = SCATTER_PRESETS.find((item) => item.id === presetId);
+    if (!p) return;
+    setScatterSelectedPreset(presetId);
+    if (p.prototype) setScatterPrototype(p.prototype);
+    if (p.count !== undefined) setScatterCount(p.count);
+    if (p.minScale !== undefined) setScatterMinScale(p.minScale);
+    if (p.maxScale !== undefined) setScatterMaxScale(p.maxScale);
+    if (p.randomRotation !== undefined) setScatterRandomRotation(p.randomRotation);
+    if (p.normalAlign !== undefined) setScatterNormalAlign(p.normalAlign);
+    if (p.normalOffset !== undefined) setScatterNormalOffset(p.normalOffset);
+    if (p.color) setScatterColor(p.color);
+    if (p.colorVariation !== undefined) setScatterColorVariation(p.colorVariation);
+    if (p.roughness !== undefined) setScatterRoughness(p.roughness);
+    if (p.metalness !== undefined) setScatterMetalness(p.metalness);
+    setScatterSeed((prev) => prev + 1);
+    setScatterEnabled(true);
+    setSaveSuccessMsg(`Applied Scatter Preset: ${p.name}`);
+    setTimeout(() => setSaveSuccessMsg(''), 3000);
+  };
+
+  // =========================================================================
   // LIVE WEBSITE LAYER CONFIGURATION STATES
   // =========================================================================
   const [websiteEnabled, setWebsiteEnabled] = useState(false);
@@ -2054,6 +2101,9 @@ const ARTest = () => {
     } else if (type === 'model') {
       const modelEl = document.getElementById('ar-model');
       return modelEl?.getObject3D('mesh') || modelEl?.object3D || null;
+    } else if (type === 'scatter') {
+      const scatterAnchor = document.getElementById('ar-surface-scatter-anchor');
+      return scatterAnchor?.getObject3D('scatterRoot') || scatterAnchor?.object3D || null;
     }
     return null;
   }, []);
@@ -2361,6 +2411,18 @@ const ARTest = () => {
           targetMesh.position.set(0, 0, 0);
           targetMesh.updateMatrixWorld(true);
           exportFileName = 'primary_model';
+        }
+      }
+
+      // CASE 8: SURFACE SCATTER & FOLIAGE
+      if (!targetMesh && (targetType === 'scatter' || targetParam === 'scatter')) {
+        const scatterAnchor = document.getElementById('ar-surface-scatter-anchor');
+        const scatterRoot = scatterAnchor?.getObject3D('scatterRoot') || scatterAnchor?.object3D;
+        if (scatterRoot) {
+          targetMesh = scatterRoot.clone(true);
+          targetMesh.position.set(0, 0, 0);
+          targetMesh.updateMatrixWorld(true);
+          exportFileName = `surface_scatter_${scatterPrototype}_${scatterCount}`;
         }
       }
 
@@ -7617,6 +7679,16 @@ const ARTest = () => {
         });
       }
 
+      // 5. Surface Scattering & Foliage Instanced Mesh
+      const scatterAnchor = document.getElementById('ar-surface-scatter-anchor');
+      const scatterRoot = scatterAnchor?.getObject3D('scatterRoot') || scatterAnchor?.object3D;
+      if (scatterRoot && scatterEnabled) {
+        scatterRoot.updateWorldMatrix(true, true);
+        const clonedScatter = scatterRoot.clone(true);
+        scatterRoot.matrixWorld.decompose(clonedScatter.position, clonedScatter.quaternion, clonedScatter.scale);
+        exportContainer.add(clonedScatter);
+      }
+
       exportContainer.updateMatrixWorld(true);
 
       // Deeply sanitize hierarchy to eliminate undefined pivot and invalid texture transforms
@@ -7691,6 +7763,7 @@ const ARTest = () => {
       setAdditionalGeometries([]);
       setCustom3DTexts([]);
       setCustomModels([]);
+      setScatterEnabled(false);
       setDeletedMeshNames([]);
       try {
         sessionStorage.setItem('starwear_edit_template', JSON.stringify(updatedTemplate));
@@ -8415,6 +8488,20 @@ const ARTest = () => {
             <span>Particles</span>
             {particleSystemEnabled && (
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse ml-0.5"></span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('scatter')}
+            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'scatter'
+              ? 'bg-neutral-800 text-emerald-300 font-bold shadow border border-emerald-500/50'
+              : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
+              }`}
+          >
+            <span className="material-symbols-outlined text-sm text-emerald-400">grass</span>
+            <span>Scatter</span>
+            {scatterEnabled && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse ml-0.5"></span>
             )}
           </button>
           <button
@@ -16440,6 +16527,369 @@ const ARTest = () => {
           )}
 
           {/* ========================================================================= */}
+          {/* TAB: SURFACE SCATTERING & FOLIAGE INSTANCING                              */}
+          {/* ========================================================================= */}
+          {activeTab === 'scatter' && (
+            <div className="space-y-4">
+              {/* Header Card & Master Switch */}
+              <div className="p-3 bg-neutral-900/90 rounded-xl border border-neutral-800 space-y-3 shadow-lg">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-300">
+                      <span className="material-symbols-outlined text-lg">grass</span>
+                    </div>
+                    <div>
+                      <h2 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                        Surface Scattering
+                        {scatterEnabled && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono font-semibold">
+                            ACTIVE
+                          </span>
+                        )}
+                      </h2>
+                      <p className="text-[10px] text-neutral-400">Scatter leaves, grass, pebbles & foliage across surfaces</p>
+                    </div>
+                  </div>
+
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={scatterEnabled}
+                      onChange={(e) => setScatterEnabled(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500 shadow-inner"></div>
+                  </label>
+                </div>
+
+                <div className="flex items-center gap-2 text-[10px] text-neutral-400 bg-neutral-950/60 p-2 rounded-lg border border-neutral-800/80">
+                  <span className="material-symbols-outlined text-sm text-emerald-400">memory</span>
+                  <span>Hardware Instanced (<code>THREE.InstancedMesh</code>) • 1 WebGL Draw Call • Mobile AR Safe</span>
+                </div>
+              </div>
+
+              {/* 1-Click Scatter Style Presets */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-emerald-400">auto_awesome</span>
+                    Foliage Presets
+                  </span>
+                  <span className="text-[10px] text-neutral-500">1-click styles</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-1.5">
+                  {SCATTER_PRESETS.map((p) => {
+                    const isSelected = scatterSelectedPreset === p.id && scatterEnabled;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => handleApplyScatterPreset(p.id)}
+                        className={`p-2 rounded-lg text-left transition-all border flex items-center gap-2 ${
+                          isSelected
+                            ? 'bg-emerald-950/50 border-emerald-500/60 text-white shadow-sm ring-1 ring-emerald-500/40'
+                            : 'bg-neutral-800/50 border-neutral-700/50 text-neutral-300 hover:bg-neutral-800 hover:text-white'
+                        }`}
+                      >
+                        <span className="material-symbols-outlined text-base text-emerald-400">{p.icon}</span>
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-semibold truncate leading-tight">{p.name}</p>
+                          <p className="text-[9px] text-neutral-400 font-mono leading-tight">{p.count} instances</p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Target Surface Selector */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-emerald-400">grid_on</span>
+                    Target Surface (Host)
+                  </label>
+                  <span className="text-[10px] text-neutral-400 font-mono">Area-Weighted</span>
+                </div>
+
+                <select
+                  value={scatterTarget}
+                  onChange={(e) => setScatterTarget(e.target.value)}
+                  className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs text-neutral-200 focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="#ar-model">Entire 3D Model (#ar-model)</option>
+                  {meshList.length > 0 && (
+                    <optgroup label="Submeshes / Model Parts">
+                      {meshList.map((m, idx) => (
+                        <option key={m.uuid} value={m.name || m.uuid}>
+                          Submesh: {m.name || `Mesh Part #${idx + 1}`}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {additionalGeometries.length > 0 && (
+                    <optgroup label="Additional Geometries">
+                      {additionalGeometries.map((g) => (
+                        <option key={g.id} value={g.name || g.id}>
+                          Geometry: {g.name || g.type || 'Shape'}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+                <p className="text-[10px] text-neutral-500">
+                  Select whether to scatter across the whole 3D model, or limit to a specific submesh (e.g. tree branch, ground plane, sleeve).
+                </p>
+              </div>
+
+              {/* Prototype Asset Selector */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-emerald-400">view_in_ar</span>
+                    Prototype Asset (Source)
+                  </label>
+                  <span className="text-[10px] text-neutral-400 font-mono capitalize">{scatterPrototype}</span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-1.5">
+                  {PROTOTYPE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setScatterPrototype(opt.id)}
+                      className={`p-1.5 rounded-lg text-center transition-all border flex flex-col items-center gap-1 ${
+                        scatterPrototype === opt.id
+                          ? 'bg-emerald-950/60 border-emerald-500 text-white font-bold'
+                          : 'bg-neutral-800/40 border-neutral-700/50 text-neutral-400 hover:text-white hover:bg-neutral-800'
+                      }`}
+                    >
+                      <span className="material-symbols-outlined text-base text-emerald-400">{opt.icon}</span>
+                      <span className="text-[10px] truncate w-full">{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Density & Scale Controls */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-emerald-400">tune</span>
+                  Density & Transform Sliders
+                </span>
+
+                <div className="space-y-3">
+                  <NumberSliderInput
+                    label="Instance Count"
+                    value={scatterCount}
+                    onChange={(val) => setScatterCount(Math.round(val))}
+                    min={10}
+                    max={2000}
+                    step={10}
+                    unit="inst"
+                    color="emerald"
+                    precision={0}
+                    resetValue={200}
+                    showRange={true}
+                  />
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumberSliderInput
+                      label="Min Scale"
+                      value={scatterMinScale}
+                      onChange={setScatterMinScale}
+                      min={0.1}
+                      max={3.0}
+                      step={0.05}
+                      unit="x"
+                      color="emerald"
+                      precision={2}
+                      resetValue={0.8}
+                      showRange={true}
+                    />
+                    <NumberSliderInput
+                      label="Max Scale"
+                      value={scatterMaxScale}
+                      onChange={setScatterMaxScale}
+                      min={0.1}
+                      max={3.0}
+                      step={0.05}
+                      unit="x"
+                      color="emerald"
+                      precision={2}
+                      resetValue={1.2}
+                      showRange={true}
+                    />
+                  </div>
+
+                  <NumberSliderInput
+                    label="Rotation Jitter"
+                    value={scatterRandomRotation}
+                    onChange={setScatterRandomRotation}
+                    min={0}
+                    max={180}
+                    step={5}
+                    unit="°"
+                    color="emerald"
+                    precision={0}
+                    resetValue={45}
+                    showRange={true}
+                  />
+
+                  {/* Normal Alignment & Offset */}
+                  <div className="p-2.5 bg-neutral-950/50 rounded-lg border border-neutral-800/80 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs font-semibold text-neutral-200">Align with Surface Normals</p>
+                        <p className="text-[10px] text-neutral-500">Orient prototypes naturally along geometry contours</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={scatterNormalAlign}
+                          onChange={(e) => setScatterNormalAlign(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-8 h-4 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-500"></div>
+                      </label>
+                    </div>
+
+                    <NumberSliderInput
+                      label="Surface Elevation Offset"
+                      value={scatterNormalOffset}
+                      onChange={setScatterNormalOffset}
+                      min={0.0}
+                      max={0.05}
+                      step={0.001}
+                      unit="m"
+                      color="emerald"
+                      precision={3}
+                      resetValue={0.005}
+                      showRange={true}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Material & Color Controls */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-emerald-400">palette</span>
+                  Foliage Color & Material
+                </span>
+
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={scatterColor}
+                      onChange={(e) => setScatterColor(e.target.value)}
+                      className="w-8 h-8 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                    />
+                    <input
+                      type="text"
+                      value={scatterColor}
+                      onChange={(e) => setScatterColor(e.target.value)}
+                      className="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-2.5 py-1 text-xs text-neutral-200 font-mono uppercase"
+                    />
+                  </div>
+
+                  {/* Swatches */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {['#4ade80', '#22c55e', '#15803d', '#a3e635', '#f472b6', '#fbbf24', '#94a3b8', '#38bdf8', '#c084fc'].map((hex) => (
+                      <button
+                        key={hex}
+                        type="button"
+                        onClick={() => setScatterColor(hex)}
+                        style={{ backgroundColor: hex }}
+                        className={`w-6 h-6 rounded-md border transition-transform ${
+                          scatterColor.toLowerCase() === hex.toLowerCase() ? 'scale-110 border-white shadow' : 'border-neutral-700'
+                        }`}
+                      />
+                    ))}
+                  </div>
+
+                  <NumberSliderInput
+                    label="Color Variation (Natural HSL Jitter)"
+                    value={scatterColorVariation}
+                    onChange={setScatterColorVariation}
+                    min={0.0}
+                    max={1.0}
+                    step={0.05}
+                    unit="%"
+                    color="emerald"
+                    precision={2}
+                    resetValue={0.2}
+                    showRange={true}
+                  />
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumberSliderInput
+                      label="Roughness"
+                      value={scatterRoughness}
+                      onChange={setScatterRoughness}
+                      min={0.0}
+                      max={1.0}
+                      step={0.05}
+                      unit=""
+                      color="emerald"
+                      precision={2}
+                      resetValue={0.7}
+                      showRange={true}
+                    />
+                    <NumberSliderInput
+                      label="Metalness"
+                      value={scatterMetalness}
+                      onChange={setScatterMetalness}
+                      min={0.0}
+                      max={1.0}
+                      step={0.05}
+                      unit=""
+                      color="emerald"
+                      precision={2}
+                      resetValue={0.1}
+                      showRange={true}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Seed & Export Actions */}
+              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-emerald-400">casino</span>
+                    Distribution Seed
+                  </span>
+                  <span className="text-xs font-mono text-emerald-400">#{scatterSeed}</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setScatterSeed((prev) => prev + 1)}
+                    className="flex-1 py-2 px-3 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-semibold rounded-lg text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-sm text-emerald-400">shuffle</span>
+                    <span>Randomize Seed</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleExportShapeAsGLB('scatter')}
+                    className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg text-xs flex items-center gap-1 transition-all cursor-pointer"
+                    title="Export scattered foliage instances as a .GLB file"
+                  >
+                    <span className="material-symbols-outlined text-sm">download</span>
+                    <span>Export GLB</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================================= */}
           {/* TAB: LIVE INTERACTIVE 3D WEBSITE LAYER                                    */}
           {/* ========================================================================= */}
           {activeTab === 'website' && (
@@ -17479,9 +17929,17 @@ const ARTest = () => {
               ar-website-layer={`enabled: ${websiteEnabled}; url: ${encodeURIComponent(websiteUrl)}; width: ${websiteWidth}; height: ${websiteHeight}; aspectRatio: ${websiteAspectRatio}; resolution: ${websiteResolution}; interactive: ${websiteInteractive}; opacity: ${websiteOpacity}; frameStyle: ${websiteFrameStyle}; frameColor: ${websiteFrameColor}; frameGlow: ${websiteFrameGlow}; curved: ${websiteCurved}; curveRadius: ${websiteCurveRadius}; billboard: ${websiteBillboard}; posX: ${websitePosX}; posY: ${websitePosY}; posZ: ${websitePosZ}; rotX: ${websiteRotX}; rotY: ${websiteRotY}; rotZ: ${websiteRotZ}; scale: ${websiteScale}; showAddressBar: ${websiteShowAddressBar};`}
             ></a-entity>
           )}
+
+          {/* Surface Scattering & Foliage Distribution Anchor */}
+          {scatterEnabled && (
+            <a-entity
+              id="ar-surface-scatter-anchor"
+              surface-scatter={`enabled: ${scatterEnabled}; target: ${scatterTarget}; prototype: ${scatterPrototype}; count: ${scatterCount}; minScale: ${scatterMinScale}; maxScale: ${scatterMaxScale}; randomRotation: ${scatterRandomRotation}; normalAlign: ${scatterNormalAlign}; normalOffset: ${scatterNormalOffset}; color: ${scatterColor}; colorVariation: ${scatterColorVariation}; roughness: ${scatterRoughness}; metalness: ${scatterMetalness}; seed: ${scatterSeed};`}
+            ></a-entity>
+          )}
         </a-scene>
 
-        {!loading && !(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0 || customModels.length > 0 || custom3DTexts.length > 0 || customLights.length > 0 || (markerVisible && markerImageUrl) || (websiteEnabled && websiteUrl)) && (
+        {!loading && !(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0 || customModels.length > 0 || custom3DTexts.length > 0 || customLights.length > 0 || scatterEnabled || (markerVisible && markerImageUrl) || (websiteEnabled && websiteUrl)) && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-500 space-y-4 p-8 text-center pointer-events-none z-10">
             <div className="w-16 h-16 rounded-2xl bg-neutral-800/80 border border-neutral-700 flex items-center justify-center text-indigo-400 shadow-xl">
               <span className="material-symbols-outlined text-3xl">view_in_ar</span>
