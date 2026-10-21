@@ -34,8 +34,10 @@ import AddGeometryModal from '../components/AddGeometryModal';
 import AddModelModal from '../components/AddModelModal';
 import VectorPenModal from '../components/VectorPenModal';
 import Add3DTextModal from '../components/Add3DTextModal';
+import ArSceneApiModal from '../components/ArSceneApiModal';
 import ARLightDiagnosticsDrawer from '../components/ARLightDiagnosticsDrawer';
 import FaceSketchExtrudeStudio from '../components/FaceSketchExtrudeStudio';
+import { exportCurrentSceneToArApi } from '../utils/arSceneApi';
 import { AVAILABLE_FONTS, TEXT_MATERIAL_PRESETS } from '../utils/text3DHelper';
 import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES, createPrimitiveMesh, INFLATION_PROFILES, sanitizeHierarchyForGLTFExport } from '../utils/geometryHelper';
 import { loadMarkerForBatch, createDefaultMarkerDataUrl, getImageDimensions } from '../utils/markerHelper';
@@ -695,7 +697,8 @@ const ARTest = () => {
   const [selectedGeometryId, setSelectedGeometryId] = useState(null);
   const [selectedText3DId, setSelectedText3DId] = useState(null);
   const [selectedLightId, setSelectedLightId] = useState(null);
-  const [selectedTargetType, setSelectedTargetType] = useState('model'); // 'model' | 'text3d' | 'light' | 'geometry' | 'mesh' | 'customModel' | 'group' | 'multi' | null
+  const [selectedScatterLayerId, setSelectedScatterLayerId] = useState(null);
+  const [selectedTargetType, setSelectedTargetType] = useState('model'); // 'model' | 'text3d' | 'light' | 'geometry' | 'mesh' | 'customModel' | 'group' | 'multi' | 'scatterLayer' | null
 
   // Scene Groups & Multi-Selection States
   const [sceneGroups, setSceneGroups] = useState([]);
@@ -749,6 +752,7 @@ const ARTest = () => {
     setSelectedText3DId(null);
     setSelectedLightId(null);
     setSelectedCustomModelId(null);
+    setSelectedScatterLayerId(null);
 
     switch (type) {
       case 'group':
@@ -799,6 +803,12 @@ const ARTest = () => {
         setSelectedLightId(idOrUuid);
         setSelectedTargetType('light');
         if (idOrUuid) setSelectedObjects([{ type: 'light', id: idOrUuid }]);
+        break;
+      case 'scatterLayer':
+        setSelectedGroupId(null);
+        setSelectedScatterLayerId(idOrUuid);
+        setSelectedTargetType('scatterLayer');
+        if (idOrUuid) setSelectedObjects([{ type: 'scatterLayer', id: idOrUuid }]);
         break;
       default:
         setSelectedGroupId(null);
@@ -1333,8 +1343,9 @@ const ARTest = () => {
   };
 
   // =========================================================================
-  // SURFACE SCATTERING & FOLIAGE INSTANCING STATE
+  // SURFACE SCATTERING & FOLIAGE INSTANCING STATE (MULTI-LAYER)
   // =========================================================================
+  const [scatterLayers, setScatterLayers] = useState([]);
   const [scatterEnabled, setScatterEnabled] = useState(false);
   const [scatterTarget, setScatterTarget] = useState('#ar-model');
   const [scatterPrototype, setScatterPrototype] = useState('leaf');
@@ -1351,26 +1362,158 @@ const ARTest = () => {
   const [scatterSeed, setScatterSeed] = useState(1);
   const [scatterSelectedPreset, setScatterSelectedPreset] = useState('lush_foliage');
 
-  const handleApplyScatterPreset = (presetId) => {
+  // Currently active scatter layer (fallback to first layer if selected is null)
+  const activeScatterLayer = useMemo(() => {
+    return scatterLayers.find((l) => l.id === selectedScatterLayerId) || scatterLayers[0] || null;
+  }, [scatterLayers, selectedScatterLayerId]);
+
+  // Create & Add a new Scatter Layer to the scene
+  const handleAddScatterLayer = useCallback((presetId = 'lush_foliage', targetSurface = null) => {
+    const p = SCATTER_PRESETS.find((item) => item.id === presetId) || SCATTER_PRESETS[0];
+    const newId = `layer_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const layerCount = scatterLayers.length + 1;
+    const defaultName = p ? `${p.name} Layer ${layerCount}` : `Scatter Layer ${layerCount}`;
+
+    const newLayer = {
+      id: newId,
+      name: defaultName,
+      enabled: true,
+      visible: true,
+      target: targetSurface || scatterTarget || '#ar-model',
+      prototype: p?.prototype || 'leaf',
+      count: p?.count || 200,
+      minScale: p?.minScale || 0.8,
+      maxScale: p?.maxScale || 1.2,
+      randomRotation: p?.randomRotation ?? 45,
+      normalAlign: p?.normalAlign !== false,
+      normalOffset: p?.normalOffset ?? 0.005,
+      color: p?.color || '#4ade80',
+      colorVariation: p?.colorVariation ?? 0.2,
+      roughness: p?.roughness ?? 0.7,
+      metalness: p?.metalness ?? 0.1,
+      seed: Math.floor(Math.random() * 1000) + 1,
+      preset: p?.id || 'lush_foliage',
+      posX: 0,
+      posY: 0,
+      posZ: 0,
+      rotX: 0,
+      rotY: 0,
+      rotZ: 0,
+      scale: 1,
+      scaleX: 1,
+      scaleY: 1,
+      scaleZ: 1
+    };
+
+    setScatterLayers((prev) => [...prev, newLayer]);
+    setSelectedScatterLayerId(newId);
+    setScatterEnabled(true);
+    selectSceneObject('scatterLayer', newId);
+    setSaveSuccessMsg(`Added new Scatter Layer: "${newLayer.name}"`);
+    setTimeout(() => setSaveSuccessMsg(''), 3000);
+  }, [scatterLayers.length, scatterTarget, selectSceneObject]);
+
+  // Update properties on a specific scatter layer
+  const handleUpdateScatterLayer = useCallback((id, updates) => {
+    setScatterLayers((prev) =>
+      prev.map((layer) => (layer.id === id ? { ...layer, ...updates } : layer))
+    );
+  }, []);
+
+  // Duplicate an existing scatter layer
+  const handleDuplicateScatterLayer = useCallback((id) => {
+    const source = scatterLayers.find((l) => l.id === id);
+    if (!source) return;
+    const newId = `layer_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const duplicate = {
+      ...source,
+      id: newId,
+      name: `${source.name} (Copy)`,
+      seed: (source.seed || 1) + 1,
+      posX: Number(((source.posX || 0) + 0.05).toFixed(3)),
+      posY: Number(((source.posY || 0) + 0.05).toFixed(3))
+    };
+    setScatterLayers((prev) => [...prev, duplicate]);
+    setSelectedScatterLayerId(newId);
+    selectSceneObject('scatterLayer', newId);
+    setSaveSuccessMsg(`Duplicated layer: "${duplicate.name}"`);
+    setTimeout(() => setSaveSuccessMsg(''), 3000);
+  }, [scatterLayers, selectSceneObject]);
+
+  // Delete a scatter layer
+  const handleDeleteScatterLayer = useCallback((id) => {
+    setScatterLayers((prev) => {
+      const remaining = prev.filter((l) => l.id !== id);
+      if (selectedScatterLayerId === id) {
+        const nextActive = remaining[0]?.id || null;
+        setSelectedScatterLayerId(nextActive);
+        if (nextActive) {
+          selectSceneObject('scatterLayer', nextActive);
+        } else {
+          selectSceneObject(null);
+        }
+      }
+      if (remaining.length === 0) {
+        setScatterEnabled(false);
+      }
+      return remaining;
+    });
+    setSaveSuccessMsg('Deleted scatter layer');
+    setTimeout(() => setSaveSuccessMsg(''), 2500);
+  }, [selectedScatterLayerId, selectSceneObject]);
+
+  // Toggle visibility of a scatter layer
+  const handleToggleScatterLayerVisibility = useCallback((id) => {
+    setScatterLayers((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, visible: l.visible === false ? true : false } : l))
+    );
+  }, []);
+
+  // Reset transform offsets of a scatter layer
+  const handleResetScatterLayerTransform = useCallback((id) => {
+    handleUpdateScatterLayer(id, {
+      posX: 0,
+      posY: 0,
+      posZ: 0,
+      rotX: 0,
+      rotY: 0,
+      rotZ: 0,
+      scale: 1,
+      scaleX: 1,
+      scaleY: 1,
+      scaleZ: 1
+    });
+    setSaveSuccessMsg('Reset layer transform to origin');
+    setTimeout(() => setSaveSuccessMsg(''), 2000);
+  }, [handleUpdateScatterLayer]);
+
+  // Apply a preset to active layer (or create a new layer if none exist)
+  const handleApplyScatterPreset = useCallback((presetId) => {
     const p = SCATTER_PRESETS.find((item) => item.id === presetId);
     if (!p) return;
     setScatterSelectedPreset(presetId);
-    if (p.prototype) setScatterPrototype(p.prototype);
-    if (p.count !== undefined) setScatterCount(p.count);
-    if (p.minScale !== undefined) setScatterMinScale(p.minScale);
-    if (p.maxScale !== undefined) setScatterMaxScale(p.maxScale);
-    if (p.randomRotation !== undefined) setScatterRandomRotation(p.randomRotation);
-    if (p.normalAlign !== undefined) setScatterNormalAlign(p.normalAlign);
-    if (p.normalOffset !== undefined) setScatterNormalOffset(p.normalOffset);
-    if (p.color) setScatterColor(p.color);
-    if (p.colorVariation !== undefined) setScatterColorVariation(p.colorVariation);
-    if (p.roughness !== undefined) setScatterRoughness(p.roughness);
-    if (p.metalness !== undefined) setScatterMetalness(p.metalness);
-    setScatterSeed((prev) => prev + 1);
-    setScatterEnabled(true);
-    setSaveSuccessMsg(`Applied Scatter Preset: ${p.name}`);
+    if (activeScatterLayer) {
+      handleUpdateScatterLayer(activeScatterLayer.id, {
+        preset: presetId,
+        prototype: p.prototype || activeScatterLayer.prototype,
+        count: p.count !== undefined ? p.count : activeScatterLayer.count,
+        minScale: p.minScale !== undefined ? p.minScale : activeScatterLayer.minScale,
+        maxScale: p.maxScale !== undefined ? p.maxScale : activeScatterLayer.maxScale,
+        randomRotation: p.randomRotation !== undefined ? p.randomRotation : activeScatterLayer.randomRotation,
+        normalAlign: p.normalAlign !== undefined ? p.normalAlign : activeScatterLayer.normalAlign,
+        normalOffset: p.normalOffset !== undefined ? p.normalOffset : activeScatterLayer.normalOffset,
+        color: p.color || activeScatterLayer.color,
+        colorVariation: p.colorVariation !== undefined ? p.colorVariation : activeScatterLayer.colorVariation,
+        roughness: p.roughness !== undefined ? p.roughness : activeScatterLayer.roughness,
+        metalness: p.metalness !== undefined ? p.metalness : activeScatterLayer.metalness,
+        seed: (activeScatterLayer.seed || 1) + 1
+      });
+      setSaveSuccessMsg(`Applied Preset "${p.name}" to Layer "${activeScatterLayer.name}"`);
+    } else {
+      handleAddScatterLayer(presetId);
+    }
     setTimeout(() => setSaveSuccessMsg(''), 3000);
-  };
+  }, [activeScatterLayer, handleAddScatterLayer, handleUpdateScatterLayer]);
 
   // =========================================================================
   // LIVE WEBSITE LAYER CONFIGURATION STATES
@@ -1423,6 +1566,7 @@ const ARTest = () => {
   // =========================================================================
   const [customModels, setCustomModels] = useState([]);
   const [isAddModelModalOpen, setIsAddModelModalOpen] = useState(false);
+  const [isArApiModalOpen, setIsArApiModalOpen] = useState(false);
 
   const handleAddCustomModel = (payload) => {
     setCustomModels((prev) => [...prev, payload]);
@@ -2036,6 +2180,293 @@ const ARTest = () => {
   const [isGizmoDragging, setIsGizmoDragging] = useState(false);
   const [gizmoReady, setGizmoReady] = useState(false);
 
+  // =========================================================================
+  // AR-TEST SCENE CONSTRUCTOR API HANDLERS (GOOGLE GEMINI & LLM VISION INPUT)
+  // =========================================================================
+  const handleApplyArSceneApi = useCallback((normalizedData, mode = 'replace') => {
+    if (!normalizedData) return;
+
+    if (mode === 'replace') {
+      // Clear existing scene elements for fresh reconstruction
+      setAdditionalGeometries([]);
+      setScatterLayers([]);
+      setScatterEnabled(false);
+      setSelectedScatterLayerId(null);
+      setCustom3DTexts([]);
+      setCustomLights([]);
+      setCustomModels([]);
+      setParticleSystemEnabled(false);
+      setPortalEnabled(false);
+      setWebsiteEnabled(false);
+      selectSceneObject(null);
+    }
+
+    // 1. Shapes & Procedural Geometries
+    if (normalizedData.shapes && normalizedData.shapes.length > 0) {
+      setAdditionalGeometries((prev) =>
+        mode === 'replace' ? normalizedData.shapes : [...prev, ...normalizedData.shapes]
+      );
+    }
+
+    // 2. Scatter Layers (Multi-Layer Foliage & Organic Surface Instances)
+    if (normalizedData.scatterLayers && normalizedData.scatterLayers.length > 0) {
+      setScatterLayers((prev) =>
+        mode === 'replace' ? normalizedData.scatterLayers : [...prev, ...normalizedData.scatterLayers]
+      );
+      setScatterEnabled(true);
+      if (normalizedData.scatterLayers[0]?.id) {
+        setSelectedScatterLayerId(normalizedData.scatterLayers[0].id);
+      }
+    }
+
+    // 3. 3D Typography Text
+    if (normalizedData.text3d && normalizedData.text3d.length > 0) {
+      setCustom3DTexts((prev) =>
+        mode === 'replace' ? normalizedData.text3d : [...prev, ...normalizedData.text3d]
+      );
+    }
+
+    // 4. Multi-Source Lighting
+    if (normalizedData.lighting) {
+      const l = normalizedData.lighting;
+      if (l.customLights && l.customLights.length > 0) {
+        setCustomLights((prev) =>
+          mode === 'replace' ? l.customLights : [...prev, ...l.customLights]
+        );
+      }
+      if (l.ambientColor) setAmbientColor(l.ambientColor);
+      if (l.ambientIntensity !== undefined) setAmbientIntensity(l.ambientIntensity);
+      if (l.dir1Color) setDir1Color(l.dir1Color);
+      if (l.dir1Intensity !== undefined) setDir1Intensity(l.dir1Intensity);
+      if (l.dir1Position) setDir1Position(l.dir1Position);
+      if (l.dir2Color) setDir2Color(l.dir2Color);
+      if (l.dir2Intensity !== undefined) setDir2Intensity(l.dir2Intensity);
+      if (l.dir2Position) setDir2Position(l.dir2Position);
+      if (l.rimColor) setRimColor(l.rimColor);
+      if (l.rimIntensity !== undefined) setRimIntensity(l.rimIntensity);
+      if (l.rimPosition) setRimPosition(l.rimPosition);
+    }
+
+    // 5. External 3D Models
+    if (normalizedData.models && normalizedData.models.length > 0) {
+      setCustomModels((prev) =>
+        mode === 'replace' ? normalizedData.models : [...prev, ...normalizedData.models]
+      );
+    }
+
+    // 6. Root 3D Transform
+    if (normalizedData.transform) {
+      const tr = normalizedData.transform;
+      if (tr.scale !== undefined) setModelScale(tr.scale);
+      if (tr.posX !== undefined) setModelPosX(tr.posX);
+      if (tr.posY !== undefined) setModelPosY(tr.posY);
+      if (tr.posZ !== undefined) setModelPosZ(tr.posZ);
+      if (tr.rotX !== undefined) setModelRotX(tr.rotX);
+      if (tr.rotY !== undefined) setModelRotY(tr.rotY);
+      if (tr.rotZ !== undefined) setModelRotZ(tr.rotZ);
+    }
+
+    // 7. Scene Environment & Fog
+    if (normalizedData.scene) {
+      if (normalizedData.scene.ambientColor) setAmbientColor(normalizedData.scene.ambientColor);
+      if (normalizedData.scene.ambientIntensity !== undefined) setAmbientIntensity(normalizedData.scene.ambientIntensity);
+      if (normalizedData.scene.fogColor) setFogColor(normalizedData.scene.fogColor);
+      if (normalizedData.scene.fogDensity !== undefined) setFogDensity(normalizedData.scene.fogDensity);
+      if (normalizedData.scene.cameraAutoRotate !== undefined) setCameraAutoRotate(normalizedData.scene.cameraAutoRotate);
+    }
+
+    // 8. Particle System
+    if (normalizedData.particles && normalizedData.particles.enabled) {
+      const p = normalizedData.particles;
+      setParticleSystemEnabled(true);
+      if (p.preset) setParticlePreset(p.preset);
+      if (p.count !== undefined) setParticleCount(p.count);
+      if (p.size !== undefined) setParticleSize(p.size);
+      if (p.color) setParticleColor(p.color);
+      if (p.colorSecondary) setParticleColorSecondary(p.colorSecondary);
+      if (p.opacity !== undefined) setParticleOpacity(p.opacity);
+      if (p.speed !== undefined) setParticleSpeed(p.speed);
+      if (p.direction) setParticleDirection(p.direction);
+      if (p.shape) setParticleShape(p.shape);
+      if (p.posX !== undefined) setParticlePosX(p.posX);
+      if (p.posY !== undefined) setParticlePosY(p.posY);
+      if (p.posZ !== undefined) setParticlePosZ(p.posZ);
+    }
+
+    // 9. AR Portal Gateway
+    if (normalizedData.portal && normalizedData.portal.enabled) {
+      const port = normalizedData.portal;
+      setPortalEnabled(true);
+      if (port.preset) setPortalPreset(port.preset);
+      if (port.shape) setPortalShape(port.shape);
+      if (port.width !== undefined) setPortalWidth(port.width);
+      if (port.height !== undefined) setPortalHeight(port.height);
+      if (port.frameColor) setPortalFrameColor(port.frameColor);
+      if (port.frameEmissive) setPortalFrameEmissive(port.frameEmissive);
+      if (port.floatingText) setPortalFloatingText(port.floatingText);
+      if (port.textColor) setPortalTextColor(port.textColor);
+      if (port.posX !== undefined) setPortalPosX(port.posX);
+      if (port.posY !== undefined) setPortalPosY(port.posY);
+      if (port.posZ !== undefined) setPortalPosZ(port.posZ);
+    }
+
+    // 10. Live 3D Website Viewport
+    if (normalizedData.website && normalizedData.website.enabled) {
+      const w = normalizedData.website;
+      setWebsiteEnabled(true);
+      if (w.url) setWebsiteUrl(w.url);
+      if (w.width !== undefined) setWebsiteWidth(w.width);
+      if (w.height !== undefined) setWebsiteHeight(w.height);
+      if (w.frameStyle) setWebsiteFrameStyle(w.frameStyle);
+      if (w.curved !== undefined) setWebsiteCurved(w.curved);
+      if (w.interactive !== undefined) setWebsiteInteractive(w.interactive);
+    }
+
+    // 11. Target Tracking Marker
+    if (normalizedData.tracking) {
+      if (normalizedData.tracking.visible !== undefined) setMarkerVisible(normalizedData.tracking.visible);
+      if (normalizedData.tracking.opacity !== undefined) setMarkerOpacity(normalizedData.tracking.opacity);
+      if (normalizedData.tracking.width !== undefined) setMarkerWidth(normalizedData.tracking.width);
+      if (normalizedData.tracking.aspectRatio !== undefined) setMarkerAspectRatio(normalizedData.tracking.aspectRatio);
+    }
+
+    // Automatically focus selection on primary new element so 3D Gizmo and Inspector are ready
+    if (normalizedData.shapes?.length > 0) {
+      selectSceneObject('geometry', normalizedData.shapes[0].id);
+      setActiveTab('shapes');
+    } else if (normalizedData.scatterLayers?.length > 0) {
+      selectSceneObject('scatterLayer', normalizedData.scatterLayers[0].id);
+      setActiveTab('scatter');
+    } else if (normalizedData.text3d?.length > 0) {
+      selectSceneObject('text3d', normalizedData.text3d[0].id);
+      setActiveTab('text3d');
+    } else if (normalizedData.lighting?.customLights?.length > 0) {
+      selectSceneObject('light', normalizedData.lighting.customLights[0].id);
+      setActiveTab('lighting');
+    }
+
+    const sceneTitle = normalizedData.metadata?.name || '3D Scene';
+    setSaveSuccessMsg(`Constructed "${sceneTitle}" via AR-Test API (${mode} mode)`);
+    setTimeout(() => setSaveSuccessMsg(''), 5000);
+  }, [selectSceneObject]);
+
+  const handleExportCurrentSceneForApi = useCallback(() => {
+    return exportCurrentSceneToArApi({
+      sceneName: editingTemplate?.cleanName || editingTemplate?.name || (batchId ? `Batch ${batchId}` : 'AR-Test Scene'),
+      ambientColor,
+      ambientIntensity,
+      dir1Color,
+      dir1Intensity,
+      dir1Position,
+      dir2Color,
+      dir2Intensity,
+      dir2Position,
+      rimColor,
+      rimIntensity,
+      rimPosition,
+      fogColor,
+      fogDensity,
+      cameraAutoRotate,
+      modelScale,
+      modelPosX,
+      modelPosY,
+      modelPosZ,
+      modelRotX,
+      modelRotY,
+      modelRotZ,
+      additionalGeometries,
+      scatterLayers,
+      custom3DTexts,
+      customLights,
+      particleSystemEnabled,
+      particlePreset,
+      particleCount,
+      particleSize,
+      particleColor,
+      particleColorSecondary,
+      particleOpacity,
+      particleSpeed,
+      particleDirection,
+      particleShape,
+      portalEnabled,
+      portalPreset,
+      portalShape,
+      portalWidth,
+      portalHeight,
+      portalFrameColor,
+      portalFrameEmissive,
+      portalFloatingText,
+      websiteEnabled,
+      websiteUrl,
+      websiteWidth,
+      websiteHeight,
+      websiteFrameStyle,
+      websiteCurved,
+      websiteInteractive,
+      markerVisible,
+      markerOpacity,
+      markerWidth,
+      markerAspectRatio
+    });
+  }, [
+    editingTemplate,
+    batchId,
+    ambientColor,
+    ambientIntensity,
+    dir1Color,
+    dir1Intensity,
+    dir1Position,
+    dir2Color,
+    dir2Intensity,
+    dir2Position,
+    rimColor,
+    rimIntensity,
+    rimPosition,
+    fogColor,
+    fogDensity,
+    cameraAutoRotate,
+    modelScale,
+    modelPosX,
+    modelPosY,
+    modelPosZ,
+    modelRotX,
+    modelRotY,
+    modelRotZ,
+    additionalGeometries,
+    scatterLayers,
+    custom3DTexts,
+    customLights,
+    particleSystemEnabled,
+    particlePreset,
+    particleCount,
+    particleSize,
+    particleColor,
+    particleColorSecondary,
+    particleOpacity,
+    particleSpeed,
+    particleDirection,
+    particleShape,
+    portalEnabled,
+    portalPreset,
+    portalShape,
+    portalWidth,
+    portalHeight,
+    portalFrameColor,
+    portalFrameEmissive,
+    portalFloatingText,
+    websiteEnabled,
+    websiteUrl,
+    websiteWidth,
+    websiteHeight,
+    websiteFrameStyle,
+    websiteCurved,
+    websiteInteractive,
+    markerVisible,
+    markerOpacity,
+    markerWidth,
+    markerAspectRatio
+  ]);
+
   // Helper: Find Three.js Object3D by item type and id
   const findThreeObject = useCallback((type, id) => {
     if (!id) return null;
@@ -2101,12 +2532,28 @@ const ARTest = () => {
     } else if (type === 'model') {
       const modelEl = document.getElementById('ar-model');
       return modelEl?.getObject3D('mesh') || modelEl?.object3D || null;
-    } else if (type === 'scatter') {
+    } else if (type === 'scatterLayer' || type === 'scatter') {
+      if (id) {
+        const layerAnchor = document.getElementById(`ar-scatter-layer-${id}`);
+        if (layerAnchor?.object3D) return layerAnchor.object3D;
+        const sceneEl = document.querySelector('a-scene');
+        if (sceneEl?.object3D) {
+          let found = null;
+          sceneEl.object3D.traverse((node) => {
+            if (!found && (node.userData?.scatterLayerId === id || node.name === `ar_scatter_layer_${id}`)) {
+              found = node;
+            }
+          });
+          if (found) return found;
+        }
+      }
+      const activeAnchor = selectedScatterLayerId ? document.getElementById(`ar-scatter-layer-${selectedScatterLayerId}`) : null;
+      if (activeAnchor?.object3D) return activeAnchor.object3D;
       const scatterAnchor = document.getElementById('ar-surface-scatter-anchor');
       return scatterAnchor?.getObject3D('scatterRoot') || scatterAnchor?.object3D || null;
     }
     return null;
-  }, []);
+  }, [selectedScatterLayerId]);
 
   // Export any scene shape, extruded vector, 3D text, model, submesh, multi-selection, or group as a standard binary .GLB file
   const handleExportShapeAsGLB = useCallback(async (targetParam = null) => {
@@ -2163,6 +2610,9 @@ const ARTest = () => {
         } else if (selectedMeshUuid) {
           targetType = 'mesh';
           targetId = selectedMeshUuid;
+        } else if (selectedScatterLayerId) {
+          targetType = 'scatterLayer';
+          targetId = selectedScatterLayerId;
         } else if (selectedTargetType === 'model') {
           targetType = 'model';
           targetId = 'root-model';
@@ -2414,15 +2864,49 @@ const ARTest = () => {
         }
       }
 
-      // CASE 8: SURFACE SCATTER & FOLIAGE
-      if (!targetMesh && (targetType === 'scatter' || targetParam === 'scatter')) {
-        const scatterAnchor = document.getElementById('ar-surface-scatter-anchor');
-        const scatterRoot = scatterAnchor?.getObject3D('scatterRoot') || scatterAnchor?.object3D;
-        if (scatterRoot) {
-          targetMesh = scatterRoot.clone(true);
-          targetMesh.position.set(0, 0, 0);
-          targetMesh.updateMatrixWorld(true);
-          exportFileName = `surface_scatter_${scatterPrototype}_${scatterCount}`;
+      // CASE 8: SURFACE SCATTER & FOLIAGE LAYERS
+      if (!targetMesh && (targetType === 'scatter' || targetType === 'scatterLayer' || targetParam === 'scatter' || String(targetParam).startsWith('scatter_layer_') || String(targetParam).startsWith('layer_'))) {
+        const layerIdToExport = targetId || (typeof targetParam === 'string' && targetParam !== 'scatter' ? targetParam : selectedScatterLayerId);
+        if (layerIdToExport) {
+          const layerAnchor = document.getElementById(`ar-scatter-layer-${layerIdToExport}`);
+          const layerRoot = layerAnchor?.getObject3D('scatterRoot') || layerAnchor?.object3D;
+          if (layerRoot && layerAnchor?.object3D) {
+            layerAnchor.object3D.updateWorldMatrix(true, true);
+            targetMesh = layerRoot.clone(true);
+            layerAnchor.object3D.matrixWorld.decompose(targetMesh.position, targetMesh.quaternion, targetMesh.scale);
+            const foundLayer = scatterLayers.find((l) => l.id === layerIdToExport);
+            exportFileName = (foundLayer?.name || `scatter_layer_${layerIdToExport}`).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+          }
+        }
+        if (!targetMesh && scatterLayers.length > 0) {
+          // Export all active scatter layers combined into one group
+          const scatterGroup = new THREE.Group();
+          scatterGroup.name = 'all_scatter_layers';
+          scatterLayers.forEach((layer) => {
+            if (!layer.enabled || layer.visible === false) return;
+            const anchor = document.getElementById(`ar-scatter-layer-${layer.id}`);
+            const root = anchor?.getObject3D('scatterRoot') || anchor?.object3D;
+            if (root && anchor?.object3D) {
+              anchor.object3D.updateWorldMatrix(true, true);
+              const cloned = root.clone(true);
+              anchor.object3D.matrixWorld.decompose(cloned.position, cloned.quaternion, cloned.scale);
+              scatterGroup.add(cloned);
+            }
+          });
+          if (scatterGroup.children.length > 0) {
+            targetMesh = scatterGroup;
+            exportFileName = 'all_scatter_layers';
+          }
+        }
+        if (!targetMesh) {
+          const scatterAnchor = document.getElementById('ar-surface-scatter-anchor');
+          const scatterRoot = scatterAnchor?.getObject3D('scatterRoot') || scatterAnchor?.object3D;
+          if (scatterRoot) {
+            targetMesh = scatterRoot.clone(true);
+            targetMesh.position.set(0, 0, 0);
+            targetMesh.updateMatrixWorld(true);
+            exportFileName = `surface_scatter_${scatterPrototype}_${scatterCount}`;
+          }
         }
       }
 
@@ -2487,6 +2971,8 @@ const ARTest = () => {
     additionalGeometries,
     customModels,
     custom3DTexts,
+    scatterLayers,
+    selectedScatterLayerId,
     sceneGroups,
     meshList,
     findThreeObject
@@ -2592,7 +3078,35 @@ const ARTest = () => {
       return;
     }
 
-    // D) Root 3D Model
+    // D) Scatter Foliage Layer
+    if (obj.userData?.isScatterLayer || obj.userData?.scatterLayerId || (obj.id && obj.id.startsWith('ar-scatter-layer-'))) {
+      const targetLayerId = obj.userData?.scatterLayerId || (obj.id ? obj.id.replace('ar-scatter-layer-', '') : selectedScatterLayerId);
+      if (targetLayerId) {
+        setScatterLayers((prev) =>
+          prev.map((l) => {
+            if (l.id === targetLayerId) {
+              return {
+                ...l,
+                posX: Number(obj.position.x.toFixed(3)),
+                posY: Number(obj.position.y.toFixed(3)),
+                posZ: Number(obj.position.z.toFixed(3)),
+                rotX: Number(THREE.MathUtils.radToDeg(obj.rotation.x).toFixed(1)),
+                rotY: Number(THREE.MathUtils.radToDeg(obj.rotation.y).toFixed(1)),
+                rotZ: Number(THREE.MathUtils.radToDeg(obj.rotation.z).toFixed(1)),
+                scale: Number(obj.scale.x.toFixed(3)),
+                scaleX: Number(obj.scale.x.toFixed(3)),
+                scaleY: Number(obj.scale.y.toFixed(3)),
+                scaleZ: Number(obj.scale.z.toFixed(3))
+              };
+            }
+            return l;
+          })
+        );
+        return;
+      }
+    }
+
+    // D.2) Root 3D Model
     const modelEl = document.getElementById('ar-model');
     if (obj === modelEl?.object3D || obj === modelEl?.getObject3D('mesh')) {
       setModelPosX(Number(obj.position.x.toFixed(3)));
@@ -3010,6 +3524,7 @@ const ARTest = () => {
         setSelectedText3DId(null);
         setSelectedLightId(null);
         setSelectedCustomModelId(null);
+        setSelectedScatterLayerId(null);
         setSelectedGroupId(null);
         setSelectedTargetType(null);
       } else if (updated.length === 1) {
@@ -3021,12 +3536,14 @@ const ARTest = () => {
         setSelectedCustomModelId(single.type === 'customModel' ? single.id : null);
         setSelectedText3DId(single.type === 'text3d' ? single.id : null);
         setSelectedLightId(single.type === 'light' ? single.id : null);
+        setSelectedScatterLayerId(single.type === 'scatterLayer' ? single.id : null);
       } else {
         setSelectedMeshUuid(null);
         setSelectedGeometryId(null);
         setSelectedText3DId(null);
         setSelectedLightId(null);
         setSelectedCustomModelId(null);
+        setSelectedScatterLayerId(null);
         setSelectedGroupId(null);
         setSelectedTargetType('multi');
       }
@@ -3177,6 +3694,7 @@ const ARTest = () => {
         else if (it.type === 'customModel') handleDeleteCustomModel(it.id);
         else if (it.type === 'text3d') handleDelete3DText(it.id);
         else if (it.type === 'light') handleDeleteLight(it.id);
+        else if (it.type === 'scatterLayer') handleDeleteScatterLayer(it.id);
         else if (it.type === 'mesh') {
           const mesh = meshList.find((m) => m.uuid === it.id);
           if (mesh) handleDeleteMesh(mesh.uuid, mesh.name);
@@ -3380,9 +3898,12 @@ const ARTest = () => {
     } else if (item.type === 'mesh') {
       const m = meshList.find((mesh) => mesh.uuid === item.id);
       return { name: m ? m.name : 'Mesh Part', icon: 'interests' };
+    } else if (item.type === 'scatterLayer') {
+      const sl = scatterLayers.find((layer) => layer.id === item.id);
+      return { name: sl ? sl.name : 'Scatter Layer', icon: 'grass' };
     }
     return { name: 'Object', icon: 'deployed_code' };
-  }, [additionalGeometries, customModels, custom3DTexts, customLights, meshList]);
+  }, [additionalGeometries, customModels, custom3DTexts, customLights, scatterLayers, meshList]);
 
   const getAvailableObjectsForGroup = useCallback((groupId) => {
     const grp = sceneGroups.find((g) => g.id === groupId);
@@ -3419,8 +3940,14 @@ const ARTest = () => {
       }
     });
 
+    scatterLayers.forEach((sl) => {
+      if (!currentKeys.has(`scatterLayer:${sl.id}`)) {
+        available.push({ type: 'scatterLayer', id: sl.id, name: sl.name, icon: 'grass' });
+      }
+    });
+
     return available;
-  }, [sceneGroups, additionalGeometries, customModels, custom3DTexts, customLights, meshList]);
+  }, [sceneGroups, additionalGeometries, customModels, custom3DTexts, customLights, scatterLayers, meshList]);
 
   const focusCameraOnSelectedObject = useCallback(() => {
     const tc = transformControlsRef.current;
@@ -3534,6 +4061,15 @@ const ARTest = () => {
         icon: 'interests'
       };
     }
+    if (selectedTargetType === 'scatterLayer' && selectedScatterLayerId) {
+      const layerItem = scatterLayers.find((l) => l.id === selectedScatterLayerId);
+      return {
+        type: 'scatterLayer',
+        id: selectedScatterLayerId,
+        name: layerItem ? layerItem.name : 'Scatter Layer',
+        icon: 'grass'
+      };
+    }
     if (selectedTargetType === 'model') {
       return {
         type: 'model',
@@ -3543,7 +4079,7 @@ const ARTest = () => {
       };
     }
     return null;
-  }, [selectedTargetType, selectedGroupId, selectedObjects, sceneGroups, selectedCustomModelId, selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, customModels, custom3DTexts, customLights, additionalGeometries, meshList]);
+  }, [selectedTargetType, selectedGroupId, selectedObjects, sceneGroups, selectedCustomModelId, selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, selectedScatterLayerId, scatterLayers, customModels, custom3DTexts, customLights, additionalGeometries, meshList]);
 
   // Currently selected 3D object/model/shape target for Draw on Face Studio
   const selectedStudioTarget = useMemo(() => {
@@ -4606,6 +5142,17 @@ const ARTest = () => {
           });
           if (found) return found;
         }
+      } else if (selectedTargetType === 'scatterLayer' && selectedScatterLayerId) {
+        const layerAnchor = document.getElementById(`ar-scatter-layer-${selectedScatterLayerId}`);
+        if (layerAnchor?.object3D) return layerAnchor.object3D;
+        const sceneEl = document.querySelector('a-scene');
+        if (sceneEl?.object3D) {
+          let found = null;
+          sceneEl.object3D.traverse((node) => {
+            if (!found && node.userData?.scatterLayerId === selectedScatterLayerId) found = node;
+          });
+          if (found) return found;
+        }
       } else if (selectedTargetType === 'model') {
         const modelEl = document.getElementById('ar-model');
         const obj = modelEl?.object3D;
@@ -4720,7 +5267,7 @@ const ARTest = () => {
       }
       window.removeEventListener('starwear-custom-model-loaded', onModelLoadedEvent);
     };
-  }, [gizmoReady, selectedTargetType, selectedGroupId, selectedObjects, sceneGroups, selectedCustomModelId, selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, customModels, custom3DTexts, customLights, additionalGeometries, computeObjectsCentroid]);
+  }, [gizmoReady, selectedTargetType, selectedGroupId, selectedObjects, sceneGroups, selectedCustomModelId, selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, selectedScatterLayerId, scatterLayers, customModels, custom3DTexts, customLights, additionalGeometries, computeObjectsCentroid]);
 
   // Temporarily hide TransformControls while Face Sketch & Extrude Studio is open
   useEffect(() => {
@@ -4784,6 +5331,9 @@ const ARTest = () => {
     } else if (selectedLightId) {
       itemsToHighlight = [{ type: 'light', id: selectedLightId }];
       helperColor = 0xf43f5e;
+    } else if (selectedTargetType === 'scatterLayer' && selectedScatterLayerId) {
+      itemsToHighlight = [{ type: 'scatterLayer', id: selectedScatterLayerId }];
+      helperColor = 0x10b981;
     }
 
     if (itemsToHighlight.length === 0) return;
@@ -4820,7 +5370,7 @@ const ARTest = () => {
         });
       }
     };
-  }, [selectedTargetType, selectedGroupId, selectedObjects, selectedMeshUuid, selectedGeometryId, selectedCustomModelId, selectedText3DId, selectedLightId, sceneGroups, findThreeObject]);
+  }, [selectedTargetType, selectedGroupId, selectedObjects, selectedMeshUuid, selectedGeometryId, selectedCustomModelId, selectedText3DId, selectedLightId, selectedScatterLayerId, scatterLayers, sceneGroups, findThreeObject]);
 
   // Helper: Find selected mesh object metadata from state
   const selectedMesh = meshList.find((m) => m.uuid === selectedMeshUuid) || null;
@@ -5234,6 +5784,8 @@ const ARTest = () => {
           handleDuplicate3DText(selectedText3DId);
         } else if (selectedTargetType === 'light' && selectedLightId) {
           handleDuplicateLight(selectedLightId);
+        } else if (selectedTargetType === 'scatterLayer' && selectedScatterLayerId) {
+          handleDuplicateScatterLayer(selectedScatterLayerId);
         }
         return;
       }
@@ -5280,7 +5832,7 @@ const ARTest = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [faceSketchStudioOpen, selectedMeshUuid, focusCameraOnMesh, focusCameraOnSelectedObject, clearSelectionAndDetachGizmo, selectedGroupId, selectedObjects, handleUngroup, handleCreateGroupFromSelection, selectedTargetType, selectedGeometryId, selectedCustomModelId, selectedText3DId, selectedLightId, handleDuplicateGroup]);
+  }, [faceSketchStudioOpen, selectedMeshUuid, focusCameraOnMesh, focusCameraOnSelectedObject, clearSelectionAndDetachGizmo, selectedGroupId, selectedObjects, handleUngroup, handleCreateGroupFromSelection, selectedTargetType, selectedGeometryId, selectedCustomModelId, selectedText3DId, selectedLightId, selectedScatterLayerId, handleDuplicateScatterLayer, handleDuplicateGroup]);
 
   // Target Marker Alignment & Calibration Actions
   const MARKER_PRESETS = [
@@ -6689,6 +7241,20 @@ const ARTest = () => {
         setSceneGroups([]);
       }
 
+      // Populate Scatter Foliage Layers if configured on batch
+      const loadedScatterLayers = cfg.scatterLayers || data.scatterLayers || data.arExperience?.scatterLayers || null;
+      if (Array.isArray(loadedScatterLayers) && loadedScatterLayers.length > 0) {
+        setScatterLayers(loadedScatterLayers);
+        const hasEnabled = loadedScatterLayers.some((l) => l.enabled !== false);
+        setScatterEnabled(hasEnabled);
+        if (loadedScatterLayers[0]?.id) {
+          setSelectedScatterLayerId(loadedScatterLayers[0].id);
+        }
+      } else {
+        setScatterLayers([]);
+        setSelectedScatterLayerId(null);
+      }
+
       if (cfg && cfg.meshOverrides) {
         const loadedDeleted = Object.entries(cfg.meshOverrides)
           .filter(([_, ovr]) => ovr && ovr.deleted)
@@ -7436,6 +8002,7 @@ const ARTest = () => {
         customModels: cleanedCustomModels,
         custom3DTexts: custom3DTexts || [],
         customLights: customLights || [],
+        scatterLayers: scatterLayers || [],
         sceneGroups: sceneGroups || [],
         updatedAt: new Date().toISOString()
       };
@@ -7461,6 +8028,7 @@ const ARTest = () => {
         customModels: cleanedCustomModels,
         custom3DTexts: custom3DTexts || [],
         customLights: customLights || [],
+        scatterLayers: scatterLayers || [],
         sceneGroups: sceneGroups || [],
         ambientColor,
         ambientIntensity,
@@ -7679,14 +8247,28 @@ const ARTest = () => {
         });
       }
 
-      // 5. Surface Scattering & Foliage Instanced Mesh
-      const scatterAnchor = document.getElementById('ar-surface-scatter-anchor');
-      const scatterRoot = scatterAnchor?.getObject3D('scatterRoot') || scatterAnchor?.object3D;
-      if (scatterRoot && scatterEnabled) {
-        scatterRoot.updateWorldMatrix(true, true);
-        const clonedScatter = scatterRoot.clone(true);
-        scatterRoot.matrixWorld.decompose(clonedScatter.position, clonedScatter.quaternion, clonedScatter.scale);
-        exportContainer.add(clonedScatter);
+      // 5. Surface Scattering & Foliage Instanced Meshes (All Active Layers)
+      if (scatterLayers.length > 0) {
+        scatterLayers.forEach((layer) => {
+          if (!layer.enabled || layer.visible === false) return;
+          const anchor = document.getElementById(`ar-scatter-layer-${layer.id}`);
+          const root = anchor?.getObject3D('scatterRoot') || anchor?.object3D;
+          if (root && anchor?.object3D) {
+            anchor.object3D.updateWorldMatrix(true, true);
+            const cloned = root.clone(true);
+            anchor.object3D.matrixWorld.decompose(cloned.position, cloned.quaternion, cloned.scale);
+            exportContainer.add(cloned);
+          }
+        });
+      } else {
+        const scatterAnchor = document.getElementById('ar-surface-scatter-anchor');
+        const scatterRoot = scatterAnchor?.getObject3D('scatterRoot') || scatterAnchor?.object3D;
+        if (scatterRoot && scatterEnabled) {
+          scatterRoot.updateWorldMatrix(true, true);
+          const clonedScatter = scatterRoot.clone(true);
+          scatterRoot.matrixWorld.decompose(clonedScatter.position, clonedScatter.quaternion, clonedScatter.scale);
+          exportContainer.add(clonedScatter);
+        }
       }
 
       exportContainer.updateMatrixWorld(true);
@@ -7764,6 +8346,8 @@ const ARTest = () => {
       setCustom3DTexts([]);
       setCustomModels([]);
       setScatterEnabled(false);
+      setScatterLayers([]);
+      setSelectedScatterLayerId(null);
       setDeletedMeshNames([]);
       try {
         sessionStorage.setItem('starwear_edit_template', JSON.stringify(updatedTemplate));
@@ -8203,6 +8787,16 @@ const ARTest = () => {
           <div className="mt-2.5 pt-2.5 border-t border-neutral-800/80 flex items-center gap-2">
             <button
               type="button"
+              onClick={() => setIsArApiModalOpen(true)}
+              className="px-2.5 py-1.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-bold transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-emerald-950/40 cursor-pointer shrink-0"
+              title="Open AR-Test Scene Constructor API (Paste Google Gemini vision outputs or JSON to build 3D scenes)"
+            >
+              <span className="material-symbols-outlined text-[15px]">auto_awesome</span>
+              <span>AI Scene API</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => setIsAddModelModalOpen(true)}
               className="px-2.5 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-purple-950/40 cursor-pointer shrink-0"
               title="Add External 3D Model (.glb / .gltf from local file, remote URL, or 3D library)"
@@ -8327,7 +8921,9 @@ const ARTest = () => {
                       ? 'bg-sky-500/20 text-sky-300 border-sky-500/40 shadow-sm'
                       : selectedTargetType === 'light'
                         ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-sm'
-                        : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                        : selectedTargetType === 'scatterLayer'
+                          ? 'bg-emerald-950/70 text-emerald-300 border-emerald-500/50 shadow-sm ring-1 ring-emerald-500/20'
+                          : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                 }`}>
                 <span className="material-symbols-outlined text-xs">
                   {currentSelectedObjectInfo?.icon || 'language'}
@@ -8348,6 +8944,16 @@ const ARTest = () => {
                     title="Delete this mesh from the scene"
                   >
                     <span className="material-symbols-outlined text-xs">delete</span> Delete
+                  </button>
+                )}
+                {selectedTargetType === 'scatterLayer' && selectedScatterLayerId && (
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteScatterLayer(selectedScatterLayerId)}
+                    className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-500/40 hover:text-white transition-colors flex items-center gap-1 cursor-pointer"
+                    title="Delete this scatter layer from the scene"
+                  >
+                    <span className="material-symbols-outlined text-xs">delete</span> Delete Layer
                   </button>
                 )}
                 <button
@@ -8500,7 +9106,7 @@ const ARTest = () => {
           >
             <span className="material-symbols-outlined text-sm text-emerald-400">grass</span>
             <span>Scatter</span>
-            {scatterEnabled && (
+            {(scatterEnabled || scatterLayers.length > 0) && (
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse ml-0.5"></span>
             )}
           </button>
@@ -16527,11 +17133,11 @@ const ARTest = () => {
           )}
 
           {/* ========================================================================= */}
-          {/* TAB: SURFACE SCATTERING & FOLIAGE INSTANCING                              */}
+          {/* TAB: SURFACE SCATTERING & FOLIAGE INSTANCING (MULTI-LAYER)                */}
           {/* ========================================================================= */}
           {activeTab === 'scatter' && (
             <div className="space-y-4">
-              {/* Header Card & Master Switch */}
+              {/* Header Card & Add Button */}
               <div className="p-3 bg-neutral-900/90 rounded-xl border border-neutral-800 space-y-3 shadow-lg">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -16540,351 +17146,785 @@ const ARTest = () => {
                     </div>
                     <div>
                       <h2 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                        Surface Scattering
-                        {scatterEnabled && (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono font-semibold">
-                            ACTIVE
-                          </span>
-                        )}
+                        Scatter Layers
+                        <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono font-semibold">
+                          {scatterLayers.length} {scatterLayers.length === 1 ? 'LAYER' : 'LAYERS'}
+                        </span>
                       </h2>
-                      <p className="text-[10px] text-neutral-400">Scatter leaves, grass, pebbles & foliage across surfaces</p>
+                      <p className="text-[10px] text-neutral-400">
+                        Multi-layer foliage, pebbles, crystals & organic surfaces
+                      </p>
                     </div>
                   </div>
 
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={scatterEnabled}
-                      onChange={(e) => setScatterEnabled(e.target.checked)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-9 h-5 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500 shadow-inner"></div>
-                  </label>
-                </div>
-
-                <div className="flex items-center gap-2 text-[10px] text-neutral-400 bg-neutral-950/60 p-2 rounded-lg border border-neutral-800/80">
-                  <span className="material-symbols-outlined text-sm text-emerald-400">memory</span>
-                  <span>Hardware Instanced (<code>THREE.InstancedMesh</code>) • 1 WebGL Draw Call • Mobile AR Safe</span>
-                </div>
-              </div>
-
-              {/* 1-Click Scatter Style Presets */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm text-emerald-400">auto_awesome</span>
-                    Foliage Presets
-                  </span>
-                  <span className="text-[10px] text-neutral-500">1-click styles</span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-1.5">
-                  {SCATTER_PRESETS.map((p) => {
-                    const isSelected = scatterSelectedPreset === p.id && scatterEnabled;
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => handleApplyScatterPreset(p.id)}
-                        className={`p-2 rounded-lg text-left transition-all border flex items-center gap-2 ${
-                          isSelected
-                            ? 'bg-emerald-950/50 border-emerald-500/60 text-white shadow-sm ring-1 ring-emerald-500/40'
-                            : 'bg-neutral-800/50 border-neutral-700/50 text-neutral-300 hover:bg-neutral-800 hover:text-white'
-                        }`}
-                      >
-                        <span className="material-symbols-outlined text-base text-emerald-400">{p.icon}</span>
-                        <div className="min-w-0">
-                          <p className="text-[11px] font-semibold truncate leading-tight">{p.name}</p>
-                          <p className="text-[9px] text-neutral-400 font-mono leading-tight">{p.count} instances</p>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Target Surface Selector */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm text-emerald-400">grid_on</span>
-                    Target Surface (Host)
-                  </label>
-                  <span className="text-[10px] text-neutral-400 font-mono">Area-Weighted</span>
-                </div>
-
-                <select
-                  value={scatterTarget}
-                  onChange={(e) => setScatterTarget(e.target.value)}
-                  className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs text-neutral-200 focus:outline-none focus:border-emerald-500"
-                >
-                  <option value="#ar-model">Entire 3D Model (#ar-model)</option>
-                  {meshList.length > 0 && (
-                    <optgroup label="Submeshes / Model Parts">
-                      {meshList.map((m, idx) => (
-                        <option key={m.uuid} value={m.name || m.uuid}>
-                          Submesh: {m.name || `Mesh Part #${idx + 1}`}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {additionalGeometries.length > 0 && (
-                    <optgroup label="Additional Geometries">
-                      {additionalGeometries.map((g) => (
-                        <option key={g.id} value={g.name || g.id}>
-                          Geometry: {g.name || g.type || 'Shape'}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
-                <p className="text-[10px] text-neutral-500">
-                  Select whether to scatter across the whole 3D model, or limit to a specific submesh (e.g. tree branch, ground plane, sleeve).
-                </p>
-              </div>
-
-              {/* Prototype Asset Selector */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm text-emerald-400">view_in_ar</span>
-                    Prototype Asset (Source)
-                  </label>
-                  <span className="text-[10px] text-neutral-400 font-mono capitalize">{scatterPrototype}</span>
-                </div>
-
-                <div className="grid grid-cols-3 gap-1.5">
-                  {PROTOTYPE_OPTIONS.map((opt) => (
+                  <div className="flex items-center gap-2">
                     <button
-                      key={opt.id}
                       type="button"
-                      onClick={() => setScatterPrototype(opt.id)}
-                      className={`p-1.5 rounded-lg text-center transition-all border flex flex-col items-center gap-1 ${
-                        scatterPrototype === opt.id
-                          ? 'bg-emerald-950/60 border-emerald-500 text-white font-bold'
-                          : 'bg-neutral-800/40 border-neutral-700/50 text-neutral-400 hover:text-white hover:bg-neutral-800'
-                      }`}
+                      onClick={() => handleAddScatterLayer('lush_foliage')}
+                      className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1 shadow-sm transition-all cursor-pointer"
+                      title="Add a new independent scatter layer"
                     >
-                      <span className="material-symbols-outlined text-base text-emerald-400">{opt.icon}</span>
-                      <span className="text-[10px] truncate w-full">{opt.label}</span>
+                      <span className="material-symbols-outlined text-xs">add</span>
+                      <span>Add Layer</span>
+                    </button>
+
+                    <label className="relative inline-flex items-center cursor-pointer" title="Master toggle for all scatter layers">
+                      <input
+                        type="checkbox"
+                        checked={scatterEnabled && (scatterLayers.length === 0 || scatterLayers.some((l) => l.enabled))}
+                        onChange={(e) => {
+                          const val = e.target.checked;
+                          setScatterEnabled(val);
+                          setScatterLayers((prev) => prev.map((l) => ({ ...l, enabled: val })));
+                        }}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500 shadow-inner"></div>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-[10px] text-neutral-400 bg-neutral-950/60 p-2 rounded-lg border border-neutral-800/80">
+                  <div className="flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-emerald-400">memory</span>
+                    <span><code>THREE.InstancedMesh</code> GPU Acceleration</span>
+                  </div>
+                  <span className="text-emerald-400 font-mono">
+                    Total: {scatterLayers.filter((l) => l.enabled && l.visible !== false).reduce((sum, l) => sum + (l.count || 0), 0)} instances
+                  </span>
+                </div>
+              </div>
+
+              {/* 1-Click Quick Add Presets Bar */}
+              <div className="bg-neutral-950/60 p-2 rounded-xl border border-neutral-800/80 space-y-1.5">
+                <div className="flex items-center justify-between px-0.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 flex items-center gap-1">
+                    <span className="material-symbols-outlined text-xs text-emerald-400">auto_awesome</span>
+                    Quick Add Preset Layer
+                  </span>
+                  <span className="text-[9px] text-neutral-500">+1 click adds layer</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  {SCATTER_PRESETS.slice(0, 6).map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => handleAddScatterLayer(p.id)}
+                      className="p-1.5 rounded bg-neutral-900 hover:bg-emerald-950/50 border border-neutral-800 hover:border-emerald-500/50 text-[10px] font-semibold text-neutral-300 hover:text-emerald-300 text-left transition-all truncate flex items-center gap-1 cursor-pointer"
+                      title={`Add new ${p.name} layer (${p.count} instances)`}
+                    >
+                      <span className="material-symbols-outlined text-xs text-emerald-400 shrink-0">{p.icon}</span>
+                      <span className="truncate">{p.name.split(' ')[0]}</span>
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* Density & Scale Controls */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-sm text-emerald-400">tune</span>
-                  Density & Transform Sliders
-                </span>
-
-                <div className="space-y-3">
-                  <NumberSliderInput
-                    label="Instance Count"
-                    value={scatterCount}
-                    onChange={(val) => setScatterCount(Math.round(val))}
-                    min={10}
-                    max={2000}
-                    step={10}
-                    unit="inst"
-                    color="emerald"
-                    precision={0}
-                    resetValue={200}
-                    showRange={true}
-                  />
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumberSliderInput
-                      label="Min Scale"
-                      value={scatterMinScale}
-                      onChange={setScatterMinScale}
-                      min={0.1}
-                      max={3.0}
-                      step={0.05}
-                      unit="x"
-                      color="emerald"
-                      precision={2}
-                      resetValue={0.8}
-                      showRange={true}
-                    />
-                    <NumberSliderInput
-                      label="Max Scale"
-                      value={scatterMaxScale}
-                      onChange={setScatterMaxScale}
-                      min={0.1}
-                      max={3.0}
-                      step={0.05}
-                      unit="x"
-                      color="emerald"
-                      precision={2}
-                      resetValue={1.2}
-                      showRange={true}
-                    />
+              {/* Layer Cards Stack */}
+              {scatterLayers.length === 0 ? (
+                <div className="p-6 text-center rounded-xl bg-neutral-950/50 border border-neutral-800/80 space-y-3">
+                  <span className="material-symbols-outlined text-3xl text-emerald-400">grass</span>
+                  <div>
+                    <p className="text-xs font-semibold text-neutral-300">No scatter layers in this scene yet</p>
+                    <p className="text-[11px] text-neutral-500 max-w-xs mx-auto mt-0.5">
+                      Scatter foliage, pebbles, crystals, or grass blades across 3D surfaces. Each scatter becomes its own independent layer that you can move, rotate, scale, and manipulate.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleAddScatterLayer('lush_foliage')}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 shadow-sm transition-all cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-xs">add</span>
+                    <span>Add First Scatter Layer</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between px-0.5">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                      Scatter Layers in Scene ({scatterLayers.length})
+                    </span>
+                    {scatterLayers.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => handleExportShapeAsGLB('scatter')}
+                        className="text-[10px] text-teal-400 hover:text-teal-300 flex items-center gap-1 cursor-pointer"
+                        title="Export all active scatter layers combined into one .GLB file"
+                      >
+                        <span className="material-symbols-outlined text-xs">download</span>
+                        <span>Export All GLB</span>
+                      </button>
+                    )}
                   </div>
 
-                  <NumberSliderInput
-                    label="Rotation Jitter"
-                    value={scatterRandomRotation}
-                    onChange={setScatterRandomRotation}
-                    min={0}
-                    max={180}
-                    step={5}
-                    unit="°"
-                    color="emerald"
-                    precision={0}
-                    resetValue={45}
-                    showRange={true}
-                  />
+                  <div className="space-y-1 max-h-52 overflow-y-auto pr-0.5">
+                    {scatterLayers.map((layer, index) => {
+                      const isSelected = (selectedScatterLayerId === layer.id && selectedTargetType === 'scatterLayer') || (activeScatterLayer?.id === layer.id && selectedTargetType === 'scatterLayer');
+                      const isMultiSelected = selectedObjects.some((it) => it.type === 'scatterLayer' && it.id === layer.id);
+                      const targetLabel = layer.target === '#ar-model' ? 'Whole Model' : (layer.target?.length > 14 ? `${layer.target.substring(0, 12)}…` : layer.target);
+                      const protoOpt = PROTOTYPE_OPTIONS.find((opt) => opt.id === layer.prototype);
 
-                  {/* Normal Alignment & Offset */}
-                  <div className="p-2.5 bg-neutral-950/50 rounded-lg border border-neutral-800/80 space-y-2.5">
+                      return (
+                        <div
+                          key={layer.id}
+                          onClick={(e) => {
+                            if (e.shiftKey || e.metaKey || e.ctrlKey || isMultiSelectMode) {
+                              toggleObjectSelection('scatterLayer', layer.id);
+                            } else {
+                              selectSceneObject('scatterLayer', layer.id);
+                              setSelectedScatterLayerId(layer.id);
+                            }
+                          }}
+                          className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer transition-all ${
+                            isSelected
+                              ? 'bg-emerald-950/50 border-emerald-500/70 text-white shadow-sm ring-1 ring-emerald-500/40'
+                              : isMultiSelected
+                                ? 'bg-amber-950/20 border-amber-500/50 shadow-xs'
+                                : 'bg-neutral-900/70 border-neutral-800/80 hover:border-neutral-700 text-neutral-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={isMultiSelected}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                toggleObjectSelection('scatterLayer', layer.id);
+                              }}
+                              className="w-3.5 h-3.5 rounded bg-neutral-800 border-neutral-700 text-amber-500 focus:ring-amber-400 cursor-pointer shrink-0"
+                              title="Toggle selection for multi-object editing or grouping"
+                            />
+
+                            <span
+                              className="w-3 h-3 rounded-full shrink-0 border border-black/40 shadow-xs"
+                              style={{ backgroundColor: layer.color || '#4ade80' }}
+                              title={`Color: ${layer.color}`}
+                            />
+
+                            <span className="material-symbols-outlined text-sm text-emerald-400 shrink-0">
+                              {protoOpt?.icon || 'grass'}
+                            </span>
+
+                            <span className="font-semibold truncate max-w-[120px]" title={layer.name}>
+                              {layer.name || `Scatter Layer ${index + 1}`}
+                            </span>
+
+                            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-black/50 text-neutral-400 border border-neutral-800 shrink-0" title={`Host surface: ${layer.target}`}>
+                              {targetLabel}
+                            </span>
+
+                            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/40 text-emerald-300 border border-emerald-800/40 shrink-0">
+                              {layer.count} inst
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => handleExportShapeAsGLB({ type: 'scatterLayer', id: layer.id })}
+                              className="p-1 rounded text-teal-400 hover:text-teal-300 hover:bg-teal-950/40 transition-colors cursor-pointer"
+                              title="Export this scatter layer as .GLB"
+                            >
+                              <span className="material-symbols-outlined text-sm">download</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleToggleScatterLayerVisibility(layer.id)}
+                              className={`p-1 rounded hover:bg-neutral-800 transition-colors cursor-pointer ${
+                                layer.visible !== false ? 'text-neutral-300' : 'text-neutral-600'
+                              }`}
+                              title={layer.visible !== false ? 'Hide Scatter Layer' : 'Show Scatter Layer'}
+                            >
+                              <span className="material-symbols-outlined text-sm">
+                                {layer.visible !== false ? 'visibility' : 'visibility_off'}
+                              </span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDuplicateScatterLayer(layer.id)}
+                              className="p-1 rounded text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 transition-colors cursor-pointer"
+                              title="Duplicate Scatter Layer"
+                            >
+                              <span className="material-symbols-outlined text-sm">content_copy</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteScatterLayer(layer.id)}
+                              className="p-1 rounded text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 transition-colors cursor-pointer"
+                              title="Delete Scatter Layer"
+                            >
+                              <span className="material-symbols-outlined text-sm">delete</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Selected Layer Inspector Controls */}
+              {activeScatterLayer && (
+                <div className="space-y-4 pt-1 border-t border-neutral-800/80">
+                  {/* Active Layer Header & Rename */}
+                  <div className="p-3 bg-neutral-900/80 rounded-xl border border-neutral-800 space-y-2.5">
                     <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-xs font-semibold text-neutral-200">Align with Surface Normals</p>
-                        <p className="text-[10px] text-neutral-500">Orient prototypes naturally along geometry contours</p>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="material-symbols-outlined text-base text-emerald-400">tune</span>
+                        <span className="text-xs font-bold uppercase tracking-wider text-neutral-200">
+                          Layer Controls
+                        </span>
                       </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={scatterNormalAlign}
-                          onChange={(e) => setScatterNormalAlign(e.target.checked)}
-                          className="sr-only peer"
-                        />
-                        <div className="w-8 h-4 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-500"></div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-[10px] text-neutral-400 flex items-center gap-1.5 cursor-pointer">
+                          <span>Layer Enabled</span>
+                          <input
+                            type="checkbox"
+                            checked={activeScatterLayer.enabled !== false}
+                            onChange={(e) =>
+                              handleUpdateScatterLayer(activeScatterLayer.id, { enabled: e.target.checked })
+                            }
+                            className="rounded bg-neutral-800 border-neutral-700 text-emerald-500 focus:ring-emerald-400 cursor-pointer"
+                          />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={activeScatterLayer.name || ''}
+                        onChange={(e) =>
+                          handleUpdateScatterLayer(activeScatterLayer.id, { name: e.target.value })
+                        }
+                        placeholder="Layer Name"
+                        className="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Host Target Surface Selector */}
+                  <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-sm text-emerald-400">grid_on</span>
+                        Host Target Surface
                       </label>
+                      <span className="text-[10px] text-neutral-400 font-mono">Area-Weighted</span>
+                    </div>
+
+                    <select
+                      value={activeScatterLayer.target || '#ar-model'}
+                      onChange={(e) => {
+                        handleUpdateScatterLayer(activeScatterLayer.id, { target: e.target.value });
+                        setScatterTarget(e.target.value);
+                      }}
+                      className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-2.5 py-1.5 text-xs text-neutral-200 focus:outline-none focus:border-emerald-500 cursor-pointer"
+                    >
+                      <option value="#ar-model">Entire 3D Model (#ar-model)</option>
+                      {meshList.length > 0 && (
+                        <optgroup label="Submeshes / Model Parts">
+                          {meshList.map((m, idx) => (
+                            <option key={m.uuid} value={m.name || m.uuid}>
+                              Submesh: {m.name || `Mesh Part #${idx + 1}`}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {additionalGeometries.length > 0 && (
+                        <optgroup label="Additional Geometries">
+                          {additionalGeometries.map((g) => (
+                            <option key={g.id} value={g.name || g.id}>
+                              Geometry: {g.name || g.type || 'Shape'}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                    <p className="text-[10px] text-neutral-500">
+                      Assign this scatter layer to the entire 3D model, or limit to a specific submesh/geometry.
+                    </p>
+                  </div>
+
+                  {/* 3D Transform Sliders (Move, Rotate, Scale Layer) */}
+                  <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-sm text-emerald-400">open_with</span>
+                        Layer 3D Transform (Move & Offset)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleResetScatterLayerTransform(activeScatterLayer.id)}
+                        className="text-[10px] text-neutral-400 hover:text-white flex items-center gap-0.5 px-1.5 py-0.5 bg-neutral-800/80 rounded cursor-pointer transition-colors"
+                        title="Reset layer position, rotation, and scale to 0"
+                      >
+                        <span className="material-symbols-outlined text-[11px]">restart_alt</span> Reset
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <NumberSliderInput
+                        label="Pos X (Left/Right)"
+                        value={activeScatterLayer.posX || 0}
+                        onChange={(val) => handleUpdateScatterLayer(activeScatterLayer.id, { posX: val })}
+                        min={-4.0}
+                        max={4.0}
+                        step={0.02}
+                        unit="m"
+                        color="emerald"
+                        precision={3}
+                        resetValue={0}
+                        showRange={true}
+                      />
+                      <NumberSliderInput
+                        label="Pos Y (Height)"
+                        value={activeScatterLayer.posY || 0}
+                        onChange={(val) => handleUpdateScatterLayer(activeScatterLayer.id, { posY: val })}
+                        min={-4.0}
+                        max={4.0}
+                        step={0.02}
+                        unit="m"
+                        color="emerald"
+                        precision={3}
+                        resetValue={0}
+                        showRange={true}
+                      />
+                      <NumberSliderInput
+                        label="Pos Z (Depth)"
+                        value={activeScatterLayer.posZ || 0}
+                        onChange={(val) => handleUpdateScatterLayer(activeScatterLayer.id, { posZ: val })}
+                        min={-4.0}
+                        max={4.0}
+                        step={0.02}
+                        unit="m"
+                        color="emerald"
+                        precision={3}
+                        resetValue={0}
+                        showRange={true}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <NumberSliderInput
+                        label="Rot X (Pitch)"
+                        value={activeScatterLayer.rotX || 0}
+                        onChange={(val) => handleUpdateScatterLayer(activeScatterLayer.id, { rotX: val })}
+                        min={-180}
+                        max={180}
+                        step={5}
+                        unit="°"
+                        color="emerald"
+                        precision={0}
+                        resetValue={0}
+                        showRange={true}
+                      />
+                      <NumberSliderInput
+                        label="Rot Y (Yaw)"
+                        value={activeScatterLayer.rotY || 0}
+                        onChange={(val) => handleUpdateScatterLayer(activeScatterLayer.id, { rotY: val })}
+                        min={-180}
+                        max={180}
+                        step={5}
+                        unit="°"
+                        color="emerald"
+                        precision={0}
+                        resetValue={0}
+                        showRange={true}
+                      />
+                      <NumberSliderInput
+                        label="Rot Z (Roll)"
+                        value={activeScatterLayer.rotZ || 0}
+                        onChange={(val) => handleUpdateScatterLayer(activeScatterLayer.id, { rotZ: val })}
+                        min={-180}
+                        max={180}
+                        step={5}
+                        unit="°"
+                        color="emerald"
+                        precision={0}
+                        resetValue={0}
+                        showRange={true}
+                      />
                     </div>
 
                     <NumberSliderInput
-                      label="Surface Elevation Offset"
-                      value={scatterNormalOffset}
-                      onChange={setScatterNormalOffset}
-                      min={0.0}
-                      max={0.05}
-                      step={0.001}
-                      unit="m"
+                      label="Layer Overall Scale"
+                      value={activeScatterLayer.scaleX || activeScatterLayer.scale || 1}
+                      onChange={(val) =>
+                        handleUpdateScatterLayer(activeScatterLayer.id, {
+                          scale: val,
+                          scaleX: val,
+                          scaleY: val,
+                          scaleZ: val
+                        })
+                      }
+                      min={0.1}
+                      max={5.0}
+                      step={0.05}
+                      unit="x"
                       color="emerald"
-                      precision={3}
-                      resetValue={0.005}
+                      precision={2}
+                      resetValue={1}
                       showRange={true}
                     />
-                  </div>
-                </div>
-              </div>
 
-              {/* Material & Color Controls */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-sm text-emerald-400">palette</span>
-                  Foliage Color & Material
-                </span>
-
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="color"
-                      value={scatterColor}
-                      onChange={(e) => setScatterColor(e.target.value)}
-                      className="w-8 h-8 rounded border border-neutral-700 bg-transparent cursor-pointer"
-                    />
-                    <input
-                      type="text"
-                      value={scatterColor}
-                      onChange={(e) => setScatterColor(e.target.value)}
-                      className="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-2.5 py-1 text-xs text-neutral-200 font-mono uppercase"
-                    />
+                    <div className="flex items-center gap-1.5 text-[10px] text-neutral-400 bg-neutral-950/50 p-2 rounded-lg border border-neutral-800/80">
+                      <span className="material-symbols-outlined text-xs text-emerald-400 shrink-0">smart_display</span>
+                      <span>You can also move, rotate, and scale this layer directly using the 3D Transform Gizmo in the AR viewport (W: Move, E: Rotate, R: Scale).</span>
+                    </div>
                   </div>
 
-                  {/* Swatches */}
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {['#4ade80', '#22c55e', '#15803d', '#a3e635', '#f472b6', '#fbbf24', '#94a3b8', '#38bdf8', '#c084fc'].map((hex) => (
-                      <button
-                        key={hex}
-                        type="button"
-                        onClick={() => setScatterColor(hex)}
-                        style={{ backgroundColor: hex }}
-                        className={`w-6 h-6 rounded-md border transition-transform ${
-                          scatterColor.toLowerCase() === hex.toLowerCase() ? 'scale-110 border-white shadow' : 'border-neutral-700'
-                        }`}
+                  {/* Apply Style Preset to this layer */}
+                  <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-sm text-emerald-400">auto_awesome</span>
+                        Apply Style Preset to Layer
+                      </span>
+                      <span className="text-[10px] text-neutral-500">1-click styling</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {SCATTER_PRESETS.map((p) => {
+                        const isSelected = activeScatterLayer.preset === p.id;
+                        return (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => handleApplyScatterPreset(p.id)}
+                            className={`p-2 rounded-lg text-left transition-all border flex items-center gap-2 cursor-pointer ${
+                              isSelected
+                                ? 'bg-emerald-950/50 border-emerald-500/60 text-white shadow-sm ring-1 ring-emerald-500/40'
+                                : 'bg-neutral-800/50 border-neutral-700/50 text-neutral-300 hover:bg-neutral-800 hover:text-white'
+                            }`}
+                          >
+                            <span className="material-symbols-outlined text-base text-emerald-400">{p.icon}</span>
+                            <div className="min-w-0">
+                              <p className="text-[11px] font-semibold truncate leading-tight">{p.name}</p>
+                              <p className="text-[9px] text-neutral-400 font-mono leading-tight">{p.count} instances</p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Prototype Asset Selector */}
+                  <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-sm text-emerald-400">view_in_ar</span>
+                        Prototype Asset (Source)
+                      </label>
+                      <span className="text-[10px] text-neutral-400 font-mono capitalize">
+                        {activeScatterLayer.prototype || 'leaf'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {PROTOTYPE_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() =>
+                            handleUpdateScatterLayer(activeScatterLayer.id, { prototype: opt.id })
+                          }
+                          className={`p-1.5 rounded-lg text-center transition-all border flex flex-col items-center gap-1 cursor-pointer ${
+                            (activeScatterLayer.prototype || 'leaf') === opt.id
+                              ? 'bg-emerald-950/60 border-emerald-500 text-white font-bold ring-1 ring-emerald-500/30'
+                              : 'bg-neutral-800/40 border-neutral-700/50 text-neutral-400 hover:text-white hover:bg-neutral-800'
+                          }`}
+                        >
+                          <span className="material-symbols-outlined text-base text-emerald-400">{opt.icon}</span>
+                          <span className="text-[10px] truncate w-full">{opt.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Density & Scale Controls */}
+                  <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                    <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-sm text-emerald-400">tune</span>
+                      Density & Distribution
+                    </span>
+
+                    <div className="space-y-3">
+                      <NumberSliderInput
+                        label="Instance Count"
+                        value={activeScatterLayer.count || 200}
+                        onChange={(val) =>
+                          handleUpdateScatterLayer(activeScatterLayer.id, { count: Math.round(val) })
+                        }
+                        min={10}
+                        max={2000}
+                        step={10}
+                        unit="inst"
+                        color="emerald"
+                        precision={0}
+                        resetValue={200}
+                        showRange={true}
                       />
-                    ))}
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumberSliderInput
+                          label="Min Scale"
+                          value={activeScatterLayer.minScale ?? 0.8}
+                          onChange={(val) =>
+                            handleUpdateScatterLayer(activeScatterLayer.id, { minScale: val })
+                          }
+                          min={0.1}
+                          max={3.0}
+                          step={0.05}
+                          unit="x"
+                          color="emerald"
+                          precision={2}
+                          resetValue={0.8}
+                          showRange={true}
+                        />
+                        <NumberSliderInput
+                          label="Max Scale"
+                          value={activeScatterLayer.maxScale ?? 1.2}
+                          onChange={(val) =>
+                            handleUpdateScatterLayer(activeScatterLayer.id, { maxScale: val })
+                          }
+                          min={0.1}
+                          max={3.0}
+                          step={0.05}
+                          unit="x"
+                          color="emerald"
+                          precision={2}
+                          resetValue={1.2}
+                          showRange={true}
+                        />
+                      </div>
+
+                      <NumberSliderInput
+                        label="Rotation Jitter"
+                        value={activeScatterLayer.randomRotation ?? 45}
+                        onChange={(val) =>
+                          handleUpdateScatterLayer(activeScatterLayer.id, { randomRotation: val })
+                        }
+                        min={0}
+                        max={180}
+                        step={5}
+                        unit="°"
+                        color="emerald"
+                        precision={0}
+                        resetValue={45}
+                        showRange={true}
+                      />
+
+                      {/* Normal Alignment & Offset */}
+                      <div className="p-2.5 bg-neutral-950/50 rounded-lg border border-neutral-800/80 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-xs font-semibold text-neutral-200">Align with Surface Normals</p>
+                            <p className="text-[10px] text-neutral-500">Orient prototypes naturally along geometry contours</p>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={activeScatterLayer.normalAlign !== false}
+                              onChange={(e) =>
+                                handleUpdateScatterLayer(activeScatterLayer.id, { normalAlign: e.target.checked })
+                              }
+                              className="sr-only peer"
+                            />
+                            <div className="w-8 h-4 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-500"></div>
+                          </label>
+                        </div>
+
+                        <NumberSliderInput
+                          label="Surface Elevation Offset"
+                          value={activeScatterLayer.normalOffset ?? 0.005}
+                          onChange={(val) =>
+                            handleUpdateScatterLayer(activeScatterLayer.id, { normalOffset: val })
+                          }
+                          min={0.0}
+                          max={0.05}
+                          step={0.001}
+                          unit="m"
+                          color="emerald"
+                          precision={3}
+                          resetValue={0.005}
+                          showRange={true}
+                        />
+                      </div>
+                    </div>
                   </div>
 
-                  <NumberSliderInput
-                    label="Color Variation (Natural HSL Jitter)"
-                    value={scatterColorVariation}
-                    onChange={setScatterColorVariation}
-                    min={0.0}
-                    max={1.0}
-                    step={0.05}
-                    unit="%"
-                    color="emerald"
-                    precision={2}
-                    resetValue={0.2}
-                    showRange={true}
-                  />
+                  {/* Material & Color Controls */}
+                  <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
+                    <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-sm text-emerald-400">palette</span>
+                      Foliage Color & Material
+                    </span>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <NumberSliderInput
-                      label="Roughness"
-                      value={scatterRoughness}
-                      onChange={setScatterRoughness}
-                      min={0.0}
-                      max={1.0}
-                      step={0.05}
-                      unit=""
-                      color="emerald"
-                      precision={2}
-                      resetValue={0.7}
-                      showRange={true}
-                    />
-                    <NumberSliderInput
-                      label="Metalness"
-                      value={scatterMetalness}
-                      onChange={setScatterMetalness}
-                      min={0.0}
-                      max={1.0}
-                      step={0.05}
-                      unit=""
-                      color="emerald"
-                      precision={2}
-                      resetValue={0.1}
-                      showRange={true}
-                    />
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={activeScatterLayer.color || '#4ade80'}
+                          onChange={(e) =>
+                            handleUpdateScatterLayer(activeScatterLayer.id, { color: e.target.value })
+                          }
+                          className="w-8 h-8 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                        />
+                        <input
+                          type="text"
+                          value={activeScatterLayer.color || '#4ade80'}
+                          onChange={(e) =>
+                            handleUpdateScatterLayer(activeScatterLayer.id, { color: e.target.value })
+                          }
+                          className="flex-1 bg-neutral-800 border border-neutral-700 rounded-lg px-2.5 py-1 text-xs text-neutral-200 font-mono uppercase"
+                        />
+                      </div>
+
+                      {/* Swatches */}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {['#4ade80', '#22c55e', '#15803d', '#a3e635', '#f472b6', '#fbbf24', '#94a3b8', '#38bdf8', '#c084fc'].map((hex) => (
+                          <button
+                            key={hex}
+                            type="button"
+                            onClick={() => handleUpdateScatterLayer(activeScatterLayer.id, { color: hex })}
+                            style={{ backgroundColor: hex }}
+                            className={`w-6 h-6 rounded-md border transition-transform cursor-pointer ${
+                              (activeScatterLayer.color || '').toLowerCase() === hex.toLowerCase()
+                                ? 'scale-110 border-white shadow'
+                                : 'border-neutral-700'
+                            }`}
+                          />
+                        ))}
+                      </div>
+
+                      <NumberSliderInput
+                        label="Color Variation (Natural HSL Jitter)"
+                        value={activeScatterLayer.colorVariation ?? 0.2}
+                        onChange={(val) =>
+                          handleUpdateScatterLayer(activeScatterLayer.id, { colorVariation: val })
+                        }
+                        min={0.0}
+                        max={1.0}
+                        step={0.05}
+                        unit="%"
+                        color="emerald"
+                        precision={2}
+                        resetValue={0.2}
+                        showRange={true}
+                      />
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumberSliderInput
+                          label="Roughness"
+                          value={activeScatterLayer.roughness ?? 0.7}
+                          onChange={(val) =>
+                            handleUpdateScatterLayer(activeScatterLayer.id, { roughness: val })
+                          }
+                          min={0.0}
+                          max={1.0}
+                          step={0.05}
+                          unit=""
+                          color="emerald"
+                          precision={2}
+                          resetValue={0.7}
+                          showRange={true}
+                        />
+                        <NumberSliderInput
+                          label="Metalness"
+                          value={activeScatterLayer.metalness ?? 0.1}
+                          onChange={(val) =>
+                            handleUpdateScatterLayer(activeScatterLayer.id, { metalness: val })
+                          }
+                          min={0.0}
+                          max={1.0}
+                          step={0.05}
+                          unit=""
+                          color="emerald"
+                          precision={2}
+                          resetValue={0.1}
+                          showRange={true}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Seed, Duplication & Export Actions */}
+                  <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-sm text-emerald-400">casino</span>
+                        Distribution Seed
+                      </span>
+                      <span className="text-xs font-mono text-emerald-400">#{activeScatterLayer.seed || 1}</span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleUpdateScatterLayer(activeScatterLayer.id, {
+                            seed: (activeScatterLayer.seed || 1) + 1
+                          })
+                        }
+                        className="flex-1 py-2 px-3 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-semibold rounded-lg text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-sm text-emerald-400">shuffle</span>
+                        <span>Randomize Seed</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleExportShapeAsGLB({ type: 'scatterLayer', id: activeScatterLayer.id })
+                        }
+                        className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg text-xs flex items-center gap-1 transition-all cursor-pointer"
+                        title="Export this scatter layer as a .GLB file"
+                      >
+                        <span className="material-symbols-outlined text-sm">download</span>
+                        <span>Export GLB</span>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1 border-t border-neutral-800/60">
+                      <button
+                        type="button"
+                        onClick={() => handleDuplicateScatterLayer(activeScatterLayer.id)}
+                        className="flex-1 py-1.5 px-2 bg-neutral-800/80 hover:bg-neutral-800 text-neutral-300 font-medium rounded-lg text-xs flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-xs">content_copy</span>
+                        <span>Duplicate Layer</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteScatterLayer(activeScatterLayer.id)}
+                        className="py-1.5 px-3 bg-rose-950/40 hover:bg-rose-900/50 text-rose-300 border border-rose-800/40 font-medium rounded-lg text-xs flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-xs">delete</span>
+                        <span>Delete</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
-              {/* Seed & Export Actions */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm text-emerald-400">casino</span>
-                    Distribution Seed
-                  </span>
-                  <span className="text-xs font-mono text-emerald-400">#{scatterSeed}</span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setScatterSeed((prev) => prev + 1)}
-                    className="flex-1 py-2 px-3 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-semibold rounded-lg text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                  >
-                    <span className="material-symbols-outlined text-sm text-emerald-400">shuffle</span>
-                    <span>Randomize Seed</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => handleExportShapeAsGLB('scatter')}
-                    className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg text-xs flex items-center gap-1 transition-all cursor-pointer"
-                    title="Export scattered foliage instances as a .GLB file"
-                  >
-                    <span className="material-symbols-outlined text-sm">download</span>
-                    <span>Export GLB</span>
-                  </button>
-                </div>
+              {/* Dedicated Save Scatter Configuration Button */}
+              <div className="pt-2 border-t border-neutral-800/80 space-y-2">
+                <button
+                  type="button"
+                  disabled={savingConfig}
+                  onClick={handleSaveConfig}
+                  className="w-full py-2.5 px-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-green-600 hover:from-emerald-500 hover:to-green-500 text-white font-bold rounded-lg shadow-lg shadow-emerald-500/20 text-xs flex items-center justify-center gap-2 transition-all disabled:opacity-50 active:scale-[0.99] cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-sm">save</span>
+                  <span>{savingConfig ? 'Saving Scatter Layers...' : `Save Scatter Layers to Batch (${batchId || 'Active'})`}</span>
+                </button>
               </div>
             </div>
           )}
@@ -17930,16 +18970,41 @@ const ARTest = () => {
             ></a-entity>
           )}
 
-          {/* Surface Scattering & Foliage Distribution Anchor */}
-          {scatterEnabled && (
+          {/* Surface Scattering & Foliage Distribution Layers */}
+          {scatterLayers.length > 0 ? (
+            scatterLayers.map((layer) => {
+              if (!layer.enabled || layer.visible === false) return null;
+              const posX = layer.posX ?? 0;
+              const posY = layer.posY ?? 0;
+              const posZ = layer.posZ ?? 0;
+              const rotX = layer.rotX ?? 0;
+              const rotY = layer.rotY ?? 0;
+              const rotZ = layer.rotZ ?? 0;
+              const scaleX = layer.scaleX ?? layer.scale ?? 1;
+              const scaleY = layer.scaleY ?? layer.scale ?? 1;
+              const scaleZ = layer.scaleZ ?? layer.scale ?? 1;
+
+              return (
+                <a-entity
+                  key={layer.id}
+                  id={`ar-scatter-layer-${layer.id}`}
+                  data-layer-id={layer.id}
+                  position={`${posX} ${posY} ${posZ}`}
+                  rotation={`${rotX} ${rotY} ${rotZ}`}
+                  scale={`${scaleX} ${scaleY} ${scaleZ}`}
+                  surface-scatter={`enabled: true; target: ${layer.target || '#ar-model'}; prototype: ${layer.prototype || 'leaf'}; count: ${layer.count || 200}; minScale: ${layer.minScale ?? 0.8}; maxScale: ${layer.maxScale ?? 1.2}; randomRotation: ${layer.randomRotation ?? 45}; normalAlign: ${layer.normalAlign !== false}; normalOffset: ${layer.normalOffset ?? 0.005}; color: ${layer.color || '#4ade80'}; colorVariation: ${layer.colorVariation ?? 0.2}; roughness: ${layer.roughness ?? 0.7}; metalness: ${layer.metalness ?? 0.1}; seed: ${layer.seed || 1}; layerId: ${layer.id};`}
+                ></a-entity>
+              );
+            })
+          ) : scatterEnabled ? (
             <a-entity
               id="ar-surface-scatter-anchor"
               surface-scatter={`enabled: ${scatterEnabled}; target: ${scatterTarget}; prototype: ${scatterPrototype}; count: ${scatterCount}; minScale: ${scatterMinScale}; maxScale: ${scatterMaxScale}; randomRotation: ${scatterRandomRotation}; normalAlign: ${scatterNormalAlign}; normalOffset: ${scatterNormalOffset}; color: ${scatterColor}; colorVariation: ${scatterColorVariation}; roughness: ${scatterRoughness}; metalness: ${scatterMetalness}; seed: ${scatterSeed};`}
             ></a-entity>
-          )}
+          ) : null}
         </a-scene>
 
-        {!loading && !(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0 || customModels.length > 0 || custom3DTexts.length > 0 || customLights.length > 0 || scatterEnabled || (markerVisible && markerImageUrl) || (websiteEnabled && websiteUrl)) && (
+        {!loading && !(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || portalEnabled || particleSystemEnabled || additionalGeometries.length > 0 || customModels.length > 0 || custom3DTexts.length > 0 || customLights.length > 0 || scatterEnabled || (scatterLayers.length > 0 && scatterLayers.some((l) => l.enabled)) || (markerVisible && markerImageUrl) || (websiteEnabled && websiteUrl)) && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-neutral-500 space-y-4 p-8 text-center pointer-events-none z-10">
             <div className="w-16 h-16 rounded-2xl bg-neutral-800/80 border border-neutral-700 flex items-center justify-center text-indigo-400 shadow-xl">
               <span className="material-symbols-outlined text-3xl">view_in_ar</span>
@@ -18189,6 +19254,16 @@ const ARTest = () => {
           isOpen={isAddTextModalOpen}
           onClose={() => setIsAddTextModalOpen(false)}
           onAddText={handleAdd3DText}
+        />
+      )}
+
+      {/* AR-Test AI Scene Constructor API Modal */}
+      {isArApiModalOpen && (
+        <ArSceneApiModal
+          isOpen={isArApiModalOpen}
+          onClose={() => setIsArApiModalOpen(false)}
+          onApplyScene={handleApplyArSceneApi}
+          onExportCurrentScene={handleExportCurrentSceneForApi}
         />
       )}
 

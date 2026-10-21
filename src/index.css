@@ -199,3 +199,17 @@ a-scene[embedded] .a-canvas,
 .control-tabs {
   overflow-x: scroll;
 }
+
+.shape-interact {
+  flex-direction: column;
+}
+
+.shape-interact-buttons {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.listed-shapes {
+  flex-direction: column;
+  border: 2px solid red !important;
+}

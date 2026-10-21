@@ -200,6 +200,14 @@ const AdminDocumentation = () => {
         {/* Quick Testing Links */}
         <div className="flex flex-wrap items-center gap-2">
           <Link
+            to="/admin/ar-api-docs"
+            className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
+            title="Open AR-Test AI API Specification"
+          >
+            <span className="material-symbols-outlined text-sm">auto_awesome</span>
+            <span>AI API Docs</span>
+          </Link>
+          <Link
             to="/ar-test"
             target="_blank"
             rel="noopener noreferrer"
@@ -223,6 +231,33 @@ const AdminDocumentation = () => {
           </Link>
         </div>
       </header>
+
+      {/* AR-Test AI API Highlight Banner */}
+      <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-950/40 via-teal-950/30 to-slate-900 border border-emerald-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center shrink-0">
+            <span className="material-symbols-outlined text-xl">auto_awesome</span>
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold text-white">AR-Test AI API & Vision Specification</h3>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold">
+                NOTEBOOK LM READY
+              </span>
+            </div>
+            <p className="text-xs text-secondary mt-0.5">
+              Comprehensive single-page specification and Gemini prompt template for 2D image-to-3D scene generation.
+            </p>
+          </div>
+        </div>
+        <Link
+          to="/admin/ar-api-docs"
+          className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0 shadow-sm"
+        >
+          <span>Open Specification</span>
+          <span className="material-symbols-outlined text-sm">arrow_forward</span>
+        </Link>
+      </div>
 
       {/* Quick Stats & Architecture At A Glance */}
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

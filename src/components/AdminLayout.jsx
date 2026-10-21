@@ -92,6 +92,10 @@ const AdminLayout = () => {
             <span className="material-symbols-outlined">menu_book</span>
             <span>DOCUMENTATION</span>
           </Link>
+          <Link to="/admin/ar-api-docs" className={getLinkClass('/admin/ar-api-docs')}>
+            <span className="material-symbols-outlined text-emerald-500">auto_awesome</span>
+            <span>AR-TEST AI API</span>
+          </Link>
           <Link to="/admin/settings" className={getLinkClass('/admin/settings')}>
             <span className="material-symbols-outlined">settings</span>
             <span>SETTINGS</span>

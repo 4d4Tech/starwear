@@ -24,6 +24,7 @@ import ThumbnailSyncRunner from './pages/ThumbnailSyncRunner';
 import ProtectedRoute from './components/ProtectedRoute';
 import AdminLogin from './pages/AdminLogin';
 import AdminDocumentation from './pages/AdminDocumentation';
+import AdminArApiDocs from './pages/AdminArApiDocs';
 
 // Lazy load AR components to prevent aframe/mind-ar from polluting the global scope on other pages
 const ARExperience = lazy(() => import('./pages/ARExperience'));
@@ -78,6 +79,8 @@ function App() {
               <Route path="settings" element={<AdminSettings />} />
               <Route path="docs" element={<AdminDocumentation />} />
               <Route path="documentation" element={<AdminDocumentation />} />
+              <Route path="ar-api-docs" element={<AdminArApiDocs />} />
+              <Route path="docs/ar-api" element={<AdminArApiDocs />} />
             </Route>
           </Route>
         </Routes>

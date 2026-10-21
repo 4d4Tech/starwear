@@ -566,8 +566,14 @@ export function generateSurfaceScatterMesh(options = {}) {
   const defaultUp = new THREE_LIB.Vector3(0, 1, 0);
 
   // Prepare anchor world inversion matrix if instancedMesh is parented inside an anchor
+  // Use anchorObject.parent so that the anchor entity's own position, rotation, and scale
+  // act as a live layer transform offset (enabling user manipulation & gizmo moves)
+  // without being cancelled out when instances regenerate.
   const invAnchor = new THREE_LIB.Matrix4();
-  if (anchorObject && anchorObject.matrixWorld) {
+  if (anchorObject && anchorObject.parent) {
+    anchorObject.parent.updateWorldMatrix(true, false);
+    invAnchor.copy(anchorObject.parent.matrixWorld).invert();
+  } else if (anchorObject && anchorObject.matrixWorld) {
     anchorObject.updateWorldMatrix(true, false);
     invAnchor.copy(anchorObject.matrixWorld).invert();
   }
@@ -672,7 +678,8 @@ export function registerSurfaceScatterComponent() {
       colorVariation: { type: 'number', default: 0.2 },
       roughness: { type: 'number', default: 0.7 },
       metalness: { type: 'number', default: 0.1 },
-      seed: { type: 'number', default: 1 }
+      seed: { type: 'number', default: 1 },
+      layerId: { type: 'string', default: '' }
     },
 
     init: function () {
@@ -681,6 +688,12 @@ export function registerSurfaceScatterComponent() {
       this.scatterRoot.name = 'ar_surface_scatter_root';
       this.scatterRoot.pivot = null;
       this.el.setObject3D('scatterRoot', this.scatterRoot);
+
+      const layerId = this.data.layerId || (this.el.id ? this.el.id.replace('ar-scatter-layer-', '') : '');
+      this.el.object3D.userData.isScatterLayer = true;
+      this.el.object3D.userData.scatterLayerId = layerId;
+      this.scatterRoot.userData.isScatterLayer = true;
+      this.scatterRoot.userData.scatterLayerId = layerId;
 
       this.instancedMesh = null;
       this.targetEl = null;
@@ -822,9 +835,17 @@ export function registerSurfaceScatterComponent() {
       });
 
       if (this.instancedMesh && this.scatterRoot) {
+        const layerId = this.data.layerId || (this.el.id ? this.el.id.replace('ar-scatter-layer-', '') : '');
+        this.el.object3D.userData.isScatterLayer = true;
+        this.el.object3D.userData.scatterLayerId = layerId;
+        this.scatterRoot.userData.isScatterLayer = true;
+        this.scatterRoot.userData.scatterLayerId = layerId;
+        this.instancedMesh.userData.isScatterLayer = true;
+        this.instancedMesh.userData.scatterLayerId = layerId;
+
         this.scatterRoot.add(this.instancedMesh);
         this.scatterRoot.updateMatrixWorld(true);
-        this.el.emit('surface-scatter-generated', { count: this.data.count, target: this.data.target });
+        this.el.emit('surface-scatter-generated', { count: this.data.count, target: this.data.target, layerId });
       }
     },
 
