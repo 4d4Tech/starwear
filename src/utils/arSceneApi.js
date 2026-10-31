@@ -5,11 +5,13 @@
  * and multi-modal 3D AR scene generation via Google Gemini and LLMs.
  */
 
+import { normalizeVectorPointsList } from './inflationEngine.js';
+
 // =========================================================================
 // 1. API SCHEMA SPECIFICATION CONSTANTS
 // =========================================================================
 
-export const AR_SCENE_API_VERSION = '1.0.0';
+export const AR_SCENE_API_VERSION = '1.1.0';
 
 export const VALID_PRIMITIVE_TYPES = [
   'box',
@@ -29,6 +31,35 @@ export const VALID_PRIMITIVE_TYPES = [
   'vectorRevolve',
   'vectorSweep',
   'vectorCarve'
+];
+
+export const VALID_SCENE_ENV_PRESETS = [
+  'studio-chrome',
+  'city',
+  'sunset',
+  'forest',
+  'night',
+  'cyber',
+  'neutral',
+  'none'
+];
+
+export const VALID_PROCEDURAL_PATTERNS = [
+  'honeycomb',
+  'carbon-fiber',
+  'brushed-metal',
+  'grid',
+  'dots',
+  'camo',
+  'gingham',
+  'checkerboard',
+  'twill-crosshatch'
+];
+
+export const VALID_SCATTER_DISTRIBUTIONS = [
+  'random',
+  'grid',
+  'hex-grid'
 ];
 
 export const VALID_SCATTER_PROTOTYPES = [
@@ -192,7 +223,10 @@ export function validateArSceneInput(data) {
       ambientIntensity: typeof root.scene.ambientIntensity === 'number' ? root.scene.ambientIntensity : 1.4,
       fogColor: root.scene.fogColor || root.fogColor || '#000000',
       fogDensity: typeof root.scene.fogDensity === 'number' ? root.scene.fogDensity : 0.0,
-      cameraAutoRotate: Boolean(root.scene.cameraAutoRotate ?? root.cameraAutoRotate)
+      cameraAutoRotate: Boolean(root.scene.cameraAutoRotate ?? root.cameraAutoRotate),
+      envPreset: root.scene.envPreset || root.envPreset || 'none',
+      envIntensity: typeof root.scene.envIntensity === 'number' ? root.scene.envIntensity : (typeof root.scene.hdrIntensity === 'number' ? root.scene.hdrIntensity : 1.0),
+      exposure: typeof root.scene.exposure === 'number' ? root.scene.exposure : 1.1
     };
   }
 
@@ -219,20 +253,138 @@ export function validateArSceneInput(data) {
       }
 
       const shapeId = s.id || `geom_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
+
+      // Merge root-level shape attributes into params if placed directly on the shape
+      const shapeParams = {
+        ...(s.params && typeof s.params === 'object' ? s.params : {}),
+        preserveOrigin: Boolean(s.preserveOrigin ?? s.params?.preserveOrigin),
+        invertY: s.invertY !== undefined ? s.invertY : s.params?.invertY,
+        svgPath: s.svgPath || s.params?.svgPath || s.svg || s.params?.svg,
+        holes: s.holes || s.params?.holes || [],
+        ...(s.points ? { points: s.points } : {}),
+        ...(s.rawPoints ? { points: s.rawPoints } : {}),
+        ...(s.frontPoints ? { frontPoints: s.frontPoints } : {}),
+        ...(s.topSidePoints ? { topSidePoints: s.topSidePoints } : {}),
+        ...(s.depth !== undefined ? { depth: s.depth } : {}),
+        ...(s.radius !== undefined ? { radius: s.radius } : {}),
+        ...(s.radiusTop !== undefined ? { radiusTop: s.radiusTop } : {}),
+        ...(s.radiusBottom !== undefined ? { radiusBottom: s.radiusBottom } : {}),
+        ...(s.width !== undefined ? { width: s.width } : {}),
+        ...(s.height !== undefined ? { height: s.height } : {}),
+        ...(s.taper !== undefined ? { taper: s.taper } : {}),
+        ...(s.twist !== undefined ? { twist: s.twist } : {}),
+        ...(s.bevelEnabled !== undefined ? { bevelEnabled: s.bevelEnabled } : {}),
+        ...(s.bevelThickness !== undefined ? { bevelThickness: s.bevelThickness } : {}),
+        ...(s.bevelSize !== undefined ? { bevelSize: s.bevelSize } : {}),
+        ...(s.bevelOffset !== undefined ? { bevelOffset: s.bevelOffset } : {}),
+        ...(s.bevelSegments !== undefined ? { bevelSegments: s.bevelSegments } : {}),
+        ...(s.scaleFactor !== undefined ? { scaleFactor: s.scaleFactor } : {}),
+        curveSegments: typeof (s.curveSegments ?? s.params?.curveSegments) === 'number' ? (s.curveSegments ?? s.params?.curveSegments) : 24,
+
+        // Volumetric Inflation
+        depthFront: s.depthFront !== undefined ? Number(s.depthFront) : (s.params?.depthFront !== undefined ? Number(s.params.depthFront) : undefined),
+        depthBack: s.depthBack !== undefined ? Number(s.depthBack) : (s.params?.depthBack !== undefined ? Number(s.params.depthBack) : undefined),
+        curvatureProfile: s.curvatureProfile || s.params?.curvatureProfile || s.profile || s.params?.profile || 'elliptic',
+        symmetric: (s.symmetric ?? s.params?.symmetric) !== false,
+        smoothPasses: typeof (s.smoothPasses ?? s.params?.smoothPasses) === 'number' ? (s.smoothPasses ?? s.params?.smoothPasses) : 2,
+        resolution: typeof (s.resolution ?? s.params?.resolution) === 'number' ? (s.resolution ?? s.params?.resolution) : 24,
+        rimDepth: typeof (s.rimDepth ?? s.params?.rimDepth) === 'number' ? (s.rimDepth ?? s.params?.rimDepth) : 0,
+        connectEdges: (s.connectEdges ?? s.params?.connectEdges) !== false,
+
+        // Revolve (Lathe)
+        revolveAngle: typeof (s.revolveAngle ?? s.params?.revolveAngle) === 'number' ? (s.revolveAngle ?? s.params?.revolveAngle) : 360,
+        revolveAxis: s.revolveAxis || s.params?.revolveAxis || 'Y',
+        axisOffset: typeof (s.axisOffset ?? s.params?.axisOffset) === 'number' ? (s.axisOffset ?? s.params?.axisOffset) : 0,
+        revolveSegments: typeof (s.revolveSegments ?? s.params?.revolveSegments) === 'number' ? (s.revolveSegments ?? s.params?.revolveSegments) : 32,
+        capEnds: (s.capEnds ?? s.params?.capEnds) !== false,
+
+        // Sweep (Loft along Rail)
+        spineType: s.spineType || s.params?.spineType || 'arc',
+        spineLength: typeof (s.spineLength ?? s.params?.spineLength) === 'number' ? (s.spineLength ?? s.params?.spineLength) : 1.2,
+        spineCurvature: typeof (s.spineCurvature ?? s.params?.spineCurvature) === 'number' ? (s.spineCurvature ?? s.params?.spineCurvature) : 0.5,
+        spineTwist: typeof (s.spineTwist ?? s.params?.spineTwist) === 'number' ? (s.spineTwist ?? s.params?.spineTwist) : 0,
+        scaleStart: typeof (s.scaleStart ?? s.params?.scaleStart) === 'number' ? (s.scaleStart ?? s.params?.scaleStart) : 1.0,
+        scaleEnd: typeof (s.scaleEnd ?? s.params?.scaleEnd) === 'number' ? (s.scaleEnd ?? s.params?.scaleEnd) : 0.5,
+        scaleProfile: s.scaleProfile || s.params?.scaleProfile || 'linear',
+        spineSteps: typeof (s.spineSteps ?? s.params?.spineSteps) === 'number' ? (s.spineSteps ?? s.params?.spineSteps) : 36,
+
+        // Carve (Visual Hull)
+        carveView: s.carveView || s.params?.carveView || 'top',
+        carveResolution: typeof (s.carveResolution ?? s.params?.carveResolution) === 'number' ? (s.carveResolution ?? s.params?.carveResolution) : 32,
+        carveSmooth: typeof (s.carveSmooth ?? s.params?.carveSmooth) === 'number' ? (s.carveSmooth ?? s.params?.carveSmooth) : 2,
+        frontSvgPath: s.frontSvgPath || s.params?.frontSvgPath || s.frontSvg || s.params?.frontSvg,
+        topSvgPath: s.topSvgPath || s.params?.topSvgPath || s.topSvg || s.params?.topSvg || s.topSideSvgPath || s.params?.topSideSvgPath,
+
+        // Extrude & Deformation
+        shellEnabled: Boolean(s.shellEnabled ?? s.params?.shellEnabled),
+        shellThickness: typeof (s.shellThickness ?? s.params?.shellThickness) === 'number' ? (s.shellThickness ?? s.params?.shellThickness) : 0.04,
+        domeWarpEnabled: Boolean(s.domeWarpEnabled ?? s.params?.domeWarpEnabled),
+        domeCurvature: typeof (s.domeCurvature ?? s.params?.domeCurvature ?? s.domeWarpDepth ?? s.params?.domeWarpDepth) === 'number' ? (s.domeCurvature ?? s.params?.domeCurvature ?? s.domeWarpDepth ?? s.params?.domeWarpDepth) : 0.2,
+        domeFalloff: s.domeFalloff || s.params?.domeFalloff || 'smoothstep',
+
+        // Dual-Material Cap/Bevel Shading (Enamel Badges & Dual-Tone Logos)
+        bevelColor: s.bevelColor || s.params?.bevelColor,
+        bevelMetalness: typeof (s.bevelMetalness ?? s.params?.bevelMetalness) === 'number' ? (s.bevelMetalness ?? s.params?.bevelMetalness) : undefined,
+        bevelRoughness: typeof (s.bevelRoughness ?? s.params?.bevelRoughness) === 'number' ? (s.bevelRoughness ?? s.params?.bevelRoughness) : undefined,
+        curveSegments: typeof (s.curveSegments ?? s.params?.curveSegments) === 'number' ? (s.curveSegments ?? s.params?.curveSegments) : 24,
+
+        // Procedural Patterns
+        pattern: s.pattern || s.params?.pattern || 'none',
+        patternScale: typeof (s.patternScale ?? s.params?.patternScale) === 'number' ? (s.patternScale ?? s.params?.patternScale) : 8.0,
+        patternColor: s.patternColor || s.params?.patternColor || '#0f172a',
+        patternSecondaryColor: s.patternSecondaryColor || s.params?.patternSecondaryColor || '#b91c1c',
+        patternOpacity: typeof (s.patternOpacity ?? s.params?.patternOpacity) === 'number' ? (s.patternOpacity ?? s.params?.patternOpacity) : 0.65
+      };
+
+      // Sanitize vector contour points if points are used
+      if (['vectorExtrude', 'vectorInflate', 'vectorRevolve', 'vectorSweep', 'extrude'].includes(type) && !shapeParams.svgPath) {
+        if (shapeParams.points) {
+          shapeParams.points = normalizeVectorPointsList(shapeParams.points);
+        }
+        if (!shapeParams.points || shapeParams.points.length < (type === 'vectorRevolve' ? 2 : 3)) {
+          shapeParams.points = [
+            { x: 0, y: 110 },
+            { x: 75, y: 40 },
+            { x: 70, y: -70 },
+            { x: 0, y: -110 },
+            { x: -70, y: -70 },
+            { x: -75, y: 40 }
+          ];
+        }
+      }
+
+      if (type === 'vectorCarve') {
+        if (shapeParams.frontPoints) {
+          shapeParams.frontPoints = normalizeVectorPointsList(shapeParams.frontPoints);
+        }
+        if (shapeParams.topSidePoints) {
+          shapeParams.topSidePoints = normalizeVectorPointsList(shapeParams.topSidePoints);
+        }
+      }
+
       normalized.shapes.push({
         id: shapeId,
         name: s.name || `${type.charAt(0).toUpperCase() + type.slice(1)} ${idx + 1}`,
         type: VALID_PRIMITIVE_TYPES.includes(type) ? type : 'box',
-        params: s.params && typeof s.params === 'object' ? s.params : {},
+        preserveOrigin: shapeParams.preserveOrigin,
+        params: shapeParams,
         color: s.color || '#38bdf8',
         roughness: typeof s.roughness === 'number' ? s.roughness : 0.35,
         metalness: typeof s.metalness === 'number' ? s.metalness : 0.15,
         emissive: s.emissive || '#000000',
         emissiveIntensity: typeof s.emissiveIntensity === 'number' ? s.emissiveIntensity : 0,
+        bevelColor: shapeParams.bevelColor,
+        bevelMetalness: shapeParams.bevelMetalness,
+        bevelRoughness: shapeParams.bevelRoughness,
+        pattern: shapeParams.pattern,
+        patternScale: shapeParams.patternScale,
+        patternColor: shapeParams.patternColor,
+        patternSecondaryColor: shapeParams.patternSecondaryColor,
+        patternOpacity: shapeParams.patternOpacity,
         wireframe: Boolean(s.wireframe),
         flatShading: Boolean(s.flatShading),
         posX: typeof s.posX === 'number' ? s.posX : (typeof s.x === 'number' ? s.x : 0),
-        posY: typeof s.posY === 'number' ? s.posY : (typeof s.y === 'number' ? s.y : 0.35),
+        posY: typeof s.posY === 'number' ? s.posY : (typeof s.y === 'number' ? s.y : (shapeParams.preserveOrigin ? 0 : 0.35)),
         posZ: typeof s.posZ === 'number' ? s.posZ : (typeof s.z === 'number' ? s.z : 0),
         rotX: typeof s.rotX === 'number' ? s.rotX : 0,
         rotY: typeof s.rotY === 'number' ? s.rotY : 0,
@@ -267,6 +419,7 @@ export function validateArSceneInput(data) {
       visible: sl.visible !== false,
       target: sl.target || '#ar-model',
       prototype: VALID_SCATTER_PROTOTYPES.includes(proto) ? proto : 'leaf',
+      distribution: VALID_SCATTER_DISTRIBUTIONS.includes(sl.distribution) ? sl.distribution : 'random',
       count: Math.min(Math.max(typeof sl.count === 'number' ? Math.round(sl.count) : 200, 10), 3000),
       minScale: typeof sl.minScale === 'number' ? sl.minScale : 0.8,
       maxScale: typeof sl.maxScale === 'number' ? sl.maxScale : 1.2,
@@ -310,6 +463,11 @@ export function validateArSceneInput(data) {
         bevelEnabled: txt.bevelEnabled !== false,
         bevelThickness: typeof txt.bevelThickness === 'number' ? txt.bevelThickness : 0.015,
         bevelSize: typeof txt.bevelSize === 'number' ? txt.bevelSize : 0.01,
+        // Curved / Arched Typography
+        curveRadius: typeof txt.curveRadius === 'number' ? txt.curveRadius : undefined,
+        startAngle: typeof txt.startAngle === 'number' ? txt.startAngle : undefined,
+        endAngle: typeof txt.endAngle === 'number' ? txt.endAngle : undefined,
+        letterSpacing: typeof txt.letterSpacing === 'number' ? txt.letterSpacing : undefined,
         align: txt.align || 'center',
         color: txt.color || '#38bdf8',
         emissive: txt.emissive || '#0284c7',
@@ -550,7 +708,10 @@ export function exportCurrentSceneToArApi(state) {
         ambientIntensity: state.ambientIntensity ?? 1.4,
         fogColor: state.fogColor || '#000000',
         fogDensity: state.fogDensity ?? 0.0,
-        cameraAutoRotate: Boolean(state.cameraAutoRotate)
+        cameraAutoRotate: Boolean(state.cameraAutoRotate),
+        envPreset: state.envPreset || 'none',
+        envIntensity: state.envIntensity ?? 1.0,
+        exposure: state.exposure ?? 1.1
       },
       transform: {
         scale: state.modelScale ?? 0.4,
@@ -594,12 +755,21 @@ export function exportCurrentSceneToArApi(state) {
         id: g.id,
         name: g.name,
         type: g.type,
+        preserveOrigin: Boolean(g.preserveOrigin ?? g.params?.preserveOrigin),
         params: g.params || {},
         color: g.color || '#38bdf8',
         roughness: g.roughness ?? 0.35,
         metalness: g.metalness ?? 0.15,
         emissive: g.emissive || '#000000',
         emissiveIntensity: g.emissiveIntensity ?? 0,
+        bevelColor: g.bevelColor || g.params?.bevelColor,
+        bevelMetalness: g.bevelMetalness ?? g.params?.bevelMetalness,
+        bevelRoughness: g.bevelRoughness ?? g.params?.bevelRoughness,
+        pattern: g.pattern || g.params?.pattern || 'none',
+        patternScale: g.patternScale ?? g.params?.patternScale ?? 8.0,
+        patternColor: g.patternColor || g.params?.patternColor || '#0f172a',
+        patternSecondaryColor: g.patternSecondaryColor || g.params?.patternSecondaryColor,
+        patternOpacity: g.patternOpacity ?? g.params?.patternOpacity ?? 0.65,
         wireframe: Boolean(g.wireframe),
         flatShading: Boolean(g.flatShading),
         posX: g.posX ?? 0,
@@ -621,6 +791,7 @@ export function exportCurrentSceneToArApi(state) {
         visible: sl.visible !== false,
         target: sl.target || '#ar-model',
         prototype: sl.prototype || 'leaf',
+        distribution: sl.distribution || 'random',
         count: sl.count || 200,
         minScale: sl.minScale ?? 0.8,
         maxScale: sl.maxScale ?? 1.2,
@@ -649,6 +820,10 @@ export function exportCurrentSceneToArApi(state) {
         size: t.size ?? 0.35,
         depth: t.depth ?? 0.08,
         bevelEnabled: t.bevelEnabled !== false,
+        curveRadius: t.curveRadius,
+        startAngle: t.startAngle,
+        endAngle: t.endAngle,
+        letterSpacing: t.letterSpacing,
         color: t.color || '#38bdf8',
         emissive: t.emissive || '#0284c7',
         emissiveIntensity: t.emissiveIntensity ?? 0.4,
@@ -1101,6 +1276,428 @@ export const BUILTIN_API_PRESETS = [
           speed: 0.8,
           direction: 'float'
         }
+      }
+    }
+  },
+  {
+    id: 'unified_40_emblem',
+    name: '🛡️ Unified 40 Cross-Sword Emblem (v1.1 Advanced)',
+    description: 'Single-mesh solid vectorExtrude emblem with SVG bezier curves, interior cutouts (holes), sharp chamfer bevels, honeycomb pattern, and studio-chrome environment reflections.',
+    payload: {
+      ar_scene: {
+        metadata: {
+          name: 'Unified 40 Cross-Sword Emblem',
+          version: '1.1.0',
+          description: 'Single-piece emblem using vectorExtrude, svgPath, interior cutouts (holes), preserveOrigin: true, bevelSegments: 2, and studio-chrome reflection environment.'
+        },
+        scene: {
+          ambientColor: '#ffffff',
+          ambientIntensity: 1.4,
+          envPreset: 'studio-chrome',
+          envIntensity: 1.2,
+          exposure: 1.15
+        },
+        transform: {
+          scale: 0.5,
+          posX: 0,
+          posY: 0,
+          posZ: 0,
+          rotX: 90,
+          rotY: 0,
+          rotZ: 0
+        },
+        lighting: {
+          ambientColor: '#ffffff',
+          ambientIntensity: 1.2,
+          dir1Color: '#ffffff',
+          dir1Intensity: 2.8,
+          dir1Position: '2 4 3',
+          dir2Color: '#93c5fd',
+          dir2Intensity: 1.5,
+          dir2Position: '-2 1 -2',
+          rimColor: '#60a5fa',
+          rimIntensity: 1.2,
+          rimPosition: '0 3 -3'
+        },
+        shapes: [
+          {
+            id: 'emblem_40_unified',
+            name: 'Unified 40 Cross-Sword Emblem',
+            type: 'vectorExtrude',
+            preserveOrigin: true,
+            params: {
+              preserveOrigin: true,
+              svgPath: 'M -0.70 0.95 L -0.02 1.00 L 0.68 0.96 C 0.92 0.55 0.85 -0.35 0.18 -0.82 L -0.04 -0.92 L -0.15 -2.18 L -0.26 -0.05 L -0.81 -0.16 C -0.94 0.25 -0.88 0.68 -0.70 0.95 Z',
+              holes: [
+                [[-0.28, 0.82], [-0.28, 0.04], [-0.62, -0.02], [-0.52, 0.48]],
+                [[0.18, 0.68], [0.55, 0.52], [0.58, -0.15], [0.18, -0.52]]
+              ],
+              depth: 0.12,
+              bevelEnabled: true,
+              bevelThickness: 0.02,
+              bevelSize: 0.015,
+              bevelSegments: 2,
+              pattern: 'honeycomb',
+              patternScale: 12.0,
+              patternColor: '#1e293b',
+              patternOpacity: 0.5
+            },
+            color: '#ffffff',
+            metalness: 0.95,
+            roughness: 0.08,
+            posX: 0,
+            posY: 0,
+            posZ: 0
+          }
+        ]
+      }
+    }
+  },
+  {
+    id: 'revolved_greek_vase',
+    name: '🏺 Classical Amphora Vase (vectorRevolve)',
+    description: 'Rotational 360-degree lathe solid around Y-axis using smooth Bezier contour points, polished terracotta finish, and studio lighting.',
+    payload: {
+      ar_scene: {
+        metadata: {
+          name: 'Classical Greek Amphora Vase',
+          version: '1.1.0',
+          description: 'Recreated with vectorRevolve around Y-axis using a smooth 2D silhouette contour.'
+        },
+        scene: {
+          ambientColor: '#ffffff',
+          ambientIntensity: 1.2,
+          envPreset: 'studio-chrome',
+          envIntensity: 0.8
+        },
+        transform: {
+          scale: 0.5,
+          posX: 0,
+          posY: 0,
+          posZ: 0,
+          rotX: 90,
+          rotY: 0,
+          rotZ: 0
+        },
+        lighting: {
+          ambientColor: '#ffffff',
+          ambientIntensity: 1.2,
+          dir1Color: '#fff7ed',
+          dir1Intensity: 2.5,
+          dir1Position: '2 4 3',
+          dir2Color: '#93c5fd',
+          dir2Intensity: 1.0,
+          dir2Position: '-2 1 -2'
+        },
+        shapes: [
+          {
+            id: 'greek_amphora_body',
+            name: 'Amphora Vase Body',
+            type: 'vectorRevolve',
+            params: {
+              revolveAxis: 'Y',
+              revolveAngle: 360,
+              revolveSegments: 48,
+              axisOffset: 0.0,
+              capEnds: true,
+              preserveOrigin: true,
+              points: [
+                { x: 0.08, y: -0.65 },
+                { x: 0.32, y: -0.58, handleIn: { x: -0.08, y: -0.02 }, handleOut: { x: 0, y: 0.15 } },
+                { x: 0.12, y: -0.38, handleIn: { x: 0.08, y: -0.08 }, handleOut: { x: 0, y: 0.18 } },
+                { x: 0.45, y: -0.05, handleIn: { x: -0.1, y: -0.22 }, handleOut: { x: 0, y: 0.22 } },
+                { x: 0.15, y: 0.35, handleIn: { x: 0.12, y: -0.1 }, handleOut: { x: 0, y: 0.12 } },
+                { x: 0.22, y: 0.65, handleIn: { x: -0.05, y: -0.1 }, handleOut: null },
+                { x: 0.18, y: 0.65 },
+                { x: 0.10, y: 0.38, handleIn: { x: 0, y: 0.1 }, handleOut: { x: 0.08, y: -0.08 } },
+                { x: 0.38, y: -0.05, handleIn: { x: 0, y: 0.2 }, handleOut: { x: -0.08, y: -0.18 } },
+                { x: 0.08, y: -0.35, handleIn: { x: 0, y: 0.1 }, handleOut: { x: 0.05, y: -0.08 } },
+                { x: 0.08, y: -0.60 }
+              ]
+            },
+            color: '#c2410c',
+            roughness: 0.25,
+            metalness: 0.1,
+            posX: 0,
+            posY: 0,
+            posZ: 0
+          }
+        ]
+      }
+    }
+  },
+  {
+    id: 'inflated_plush_badge',
+    name: '🎈 Volumetric Inflated Heart Badge (vectorInflate)',
+    description: 'Dual-sided volumetric organic puff with pillowed curvature profile, Laplacian mesh smoothing, and satin sheen.',
+    payload: {
+      ar_scene: {
+        metadata: {
+          name: 'Volumetric Inflated Heart Badge',
+          version: '1.1.0',
+          description: 'Recreated using vectorInflate with pillowed curvature profile and Laplacian mesh smoothing.'
+        },
+        scene: {
+          ambientColor: '#ffffff',
+          ambientIntensity: 1.4,
+          envPreset: 'sunset',
+          envIntensity: 1.2
+        },
+        transform: {
+          scale: 0.5,
+          posX: 0,
+          posY: 0,
+          posZ: 0,
+          rotX: 90,
+          rotY: 0,
+          rotZ: 0
+        },
+        lighting: {
+          ambientColor: '#ffffff',
+          ambientIntensity: 1.3,
+          dir1Color: '#fef08a',
+          dir1Intensity: 2.8,
+          dir1Position: '2 3 2'
+        },
+        shapes: [
+          {
+            id: 'heart_inflated_cushion',
+            name: 'Inflated Heart Cushion',
+            type: 'vectorInflate',
+            params: {
+              preserveOrigin: true,
+              depth: 0.35,
+              curvatureProfile: 'pillowed',
+              symmetric: true,
+              smoothPasses: 3,
+              resolution: 32,
+              rimDepth: 0.04,
+              connectEdges: true,
+              points: [
+                { x: 0.0, y: 0.35 },
+                { x: 0.32, y: 0.65, handleIn: { x: -0.15, y: -0.05 }, handleOut: { x: 0.15, y: 0.05 } },
+                { x: 0.65, y: 0.38, handleIn: { x: 0.05, y: 0.15 }, handleOut: { x: -0.05, y: -0.15 } },
+                { x: 0.48, y: -0.15, handleIn: { x: 0.12, y: 0.15 }, handleOut: { x: -0.12, y: -0.15 } },
+                { x: 0.0, y: -0.65, handleIn: { x: 0.15, y: 0.18 }, handleOut: { x: -0.15, y: 0.18 } },
+                { x: -0.48, y: -0.15, handleIn: { x: 0.12, y: -0.15 }, handleOut: { x: -0.12, y: 0.15 } },
+                { x: -0.65, y: 0.38, handleIn: { x: 0.05, y: -0.15 }, handleOut: { x: -0.05, y: 0.15 } },
+                { x: -0.32, y: 0.65, handleIn: { x: -0.15, y: 0.05 }, handleOut: { x: 0.15, y: -0.05 } }
+              ]
+            },
+            color: '#f43f5e',
+            roughness: 0.35,
+            metalness: 0.15,
+            posX: 0,
+            posY: 0,
+            posZ: 0
+          }
+        ]
+      }
+    }
+  },
+  {
+    id: 'swept_nautilus_horn',
+    name: '🎷 Coiled Spiral Horn (vectorSweep)',
+    description: 'Bishop parallel transport loft along a 3D helical spiral spine with continuous rotational twist and tapering cross-section.',
+    payload: {
+      ar_scene: {
+        metadata: {
+          name: 'Coiled Spiral Horn',
+          version: '1.1.0',
+          description: 'Recreated using vectorSweep along a 3D helix guide spine with taper and twist.'
+        },
+        scene: {
+          ambientColor: '#ffffff',
+          ambientIntensity: 1.3,
+          envPreset: 'studio-chrome',
+          envIntensity: 1.5
+        },
+        transform: {
+          scale: 0.45,
+          posX: 0,
+          posY: 0,
+          posZ: 0,
+          rotX: 90,
+          rotY: 0,
+          rotZ: 0
+        },
+        lighting: {
+          ambientColor: '#ffffff',
+          ambientIntensity: 1.2,
+          dir1Color: '#ffffff',
+          dir1Intensity: 3.0,
+          dir1Position: '2 4 3'
+        },
+        shapes: [
+          {
+            id: 'spiral_horn_mesh',
+            name: 'Spiral Nautilus Horn',
+            type: 'vectorSweep',
+            params: {
+              preserveOrigin: true,
+              spineType: 'helix',
+              spineLength: 2.2,
+              spineCurvature: 0.8,
+              spineTwist: 540,
+              spineSteps: 48,
+              scaleStart: 1.2,
+              scaleEnd: 0.15,
+              scaleProfile: 'ease_out',
+              capEnds: true,
+              points: [
+                { x: 0.0, y: 0.22 },
+                { x: 0.22, y: 0.0 },
+                { x: 0.0, y: -0.22 },
+                { x: -0.22, y: 0.0 }
+              ]
+            },
+            color: '#fbbf24',
+            roughness: 0.12,
+            metalness: 0.92,
+            posX: 0,
+            posY: 0,
+            posZ: 0
+          }
+        ]
+      }
+    }
+  },
+  {
+    id: 'v12_designer_badge',
+    name: '🎖️ Designer Enamel Seal (v1.2 Feature Showcase)',
+    description: 'Showcases Dual-Material Cap/Bevel Shading (chrome-rimmed black enamel), Arched 3D Typography (curveRadius + angular span), and Gingham fabric plaque with patternSecondaryColor.',
+    payload: {
+      ar_scene: {
+        metadata: {
+          name: 'Designer Enamel Seal & Arched Typography',
+          version: '1.2.0',
+          description: 'Demonstrating dual-material bevel shading, arched text typography, and gingham woven pattern.'
+        },
+        scene: {
+          ambientColor: '#ffffff',
+          ambientIntensity: 1.4,
+          envPreset: 'studio-chrome',
+          envIntensity: 1.5,
+          exposure: 1.15
+        },
+        transform: {
+          scale: 0.5,
+          posX: 0,
+          posY: 0,
+          posZ: 0,
+          rotX: 90,
+          rotY: 0,
+          rotZ: 0
+        },
+        lighting: {
+          ambientColor: '#ffffff',
+          ambientIntensity: 1.2,
+          dir1Color: '#ffffff',
+          dir1Intensity: 2.8,
+          dir1Position: '2 4 3',
+          dir2Color: '#93c5fd',
+          dir2Intensity: 1.2,
+          dir2Position: '-2 1 -2',
+          rimColor: '#cbd5e1',
+          rimIntensity: 1.5,
+          rimPosition: '0 3 -3'
+        },
+        shapes: [
+          {
+            id: 'gingham_backing_plaque',
+            name: 'Gingham Fabric Plaque',
+            type: 'cylinder',
+            params: {
+              radiusTop: 0.95,
+              radiusBottom: 0.95,
+              height: 0.04,
+              radialSegments: 48,
+              pattern: 'gingham',
+              patternScale: 18.0,
+              patternColor: '#f43f5e',
+              patternSecondaryColor: '#9f1239',
+              patternOpacity: 0.85
+            },
+            color: '#ffffff',
+            roughness: 0.85,
+            metalness: 0.05,
+            posX: 0,
+            posY: -0.04,
+            posZ: 0
+          },
+          {
+            id: 'custom_enamel_bezel',
+            name: 'Custom Enamel Bezel',
+            type: 'vectorExtrude',
+            preserveOrigin: true,
+            params: {
+              preserveOrigin: true,
+              svgPath: 'M 0 0.85 C 0.47 0.85 0.85 0.47 0.85 0 C 0.85 -0.47 0.47 -0.85 0 -0.85 C -0.47 -0.85 -0.85 -0.47 -0.85 0 C -0.85 0.47 -0.47 0.85 0 0.85 Z',
+              holes: [
+                [[0, 0.42], [0.42, 0], [0, -0.42], [-0.42, 0]]
+              ],
+              depth: 0.08,
+              curveSegments: 48,
+              bevelEnabled: true,
+              bevelThickness: 0.015,
+              bevelSize: 0.012,
+              bevelSegments: 3,
+              bevelColor: '#e2e8f0',
+              bevelMetalness: 0.95,
+              bevelRoughness: 0.1
+            },
+            color: '#09090b',
+            metalness: 0.35,
+            roughness: 0.12,
+            bevelColor: '#e2e8f0',
+            bevelMetalness: 0.95,
+            bevelRoughness: 0.1,
+            posX: 0,
+            posY: 0,
+            posZ: 0
+          }
+        ],
+        text3d: [
+          {
+            id: 'arched_header_text',
+            name: 'Arched Header',
+            text: 'WHERE EVERYDAY IS',
+            fontFamily: 'helvetiker_bold',
+            size: 0.095,
+            depth: 0.03,
+            curveRadius: 0.62,
+            startAngle: -55,
+            endAngle: 55,
+            bevelEnabled: true,
+            bevelThickness: 0.008,
+            bevelSize: 0.006,
+            color: '#18181b',
+            metalness: 0.9,
+            roughness: 0.12,
+            posX: 0,
+            posY: 0.06,
+            posZ: 0
+          },
+          {
+            id: 'center_badge_title',
+            name: 'Center Badge Title',
+            text: 'STAR weAR',
+            fontFamily: 'optimer_bold',
+            size: 0.09,
+            depth: 0.035,
+            bevelEnabled: true,
+            bevelThickness: 0.008,
+            bevelSize: 0.006,
+            color: '#f59e0b',
+            metalness: 0.95,
+            roughness: 0.15,
+            emissive: '#78350f',
+            emissiveIntensity: 0.3,
+            posX: 0,
+            posY: -0.02,
+            posZ: 0
+          }
+        ]
       }
     }
   }

@@ -20,6 +20,26 @@ const QUICK_TEXT_PRESETS = [
     roughness: 0.2
   },
   {
+    name: 'Arched Header Banner',
+    text: 'WHERE EVERYDAY IS',
+    fontFamily: 'helvetiker_bold',
+    size: 0.135,
+    depth: 0.04,
+    curveRadius: 1.08,
+    startAngle: -42,
+    endAngle: 38,
+    letterSpacing: 0.01,
+    bevelEnabled: true,
+    bevelThickness: 0.01,
+    bevelSize: 0.008,
+    materialPreset: 'obsidian_chrome',
+    color: '#18181b',
+    emissive: '#000000',
+    emissiveIntensity: 0.0,
+    metalness: 0.85,
+    roughness: 0.15
+  },
+  {
     name: '24K Polished Gold',
     text: 'STAR weAR',
     fontFamily: 'optimer_bold',
@@ -98,6 +118,10 @@ export default function Add3DTextModal({
   const [bevelThickness, setBevelThickness] = useState(0.015);
   const [bevelSize, setBevelSize] = useState(0.01);
   const [align, setAlign] = useState('center');
+  const [curveRadius, setCurveRadius] = useState(0);
+  const [startAngle, setStartAngle] = useState(-45);
+  const [endAngle, setEndAngle] = useState(45);
+  const [letterSpacing, setLetterSpacing] = useState(0);
 
   const [selectedColor, setSelectedColor] = useState('#38bdf8');
   const [emissiveColor, setEmissiveColor] = useState('#0284c7');
@@ -116,6 +140,11 @@ export default function Add3DTextModal({
     if (preset.bevelEnabled !== undefined) setBevelEnabled(preset.bevelEnabled);
     if (preset.bevelThickness !== undefined) setBevelThickness(preset.bevelThickness);
     if (preset.bevelSize !== undefined) setBevelSize(preset.bevelSize);
+    if (preset.curveRadius !== undefined) setCurveRadius(preset.curveRadius);
+    else setCurveRadius(0);
+    if (preset.startAngle !== undefined) setStartAngle(preset.startAngle);
+    if (preset.endAngle !== undefined) setEndAngle(preset.endAngle);
+    if (preset.letterSpacing !== undefined) setLetterSpacing(preset.letterSpacing);
     if (preset.color) setSelectedColor(preset.color);
     if (preset.emissive) setEmissiveColor(preset.emissive);
     if (preset.emissiveIntensity !== undefined) setEmissiveIntensity(preset.emissiveIntensity);
@@ -134,6 +163,10 @@ export default function Add3DTextModal({
       bevelEnabled,
       bevelThickness: Number(bevelThickness),
       bevelSize: Number(bevelSize),
+      curveRadius: Number(curveRadius) !== 0 ? Number(curveRadius) : undefined,
+      startAngle: Number(curveRadius) !== 0 ? Number(startAngle) : undefined,
+      endAngle: Number(curveRadius) !== 0 ? Number(endAngle) : undefined,
+      letterSpacing: Number(curveRadius) !== 0 ? Number(letterSpacing) : undefined,
       align,
       color: selectedColor,
       emissive: emissiveColor,
@@ -355,6 +388,71 @@ export default function Add3DTextModal({
                       value={bevelSize}
                       onChange={(e) => setBevelSize(parseFloat(e.target.value))}
                       className="w-full accent-pink-500 cursor-pointer"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Arched / Curved Path Typography */}
+            <div className="p-3 rounded-xl bg-neutral-950/60 border border-neutral-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-xs text-amber-400">curved_arrow</span>
+                  <span>Arched Circular Typography</span>
+                </span>
+                {curveRadius !== 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setCurveRadius(0)}
+                    className="text-[10px] text-amber-400 hover:text-amber-300 font-mono"
+                  >
+                    Reset (Straight)
+                  </button>
+                )}
+              </div>
+              <div>
+                <div className="flex justify-between text-[11px] mb-1">
+                  <span className="text-neutral-400">Curve Radius ({curveRadius === 0 ? 'Straight' : `${curveRadius > 0 ? '+' : ''}${curveRadius.toFixed(2)}m`})</span>
+                  <span className="font-mono text-amber-400 text-[10px]">
+                    {curveRadius > 0 ? 'Header Arch (Rainbow)' : curveRadius < 0 ? 'Footer Arch (Smile)' : 'Off'}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="-2.5"
+                  max="2.5"
+                  step="0.05"
+                  value={curveRadius}
+                  onChange={(e) => setCurveRadius(parseFloat(e.target.value))}
+                  className="w-full accent-amber-500 cursor-pointer"
+                />
+              </div>
+
+              {curveRadius !== 0 && (
+                <div className="grid grid-cols-2 gap-3 pt-1 border-t border-neutral-800/80">
+                  <div>
+                    <span className="text-[10px] text-neutral-400 block mb-0.5">Start Angle ({startAngle}°)</span>
+                    <input
+                      type="range"
+                      min="-180"
+                      max="180"
+                      step="1"
+                      value={startAngle}
+                      onChange={(e) => setStartAngle(parseInt(e.target.value, 10))}
+                      className="w-full accent-amber-500 cursor-pointer"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-neutral-400 block mb-0.5">End Angle ({endAngle}°)</span>
+                    <input
+                      type="range"
+                      min="-180"
+                      max="180"
+                      step="1"
+                      value={endAngle}
+                      onChange={(e) => setEndAngle(parseInt(e.target.value, 10))}
+                      className="w-full accent-amber-500 cursor-pointer"
                     />
                   </div>
                 </div>

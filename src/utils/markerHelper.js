@@ -1,6 +1,7 @@
 import { decode } from '@msgpack/msgpack';
-import { storage } from '../firebase';
-import { ref, getDownloadURL, getBytes, list } from 'firebase/storage';
+import { storage, functions } from '../firebase';
+import { ref, getDownloadURL, getBytes, getBlob, uploadBytes, deleteObject, list } from 'firebase/storage';
+import { httpsCallable } from 'firebase/functions';
 
 // In-memory cache for extracted marker textures to prevent redundant network fetches
 const markerCache = new Map();
@@ -461,3 +462,156 @@ export const getImageDimensions = (url) => {
     img.src = url;
   });
 };
+
+/**
+ * Converts a marker image source (staged File, data URL, Storage path, or remote URL)
+ * into a clean File object suitable for Firebase Storage upload and MindAR compilation.
+ */
+export async function resolveMarkerToFile(stagedFile, markerImageUrl, markerInfo = null, fallbackBaseName = 'marker_target') {
+  if (stagedFile instanceof File) {
+    return stagedFile;
+  }
+  if (stagedFile instanceof Blob) {
+    const ext = (stagedFile.type || '').includes('jpeg') ? 'jpg' : (stagedFile.type || '').includes('webp') ? 'webp' : 'png';
+    return new File([stagedFile], `${fallbackBaseName}.${ext}`, { type: stagedFile.type || 'image/png' });
+  }
+
+  if (markerInfo?.storagePath && typeof markerInfo.storagePath === 'string' && !markerInfo.storagePath.startsWith('http')) {
+    try {
+      const blob = await getBlob(ref(storage, markerInfo.storagePath));
+      const ext = (blob.type || '').includes('jpeg') ? 'jpg' : (blob.type || '').includes('webp') ? 'webp' : 'png';
+      return new File([blob], `${fallbackBaseName}.${ext}`, { type: blob.type || 'image/png' });
+    } catch (storageBlobErr) {
+      console.warn('[MarkerHelper] Storage getBlob fallback notice:', storageBlobErr?.message);
+    }
+  }
+
+  const candidateUrl = markerImageUrl || createDefaultMarkerDataUrl('STAR weAR')?.dataUrl || '';
+  if (!candidateUrl) {
+    throw new Error('No marker image selected. Please upload or choose a marker image in Tracking.');
+  }
+
+  try {
+    const res = await fetch(candidateUrl);
+    if (res.ok) {
+      const blob = await res.blob();
+      if (blob && blob.size > 0) {
+        const ext = (blob.type || '').includes('jpeg') ? 'jpg' : (blob.type || '').includes('webp') ? 'webp' : 'png';
+        const rawName = markerInfo?.name
+          ? markerInfo.name.replace(/\.[^.]+$/, '')
+          : fallbackBaseName;
+        return new File([blob], `${rawName}.${ext}`, { type: blob.type || 'image/png' });
+      }
+    }
+  } catch (fetchErr) {
+    console.warn('[MarkerHelper] Direct fetch of marker URL failed, trying canvas rasterization:', fetchErr?.message);
+  }
+
+  return await new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || img.width || 512;
+        canvas.height = img.naturalHeight || img.height || 512;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            reject(new Error('Could not encode marker image to PNG blob.'));
+            return;
+          }
+          resolve(new File([blob], `${fallbackBaseName}.png`, { type: 'image/png' }));
+        }, 'image/png');
+      } catch (canvasErr) {
+        reject(new Error(`Unable to read marker image pixels (${canvasErr.message}). Please upload the marker image file directly.`));
+      }
+    };
+    img.onerror = () => reject(new Error('Failed to load marker image for MindAR compilation. Please upload a PNG/JPG marker image.'));
+    img.src = candidateUrl;
+  });
+}
+
+/**
+ * Runs the MindAR marker generator workflow:
+ * 1. Uploads marker image to `temp_anchors/{assetId}_temp_{filename}`
+ * 2. Invokes the `compileGarmentTarget` Cloud Function (headless MindAR compiler -> `anchors/{merchantId}/{assetId}.mind`)
+ * 3. Falls back automatically to local WebGL MindAR `Compiler` if the server function is unreachable or times out,
+ *    uploading the resulting `.mind` binary to the exact same `anchors/{merchantId}/{assetId}.mind` bucket path.
+ */
+export async function compileMarkerWithMindAR({
+  markerFile,
+  merchantId = 'default',
+  assetId,
+  onProgress
+}) {
+  const cleanMerchantId = (merchantId || 'default').trim().replace(/[^a-zA-Z0-9_-]/g, '_') || 'default';
+  const cleanAssetId = assetId.trim();
+  const cleanFileName = (markerFile.name || 'marker.png').replace(/[^a-zA-Z0-9._-]/g, '_');
+
+  if (onProgress) onProgress('Uploading marker image to temp_anchors bucket...');
+  const tempImagePath = `temp_anchors/${cleanAssetId}_temp_${cleanFileName}`;
+  const tempImageRef = ref(storage, tempImagePath);
+  await uploadBytes(tempImageRef, markerFile, {
+    contentType: markerFile.type || 'image/png'
+  });
+
+  try {
+    if (onProgress) onProgress('Running MindAR Target Compiler (generating .mind tracking features)...');
+    const compileTarget = httpsCallable(functions, 'compileGarmentTarget');
+    const result = await compileTarget({
+      merchantId: cleanMerchantId,
+      productLine: cleanAssetId,
+      tempImageStoragePath: tempImagePath
+    });
+
+    if (result?.data?.mindFilePath) {
+      return {
+        mindFilePath: result.data.mindFilePath,
+        compilerSource: 'cloud_function'
+      };
+    }
+    throw new Error('Compiler returned empty mindFilePath');
+  } catch (cloudErr) {
+    console.warn('[MarkerHelper] Server compileGarmentTarget failed, running browser MindAR Compiler fallback:', cloudErr);
+    if (onProgress) onProgress('Compiling MindAR tracking target locally via WebGL...');
+
+    const { Compiler } = await import('mind-ar/dist/mindar-image.prod.js');
+    const objectUrl = URL.createObjectURL(markerFile);
+    try {
+      const img = await new Promise((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error('Failed to decode marker image in browser MindAR compiler'));
+        el.src = objectUrl;
+      });
+
+      const compiler = new Compiler();
+      await compiler.compileImageTargets([img], (pct) => {
+        if (onProgress && Number.isFinite(pct)) {
+          onProgress(`Compiling MindAR target features (${Math.round(pct)}%)...`);
+        }
+      });
+      const exportedBuffer = await compiler.exportData();
+      const mindBlob = new Blob([exportedBuffer], { type: 'application/octet-stream' });
+
+      const destinationPath = `anchors/${cleanMerchantId}/${cleanAssetId}.mind`;
+      if (onProgress) onProgress(`Uploading compiled .mind file to ${destinationPath}...`);
+      const mindStorageRef = ref(storage, destinationPath);
+      await uploadBytes(mindStorageRef, mindBlob, {
+        contentType: 'application/octet-stream',
+        cacheControl: 'public, max-age=31536000'
+      });
+
+      await deleteObject(tempImageRef).catch(() => null);
+
+      return {
+        mindFilePath: destinationPath,
+        compilerSource: 'browser_webgl'
+      };
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+}

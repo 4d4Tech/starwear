@@ -967,7 +967,11 @@ export default function FaceSketchExtrudeStudio({
     if (extrudeMeshRef.current) {
       extrudeMeshRef.current.geometry.dispose();
       extrudeMeshRef.current.geometry = geom;
-      extrudeMeshRef.current.material.dispose();
+      if (Array.isArray(extrudeMeshRef.current.material)) {
+        extrudeMeshRef.current.material.forEach((m) => m?.dispose?.());
+      } else if (extrudeMeshRef.current.material?.dispose) {
+        extrudeMeshRef.current.material.dispose();
+      }
       extrudeMeshRef.current.material = mat;
       extrudeMeshRef.current.position.copy(centerPos);
       extrudeMeshRef.current.quaternion.copy(quat);

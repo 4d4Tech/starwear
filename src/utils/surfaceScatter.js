@@ -493,6 +493,7 @@ export function generateSurfaceScatterMesh(options = {}) {
   const {
     target, // THREE.Object3D, Mesh, or array
     prototype = 'leaf', // string key, THREE.Geometry, or THREE.Mesh
+    distribution = 'random', // 'random' | 'grid' | 'hex-grid'
     count = DEFAULT_SCATTER_COUNT,
     minScale = 0.8,
     maxScale = 1.2,
@@ -585,9 +586,81 @@ export function generateSurfaceScatterMesh(options = {}) {
 
   const rotRad = THREE_LIB.MathUtils.degToRad(Number(randomRotation) || 0);
 
+  // Calculate Grid / Hex-Grid surface sample points if requested
+  const isGrid = distribution === 'grid' || distribution === 'hex-grid';
+  const gridPoints = [];
+
+  if (isGrid && sampler.meshes && sampler.meshes.length > 0) {
+    try {
+      const box = new THREE_LIB.Box3();
+      sampler.meshes.forEach((m) => box.expandByObject(m));
+      const bSize = box.getSize(new THREE_LIB.Vector3());
+      const bMin = box.min;
+      const bMax = box.max;
+
+      let uAxis = 'x', vAxis = 'y', wAxis = 'z';
+      if (bSize.x <= bSize.y && bSize.x <= bSize.z) {
+        uAxis = 'y'; vAxis = 'z'; wAxis = 'x';
+      } else if (bSize.y <= bSize.x && bSize.y <= bSize.z) {
+        uAxis = 'x'; vAxis = 'z'; wAxis = 'y';
+      }
+
+      const uLen = Math.max(0.005, bSize[uAxis]);
+      const vLen = Math.max(0.005, bSize[vAxis]);
+      const aspect = uLen / vLen;
+      const cols = Math.max(2, Math.ceil(Math.sqrt(safeCount * aspect)));
+      const rows = Math.max(2, Math.ceil(safeCount / cols));
+
+      const stepU = uLen / (cols + 1);
+      const stepV = vLen / (rows + 1);
+
+      const raycaster = new THREE_LIB.Raycaster();
+      const rayOrigin = new THREE_LIB.Vector3();
+      const rayDir = new THREE_LIB.Vector3();
+      if (wAxis === 'z') rayDir.set(0, 0, -1);
+      else if (wAxis === 'y') rayDir.set(0, -1, 0);
+      else rayDir.set(-1, 0, 0);
+
+      const isHex = distribution === 'hex-grid';
+
+      for (let r = 0; r < rows && gridPoints.length < safeCount; r++) {
+        const rowV = bMin[vAxis] + (r + 1) * stepV;
+        const uShift = isHex && (r % 2 === 1) ? stepU * 0.5 : 0;
+        for (let c = 0; c < cols && gridPoints.length < safeCount; c++) {
+          const colU = bMin[uAxis] + (c + 1) * stepU + uShift;
+          if (colU > bMax[uAxis]) continue;
+
+          rayOrigin[uAxis] = colU;
+          rayOrigin[vAxis] = rowV;
+          rayOrigin[wAxis] = bMax[wAxis] + 0.1;
+
+          raycaster.set(rayOrigin, rayDir);
+          const hits = raycaster.intersectObjects(sampler.meshes, false);
+          if (hits.length > 0) {
+            const hit = hits[0];
+            const norm = hit.face
+              ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize()
+              : new THREE_LIB.Vector3(0, 1, 0);
+            gridPoints.push({
+              pos: hit.point.clone(),
+              norm
+            });
+          }
+        }
+      }
+    } catch (gridErr) {
+      console.warn('[surfaceScatter] Grid distribution calculation warning:', gridErr);
+    }
+  }
+
   for (let i = 0; i < safeCount; i++) {
     // 1. Sample position and normal in world space
-    sampler.sample(tempPos, tempNorm);
+    if (gridPoints[i]) {
+      tempPos.copy(gridPoints[i].pos);
+      tempNorm.copy(gridPoints[i].norm);
+    } else {
+      sampler.sample(tempPos, tempNorm);
+    }
 
     // 2. Transform into anchor's local space if anchor was provided
     if (anchorObject) {
@@ -668,6 +741,7 @@ export function registerSurfaceScatterComponent() {
       enabled: { type: 'boolean', default: true },
       target: { type: 'string', default: '#ar-model' }, // Selector for host mesh entity
       prototype: { type: 'string', default: 'leaf' }, // Prototype preset or selector
+      distribution: { type: 'string', default: 'random' }, // 'random' | 'grid' | 'hex-grid'
       count: { type: 'number', default: DEFAULT_SCATTER_COUNT },
       minScale: { type: 'number', default: 0.8 },
       maxScale: { type: 'number', default: 1.2 },
@@ -703,6 +777,19 @@ export function registerSurfaceScatterComponent() {
       this.onTargetModelLoaded = () => {
         this.scheduleGenerate();
       };
+
+      this.onTargetFound = () => {
+        this.scheduleGenerate();
+      };
+
+      const sceneEl = this.el.sceneEl;
+      if (sceneEl) {
+        sceneEl.addEventListener('targetFound', this.onTargetFound);
+        sceneEl.addEventListener('ar-geometries-updated', this.onTargetModelLoaded);
+      }
+      if (this.el.parentEl) {
+        this.el.parentEl.addEventListener('targetFound', this.onTargetFound);
+      }
     },
 
     update: function (oldData) {
@@ -760,19 +847,39 @@ export function registerSurfaceScatterComponent() {
         return el.getObject3D('mesh') || el.object3D || null;
       }
 
-      // 2. Check scene graph by name, uuid, or userData IDs
+      // If target was #ar-model but not found, also check preview / alternative model anchors
+      if (this.data.target === '#ar-model') {
+        const altEl = document.getElementById('preview-model') || document.querySelector('[id*="model"]');
+        if (altEl) {
+          return altEl.getObject3D('mesh') || altEl.object3D || null;
+        }
+      }
+
+      // 2. Check scene graph by name, uuid, or userData IDs (case-insensitive & whitespace trimmed)
       const sceneEl = this.el.sceneEl;
-      if (sceneEl?.object3D) {
+      const searchRoot = sceneEl?.object3D || this.el.parentEl?.object3D;
+      if (searchRoot) {
         let found = null;
-        sceneEl.object3D.traverse((child) => {
-          if (!found && (
-            child.name === this.data.target ||
-            child.uuid === this.data.target ||
-            child.userData?.geometryId === this.data.target ||
-            child.userData?.customModelId === this.data.target ||
-            child.userData?.id === this.data.target
-          )) {
-            found = child;
+        const targetClean = String(this.data.target).replace(/^[#.]/, '').trim().toLowerCase();
+        searchRoot.traverse((child) => {
+          if (!found) {
+            const cName = (child.name || '').trim().toLowerCase();
+            const gId = (child.userData?.geometryId || '').trim().toLowerCase();
+            const uName = (child.userData?.name || '').trim().toLowerCase();
+            const uId = (child.userData?.id || '').trim().toLowerCase();
+            if (
+              cName === targetClean ||
+              gId === targetClean ||
+              uName === targetClean ||
+              uId === targetClean ||
+              child.name === this.data.target ||
+              child.uuid === this.data.target ||
+              child.userData?.geometryId === this.data.target ||
+              child.userData?.customModelId === this.data.target ||
+              child.userData?.id === this.data.target
+            ) {
+              found = child;
+            }
           }
         });
         if (found) return found;
@@ -807,9 +914,19 @@ export function registerSurfaceScatterComponent() {
       const targetObj = this.resolveTargetObject();
 
       if (!targetObj) {
-        // Target mesh might still be downloading/loading
+        // Target mesh might still be downloading, compiling, or generating in the scene.
+        // Retry with gentle backoff up to 10 attempts
+        if ((this._retryCount || 0) < 10) {
+          this._retryCount = (this._retryCount || 0) + 1;
+          setTimeout(() => {
+            if (this.el && this.data?.enabled) {
+              this.generateScatter();
+            }
+          }, 120 * this._retryCount);
+        }
         return;
       }
+      this._retryCount = 0;
 
       // Cleanup existing mesh before generating new one
       this.cleanupMesh();
@@ -819,6 +936,7 @@ export function registerSurfaceScatterComponent() {
       this.instancedMesh = generateSurfaceScatterMesh({
         target: targetObj,
         prototype: proto,
+        distribution: this.data.distribution || 'random',
         count: this.data.count,
         minScale: this.data.minScale,
         maxScale: this.data.maxScale,

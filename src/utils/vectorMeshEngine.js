@@ -18,6 +18,9 @@ import {
   distanceToPolygonBoundary,
   triangulate2D,
   createInflatedGeometryFromPoints,
+  normalizeVectorPoint,
+  normalizeVectorPointsList,
+  hasNaNPositions,
   INFLATION_PROFILES,
   INFLATION_PROFILE_MAP
 } from './inflationEngine.js';
@@ -212,14 +215,37 @@ export const CARVE_PRESETS = [
   }
 ];
 
-// Helper: Earcut Triangulation on Flat 2D Points Array
-function triangulatePolygonEarcut(pts) {
+// Helper: Earcut Triangulation on Flat 2D Points Array with CCW Orientation Guarantee
+function triangulatePolygonEarcut(pts, THREE_LIB = THREE) {
   if (!Array.isArray(pts) || pts.length < 3) return [];
-  // Use Bowyer-Watson Delaunay on boundary
-  return triangulate2D(pts).filter((t) => {
-    const cx = (pts[t.a].x + pts[t.b].x + pts[t.c].x) / 3;
-    const cy = (pts[t.a].y + pts[t.b].y + pts[t.c].y) / 3;
-    return isPointInsidePolygon(cx, cy, pts);
+  let tris = [];
+
+  // Primary: Use ShapeUtils.triangulateShape (Earcut) for precise concave polygon triangulation
+  try {
+    if (THREE_LIB?.ShapeUtils && typeof THREE_LIB.ShapeUtils.triangulateShape === 'function') {
+      const v2Array = pts.map((p) => new THREE_LIB.Vector2(p.x, p.y));
+      const raw = THREE_LIB.ShapeUtils.triangulateShape(v2Array, []);
+      if (Array.isArray(raw) && raw.length > 0) {
+        tris = raw.map((t) => ({ a: t[0], b: t[1], c: t[2] }));
+      }
+    }
+  } catch (err) {
+    console.warn('[vectorMeshEngine] ShapeUtils.triangulateShape fallback:', err);
+  }
+
+  // Fallback: Bowyer-Watson Delaunay on boundary with interior centroid filtering
+  if (tris.length === 0) {
+    tris = triangulate2D(pts).filter((t) => {
+      const cx = (pts[t.a].x + pts[t.b].x + pts[t.c].x) / 3;
+      const cy = (pts[t.a].y + pts[t.b].y + pts[t.c].y) / 3;
+      return isPointInsidePolygon(cx, cy, pts);
+    });
+  }
+
+  // Enforce consistent Counter-Clockwise (CCW) winding (cross product > 0)
+  return tris.map((t) => {
+    const cross = (pts[t.b].x - pts[t.a].x) * (pts[t.c].y - pts[t.a].y) - (pts[t.b].y - pts[t.a].y) * (pts[t.c].x - pts[t.a].x);
+    return cross > 0 ? { a: t.a, b: t.b, c: t.c } : { a: t.a, b: t.c, c: t.b };
   });
 }
 
@@ -231,7 +257,7 @@ function triangulatePolygonEarcut(pts) {
  * Creates 3D Lathe Geometry by revolving a 2D vector curve around an axis (Y or X).
  */
 export function createRevolvedGeometryFromPoints(rawPoints, options = {}, THREE_LIB = THREE) {
-  const scaleFactor = Number(options.scaleFactor ?? 0.005);
+  const scaleFactor = options.scaleFactor !== undefined && options.scaleFactor !== null ? Number(options.scaleFactor) : null;
   const curveSegments = Math.max(12, Number(options.curveSegments ?? 32));
   const revolveAngleDeg = Math.min(360, Math.max(10, Number(options.revolveAngle ?? 360)));
   const revolveAngleRad = (revolveAngleDeg * Math.PI) / 180;
@@ -239,8 +265,10 @@ export function createRevolvedGeometryFromPoints(rawPoints, options = {}, THREE_
   const revolveAxis = (options.revolveAxis || 'Y').toUpperCase(); // 'Y' | 'X'
   const axisOffset = Number(options.axisOffset ?? 0);
   const capEnds = options.capEnds !== false;
+  const preserveOrigin = Boolean(options.preserveOrigin ?? options.keepOrigin);
+  const invertY = options.invertY !== undefined ? Boolean(options.invertY) : !preserveOrigin;
 
-  const boundaryPts = samplePolygonFromVectorPoints(rawPoints, scaleFactor, curveSegments, THREE_LIB);
+  const boundaryPts = samplePolygonFromVectorPoints(rawPoints, scaleFactor, curveSegments, THREE_LIB, invertY);
   if (boundaryPts.length < 2) {
     return new THREE_LIB.CylinderGeometry(0.5, 0.5, 1, 32);
   }
@@ -288,7 +316,7 @@ export function createRevolvedGeometryFromPoints(rawPoints, options = {}, THREE_
     }
   }
 
-  // Connect adjacent rings with quad faces (2 triangles per quad)
+  // Connect adjacent rings with quad faces (2 triangles per quad, oriented outward away from axis)
   for (let s = 0; s < S; s++) {
     for (let i = 0; i < N - 1; i++) {
       const row1 = s * N;
@@ -299,15 +327,15 @@ export function createRevolvedGeometryFromPoints(rawPoints, options = {}, THREE_
       const p10 = row2 + i;
       const p11 = row2 + i + 1;
 
-      // Orient outward
-      indexArray.push(p00, p10, p01);
-      indexArray.push(p01, p10, p11);
+      // Orient outward: tangent_profile x tangent_revolution = outward normal
+      indexArray.push(p00, p01, p10);
+      indexArray.push(p01, p11, p10);
     }
   }
 
   // If partial revolution and capEnds is enabled: cap the opening and closing slices
   if (!isFull360 && capEnds) {
-    const tris = triangulatePolygonEarcut(boundaryPts);
+    const tris = triangulatePolygonEarcut(boundaryPts, THREE_LIB);
     if (tris.length > 0) {
       // Start Cap (s = 0)
       const startBase = 0;
@@ -337,7 +365,9 @@ export function createRevolvedGeometryFromPoints(rawPoints, options = {}, THREE_
   }
 
   merged.computeVertexNormals();
-  merged.center();
+  if (!preserveOrigin && typeof merged.center === 'function') {
+    merged.center();
+  }
   return merged;
 }
 
@@ -360,7 +390,7 @@ function evaluateSpinePath(type, length, curvature, twistDeg, steps) {
         const r = length / Math.PI;
         x = -r * Math.cos(theta) + r;
         y = r * Math.sin(theta) * (curvature ? curvature * 2.5 : 1.0);
-        z = (t - 0.5) * 0.15;
+        z = 0; // Keep planar arc guide curve true in XY plane
         break;
       }
       case 's_curve': {
@@ -402,7 +432,7 @@ function evaluateSpinePath(type, length, curvature, twistDeg, steps) {
  * Sweeps a 2D closed vector cross-section along a 3D guide rail using Bishop Parallel Transport frames
  */
 export function createSweptGeometryFromPath(rawPoints, options = {}, THREE_LIB = THREE) {
-  const scaleFactor = Number(options.scaleFactor ?? 0.005);
+  const scaleFactor = options.scaleFactor !== undefined && options.scaleFactor !== null ? Number(options.scaleFactor) : null;
   const curveSegments = Math.max(12, Number(options.curveSegments ?? 24));
   const spineType = options.spineType || 'arc';
   const spineLength = Math.max(0.2, Number(options.spineLength ?? 1.2));
@@ -413,8 +443,10 @@ export function createSweptGeometryFromPath(rawPoints, options = {}, THREE_LIB =
   const scaleEnd = Math.max(0.05, Number(options.scaleEnd ?? 0.5));
   const scaleProfile = options.scaleProfile || 'linear';
   const capEnds = options.capEnds !== false;
+  const preserveOrigin = Boolean(options.preserveOrigin ?? options.keepOrigin);
+  const invertY = options.invertY !== undefined ? Boolean(options.invertY) : !preserveOrigin;
 
-  const profilePts = samplePolygonFromVectorPoints(rawPoints, scaleFactor, curveSegments, THREE_LIB);
+  const profilePts = samplePolygonFromVectorPoints(rawPoints, scaleFactor, curveSegments, THREE_LIB, invertY);
   if (profilePts.length < 3) {
     return new THREE_LIB.TorusGeometry(0.5, 0.15, 16, 32);
   }
@@ -507,7 +539,7 @@ export function createSweptGeometryFromPath(rawPoints, options = {}, THREE_LIB =
     }
   }
 
-  // Connect adjacent rings with quads
+  // Connect adjacent rings with quads (oriented outward away from spine rail)
   for (let s = 0; s < numSteps - 1; s++) {
     const row1 = s * M;
     const row2 = (s + 1) * M;
@@ -518,14 +550,15 @@ export function createSweptGeometryFromPath(rawPoints, options = {}, THREE_LIB =
       const p10 = row2 + j;
       const p11 = row2 + nextJ;
 
-      indexArray.push(p00, p10, p01);
-      indexArray.push(p01, p10, p11);
+      // Orient outward: tangent_profile x tangent_spine = outward normal
+      indexArray.push(p00, p01, p10);
+      indexArray.push(p01, p11, p10);
     }
   }
 
   // Add Start and End Caps for watertight manifold geometry
   if (capEnds) {
-    const tris = triangulatePolygonEarcut(profilePts);
+    const tris = triangulatePolygonEarcut(profilePts, THREE_LIB);
     if (tris.length > 0) {
       // Start Cap (s = 0) facing -T[0]
       const startBase = 0;
@@ -547,7 +580,9 @@ export function createSweptGeometryFromPath(rawPoints, options = {}, THREE_LIB =
 
   const merged = mergeVertices(geom, 1e-4);
   merged.computeVertexNormals();
-  merged.center();
+  if (!preserveOrigin && typeof merged.center === 'function') {
+    merged.center();
+  }
   return merged;
 }
 
@@ -583,14 +618,16 @@ function getPolygonBounds(pts) {
  * Front view curve (XY) + Top view curve (XZ) or Side view curve (YZ)
  */
 export function createOrthogonalCarveGeometry(frontPoints, topSidePoints, options = {}, THREE_LIB = THREE) {
-  const scaleFactor = Number(options.scaleFactor ?? 0.005);
+  const scaleFactor = options.scaleFactor !== undefined && options.scaleFactor !== null ? Number(options.scaleFactor) : null;
   const curveSegments = Math.max(12, Number(options.curveSegments ?? 24));
   const carveResolution = Math.max(20, Math.min(48, Number(options.carveResolution ?? 32)));
   const carveView = options.carveView || 'top'; // 'top' (XZ) or 'side' (YZ)
   const carveSmooth = Math.max(0, Math.min(4, Number(options.carveSmooth ?? 2)));
+  const preserveOrigin = Boolean(options.preserveOrigin ?? options.keepOrigin);
+  const invertY = options.invertY !== undefined ? Boolean(options.invertY) : !preserveOrigin;
 
-  const polyFront = samplePolygonFromVectorPoints(frontPoints, scaleFactor, curveSegments, THREE_LIB);
-  const polyTop = samplePolygonFromVectorPoints(topSidePoints, scaleFactor, curveSegments, THREE_LIB);
+  const polyFront = samplePolygonFromVectorPoints(frontPoints, scaleFactor, curveSegments, THREE_LIB, invertY);
+  const polyTop = samplePolygonFromVectorPoints(topSidePoints, scaleFactor, curveSegments, THREE_LIB, invertY);
 
   if (polyFront.length < 3 || polyTop.length < 3) {
     return new THREE_LIB.BoxGeometry(1, 0.6, 1);
@@ -599,14 +636,27 @@ export function createOrthogonalCarveGeometry(frontPoints, topSidePoints, option
   const bFront = getPolygonBounds(polyFront);
   const bTop = getPolygonBounds(polyTop);
 
-  // Unified 3D Bounding Box with padding
+  // Unified 3D Bounding Box with padding based on projection plane
   const padding = 0.05;
-  const minX = Math.min(bFront.minX, bTop.minX) - padding;
-  const maxX = Math.max(bFront.maxX, bTop.maxX) + padding;
-  const minY = bFront.minY - padding;
-  const maxY = bFront.maxY + padding;
-  const minZ = bTop.minY - padding;
-  const maxZ = bTop.maxY + padding;
+  let minX, maxX, minY, maxY, minZ, maxZ;
+
+  if (carveView === 'side') {
+    // Side view: polyTop X maps to 3D Z (length), polyTop Y maps to 3D Y (height)
+    minX = bFront.minX - padding;
+    maxX = bFront.maxX + padding;
+    minY = Math.min(bFront.minY, bTop.minY) - padding;
+    maxY = Math.max(bFront.maxY, bTop.maxY) + padding;
+    minZ = bTop.minX - padding;
+    maxZ = bTop.maxX + padding;
+  } else {
+    // Top view: polyTop X maps to 3D X (width), polyTop Y maps to 3D Z (depth)
+    minX = Math.min(bFront.minX, bTop.minX) - padding;
+    maxX = Math.max(bFront.maxX, bTop.maxX) + padding;
+    minY = bFront.minY - padding;
+    maxY = bFront.maxY + padding;
+    minZ = bTop.minY - padding;
+    maxZ = bTop.maxY + padding;
+  }
 
   const N = carveResolution;
   const scalarField = new Float32Array(N * N * N);
@@ -703,7 +753,9 @@ export function createOrthogonalCarveGeometry(frontPoints, topSidePoints, option
   }
 
   merged.computeVertexNormals();
-  merged.center();
+  if (!preserveOrigin && typeof merged.center === 'function') {
+    merged.center();
+  }
   return merged;
 }
 
@@ -715,63 +767,175 @@ export function createOrthogonalCarveGeometry(frontPoints, topSidePoints, option
  * Creates advanced beveled extrusion with directional taper and hollow solidify/shell modifier
  */
 export function createAdvancedExtrudeGeometry(rawPoints, options = {}, THREE_LIB = THREE) {
-  const scaleFactor = Number(options.scaleFactor ?? 0.005);
-  const depth = Math.max(0.02, Number(options.depth ?? 0.25));
-  const taper = Math.max(0.1, Number(options.taper ?? 1.0)); // scaling factor at back face
-  const twistDeg = Number(options.twist ?? 0); // twist along extrusion
-  const curveSegments = Math.max(8, Number(options.curveSegments ?? 24));
-  const shellEnabled = Boolean(options.shellEnabled);
-  const shellThickness = Math.max(0.01, Number(options.shellThickness ?? 0.04));
-  const bevelEnabled = options.bevelEnabled !== false && !shellEnabled;
-  const bevelThickness = Number(options.bevelThickness ?? 0.03);
-  const bevelSize = Number(options.bevelSize ?? 0.02);
-  const bevelSegments = Math.max(1, Number(options.bevelSegments ?? 3));
+  const normPoints = normalizeVectorPointsList(rawPoints);
+  const depth = Math.max(0.01, Number(options.depth ?? 0.25) || 0.25);
 
-  // If no taper, no twist, and no shell, use standard Three.js ExtrudeGeometry with bevel
+  if (normPoints.length < 3) {
+    return new THREE_LIB.BoxGeometry(1, 1, depth);
+  }
+
+  // Automatic coordinate scale detection
+  const maxCoord = Math.max(...normPoints.map((p) => Math.max(Math.abs(p.x), Math.abs(p.y))));
+  let scale = 0.005;
+  if (options.scaleFactor !== undefined && options.scaleFactor !== null && !isNaN(Number(options.scaleFactor))) {
+    scale = Number(options.scaleFactor);
+  } else if (maxCoord <= 10) {
+    // Already in metric units (meters)
+    scale = 1.0;
+  }
+
+  const preserveOrigin = Boolean(options.preserveOrigin ?? options.keepOrigin);
+  const invertY = options.invertY !== undefined ? Boolean(options.invertY) : !preserveOrigin;
+  const ySign = invertY ? -1 : 1;
+
+  const taper = Math.max(0.1, Number(options.taper ?? 1.0) || 1.0);
+  const twistDeg = Number(options.twist ?? 0) || 0;
+  const curveSegments = Math.max(6, Number(options.curveSegments ?? 24) || 24);
+  const shellEnabled = Boolean(options.shellEnabled);
+  const shellThickness = Math.max(0.01, Number(options.shellThickness ?? 0.04) || 0.04);
+
+  // Compute scaled 2D bounding box
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  normPoints.forEach((p) => {
+    const sx = p.x * scale;
+    const sy = p.y * ySign * scale;
+    if (sx < minX) minX = sx;
+    if (sx > maxX) maxX = sx;
+    if (sy < minY) minY = sy;
+    if (sy > maxY) maxY = sy;
+  });
+  const width = Math.max(0.002, maxX - minX);
+  const height = Math.max(0.002, maxY - minY);
+  const minDim = Math.min(width, height);
+
+  // Safely clamp bevel to prevent self-intersection NaNs
+  const reqBevelEnabled = options.bevelEnabled !== false && !shellEnabled;
+  let bevelThickness = Number(options.bevelThickness ?? 0.03);
+  let bevelSize = Number(options.bevelSize ?? 0.02);
+  const bevelOffset = Number(options.bevelOffset ?? 0) || 0;
+  const bevelSegments = Math.max(1, Math.min(8, Number(options.bevelSegments ?? 3) || 3));
+
+  if (isNaN(bevelThickness)) bevelThickness = 0.015;
+  if (isNaN(bevelSize)) bevelSize = 0.01;
+
+  if (bevelSize > minDim * 0.25) {
+    bevelSize = Math.max(0, minDim * 0.25);
+  }
+  if (bevelThickness > depth * 0.5) {
+    bevelThickness = depth * 0.5;
+  }
+  const bevelEnabled = reqBevelEnabled && bevelSize >= 0.002;
+
+  // Standard Three.js ExtrudeGeometry when no taper/twist/shell
   if (taper === 1.0 && twistDeg === 0 && !shellEnabled) {
     const shape = new THREE_LIB.Shape();
-    const scale = scaleFactor;
-    const p0 = rawPoints[0];
-    shape.moveTo(p0.x * scale, -p0.y * scale);
+    const p0 = normPoints[0];
+    shape.moveTo(p0.x * scale, p0.y * ySign * scale);
 
-    for (let i = 0; i < rawPoints.length; i++) {
-      const curr = rawPoints[i];
-      const next = rawPoints[(i + 1) % rawPoints.length];
+    for (let i = 0; i < normPoints.length; i++) {
+      const curr = normPoints[i];
+      const next = normPoints[(i + 1) % normPoints.length];
       const cp1 = curr.handleOut
-        ? { x: (curr.x + curr.handleOut.x) * scale, y: -(curr.y + curr.handleOut.y) * scale }
+        ? { x: (curr.x + curr.handleOut.x) * scale, y: (curr.y + curr.handleOut.y) * ySign * scale }
         : null;
       const cp2 = next.handleIn
-        ? { x: (next.x + next.handleIn.x) * scale, y: -(next.y + next.handleIn.y) * scale }
+        ? { x: (next.x + next.handleIn.x) * scale, y: (next.y + next.handleIn.y) * ySign * scale }
         : null;
 
       if (cp1 || cp2) {
-        const c1 = cp1 || { x: curr.x * scale, y: -curr.y * scale };
-        const c2 = cp2 || { x: next.x * scale, y: -next.y * scale };
-        shape.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, next.x * scale, -next.y * scale);
+        const c1 = cp1 || { x: curr.x * scale, y: curr.y * ySign * scale };
+        const c2 = cp2 || { x: next.x * scale, y: next.y * ySign * scale };
+        shape.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, next.x * scale, next.y * ySign * scale);
       } else {
-        shape.lineTo(next.x * scale, -next.y * scale);
+        shape.lineTo(next.x * scale, next.y * ySign * scale);
       }
     }
     shape.closePath();
 
-    const geom = new THREE_LIB.ExtrudeGeometry(shape, {
-      depth,
-      bevelEnabled,
-      bevelThickness,
-      bevelSize,
-      bevelSegments,
-      curveSegments,
-      steps: 1
-    });
-    geom.center();
+    // Process interior cutout holes (params.holes)
+    const holes = options.holes || options.cutouts || [];
+    if (Array.isArray(holes) && holes.length > 0) {
+      holes.forEach((holePts) => {
+        if (!Array.isArray(holePts) || holePts.length < 3) return;
+        const normHole = normalizeVectorPointsList(holePts);
+        if (normHole.length < 3) return;
+        const holePath = new THREE_LIB.Path();
+        const hp0 = normHole[0];
+        holePath.moveTo(hp0.x * scale, hp0.y * ySign * scale);
+        for (let j = 0; j < normHole.length; j++) {
+          const hCurr = normHole[j];
+          const hNext = normHole[(j + 1) % normHole.length];
+          const hCp1 = hCurr.handleOut
+            ? { x: (hCurr.x + hCurr.handleOut.x) * scale, y: (hCurr.y + hCurr.handleOut.y) * ySign * scale }
+            : null;
+          const hCp2 = hNext.handleIn
+            ? { x: (hNext.x + hNext.handleIn.x) * scale, y: (hNext.y + hNext.handleIn.y) * ySign * scale }
+            : null;
+
+          if (hCp1 || hCp2) {
+            const hc1 = hCp1 || { x: hCurr.x * scale, y: hCurr.y * ySign * scale };
+            const hc2 = hCp2 || { x: hNext.x * scale, y: hNext.y * ySign * scale };
+            holePath.bezierCurveTo(hc1.x, hc1.y, hc2.x, hc2.y, hNext.x * scale, hNext.y * ySign * scale);
+          } else {
+            holePath.lineTo(hNext.x * scale, hNext.y * ySign * scale);
+          }
+        }
+        holePath.closePath();
+        shape.holes.push(holePath);
+      });
+    }
+
+    let geom = null;
+    try {
+      geom = new THREE_LIB.ExtrudeGeometry(shape, {
+        depth,
+        bevelEnabled,
+        bevelThickness,
+        bevelSize,
+        bevelOffset,
+        bevelSegments,
+        curveSegments,
+        steps: 1
+      });
+      if (hasNaNPositions(geom)) {
+        if (geom) geom.dispose();
+        geom = new THREE_LIB.ExtrudeGeometry(shape, {
+          depth,
+          bevelEnabled: false,
+          curveSegments,
+          steps: 1
+        });
+      }
+    } catch (err) {
+      console.warn('[vectorMeshEngine] ExtrudeGeometry creation warning:', err);
+    }
+
+    if (!geom || hasNaNPositions(geom)) {
+      if (geom) geom.dispose();
+      geom = new THREE_LIB.BoxGeometry(width, height, depth);
+    }
+
+    if (!preserveOrigin && typeof geom.center === 'function') {
+      geom.center();
+    }
     geom.computeVertexNormals();
     return geom;
   }
 
-  // Sample 2D boundary contour
-  const boundaryPts = samplePolygonFromVectorPoints(rawPoints, scaleFactor, curveSegments, THREE_LIB);
+  // Sample 2D boundary contour for taper/twist/shell
+  const rawBoundaryPts = samplePolygonFromVectorPoints(normPoints, scale, curveSegments, THREE_LIB, invertY);
+  // Remove duplicate/coincident points to prevent 0-length normal vectors (NaN)
+  const boundaryPts = [];
+  for (let i = 0; i < rawBoundaryPts.length; i++) {
+    const pt = rawBoundaryPts[i];
+    const prev = boundaryPts[boundaryPts.length - 1];
+    if (!prev || Math.hypot(pt.x - prev.x, pt.y - prev.y) > 1e-5) {
+      boundaryPts.push(pt);
+    }
+  }
+
   if (boundaryPts.length < 3) {
-    return new THREE_LIB.BoxGeometry(1, 1, depth);
+    return new THREE_LIB.BoxGeometry(width, height, depth);
   }
 
   const M = boundaryPts.length;
@@ -788,20 +952,23 @@ export function createAdvancedExtrudeGeometry(rawPoints, options = {}, THREE_LIB
       const curr = boundaryPts[i];
       const next = boundaryPts[(i + 1) % M];
 
-      const d1 = new THREE.Vector2(curr.x - prev.x, curr.y - prev.y).normalize();
-      const d2 = new THREE.Vector2(next.x - curr.x, next.y - curr.y).normalize();
+      const d1 = new THREE.Vector2(curr.x - prev.x, curr.y - prev.y);
+      if (d1.lengthSq() > 1e-8) d1.normalize(); else d1.set(1, 0);
+      const d2 = new THREE.Vector2(next.x - curr.x, next.y - curr.y);
+      if (d2.lengthSq() > 1e-8) d2.normalize(); else d2.set(1, 0);
+
       const n1 = new THREE.Vector2(-d1.y, d1.x);
       const n2 = new THREE.Vector2(-d2.y, d2.x);
-      const normal = new THREE.Vector2().addVectors(n1, n2).normalize();
+      const normal = new THREE.Vector2().addVectors(n1, n2);
+      if (normal.lengthSq() > 1e-8) normal.normalize(); else normal.set(0, 1);
 
+      // normal points inward for CCW contour; add normal * shellThickness to inset interior
       innerPts.push({
-        x: curr.x - normal.x * shellThickness,
-        y: curr.y - normal.y * shellThickness
+        x: curr.x + normal.x * shellThickness,
+        y: curr.y + normal.y * shellThickness
       });
     }
 
-    // Outer Front [0 ... M-1], Outer Back [M ... 2M-1]
-    // Inner Front [2M ... 3M-1], Inner Back [3M ... 4M-1]
     const cosT = Math.cos(twistRad);
     const sinT = Math.sin(twistRad);
 
@@ -825,33 +992,33 @@ export function createAdvancedExtrudeGeometry(rawPoints, options = {}, THREE_LIB
       posArray.push(bx * cosT - by * sinT, bx * sinT + by * cosT, -depth * 0.5);
     }
 
-    // Connect Outer Walls
+    // Connect Outer Walls (oriented outward away from volume)
     for (let i = 0; i < M; i++) {
       const next = (i + 1) % M;
-      indexArray.push(i, next, M + i);
-      indexArray.push(next, M + next, M + i);
+      indexArray.push(i, M + i, next);
+      indexArray.push(next, M + i, M + next);
     }
 
-    // Connect Inner Walls (inverted orientation)
+    // Connect Inner Walls (oriented inward facing the cavity)
     const oIn = 2 * M;
     for (let i = 0; i < M; i++) {
       const next = (i + 1) % M;
-      indexArray.push(oIn + i, oIn + M + i, oIn + next);
-      indexArray.push(oIn + next, oIn + M + i, oIn + M + next);
+      indexArray.push(oIn + i, oIn + next, oIn + M + i);
+      indexArray.push(oIn + next, oIn + M + next, oIn + M + i);
     }
 
-    // Connect Front Rim Wall (between Outer Front and Inner Front)
+    // Connect Front Rim Wall (oriented +Z outward)
     for (let i = 0; i < M; i++) {
       const next = (i + 1) % M;
-      indexArray.push(i, oIn + i, next);
-      indexArray.push(next, oIn + i, oIn + next);
+      indexArray.push(i, next, oIn + i);
+      indexArray.push(next, oIn + next, oIn + i);
     }
 
-    // Connect Back Rim Wall (between Outer Back and Inner Back)
+    // Connect Back Rim Wall (oriented -Z outward)
     for (let i = 0; i < M; i++) {
       const next = (i + 1) % M;
-      indexArray.push(M + i, M + next, oIn + M + i);
-      indexArray.push(M + next, oIn + M + next, oIn + M + i);
+      indexArray.push(M + i, oIn + M + i, M + next);
+      indexArray.push(M + next, oIn + M + i, oIn + M + next);
     }
   } else {
     // Solid Extrusion with Taper and Twist
@@ -868,20 +1035,20 @@ export function createAdvancedExtrudeGeometry(rawPoints, options = {}, THREE_LIB
       posArray.push(bx * cosT - by * sinT, bx * sinT + by * cosT, -depth * 0.5);
     }
 
-    // Side Walls connecting Front and Back
+    // Side Walls connecting Front and Back (oriented outward away from shape)
     for (let i = 0; i < M; i++) {
       const next = (i + 1) % M;
-      indexArray.push(i, next, M + i);
-      indexArray.push(next, M + next, M + i);
+      indexArray.push(i, M + i, next);
+      indexArray.push(next, M + i, M + next);
     }
 
-    // Front Cap (Z = depth / 2)
-    const tris = triangulatePolygonEarcut(boundaryPts);
+    // Front Cap (Z = depth / 2, CCW facing +Z outward)
+    const tris = triangulatePolygonEarcut(boundaryPts, THREE_LIB);
     for (const t of tris) {
       indexArray.push(t.a, t.b, t.c);
     }
 
-    // Back Cap (Z = -depth / 2)
+    // Back Cap (Z = -depth / 2, reversed facing -Z outward)
     for (const t of tris) {
       indexArray.push(M + t.a, M + t.c, M + t.b);
     }
@@ -891,8 +1058,21 @@ export function createAdvancedExtrudeGeometry(rawPoints, options = {}, THREE_LIB
   geom.setAttribute('position', new THREE_LIB.Float32BufferAttribute(posArray, 3));
   geom.setIndex(indexArray);
 
-  const merged = mergeVertices(geom, 1e-4);
+  let merged = geom;
+  try {
+    merged = mergeVertices(geom, 1e-4);
+  } catch (err) {
+    console.warn('[vectorMeshEngine] mergeVertices fallback:', err);
+  }
+
+  if (hasNaNPositions(merged)) {
+    merged.dispose();
+    return new THREE_LIB.BoxGeometry(width, height, depth);
+  }
+
   merged.computeVertexNormals();
-  merged.center();
+  if (!preserveOrigin && typeof merged.center === 'function') {
+    merged.center();
+  }
   return merged;
 }

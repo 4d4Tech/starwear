@@ -29,7 +29,20 @@ if (typeof window !== 'undefined' && window.AFRAME?.THREE?.Object3D?.prototype) 
 }
 import { httpsCallable } from 'firebase/functions';
 import { logEvent } from 'firebase/analytics';
-import { isYouTubeUrl, isYouTubeShortUrl, extractYouTubeId, computeGeometrySurfaceFrame, purgeAllSceneVideoLayers, PORTAL_PRESETS, PARTICLE_PRESETS } from '../utils/aframe-components';
+import {
+  isYouTubeUrl,
+  isYouTubeShortUrl,
+  extractYouTubeId,
+  computeGeometrySurfaceFrame,
+  purgeAllSceneVideoLayers,
+  resolveSceneVideoTargets,
+  isProceduralNonGltfMesh,
+  getVideoTargetMaterialSlots,
+  backupMaterialPreVideoState,
+  restoreMeshPreVideoMaterial,
+  PORTAL_PRESETS,
+  PARTICLE_PRESETS
+} from '../utils/aframe-components';
 import AddGeometryModal from '../components/AddGeometryModal';
 import AddModelModal from '../components/AddModelModal';
 import VectorPenModal from '../components/VectorPenModal';
@@ -37,10 +50,17 @@ import Add3DTextModal from '../components/Add3DTextModal';
 import ArSceneApiModal from '../components/ArSceneApiModal';
 import ARLightDiagnosticsDrawer from '../components/ARLightDiagnosticsDrawer';
 import FaceSketchExtrudeStudio from '../components/FaceSketchExtrudeStudio';
+import SaveAsInventoryModal, { MarkerLibrarySelector } from '../components/SaveAsInventoryModal';
 import { exportCurrentSceneToArApi } from '../utils/arSceneApi';
 import { AVAILABLE_FONTS, TEXT_MATERIAL_PRESETS } from '../utils/text3DHelper';
 import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES, createPrimitiveMesh, INFLATION_PROFILES, sanitizeHierarchyForGLTFExport } from '../utils/geometryHelper';
-import { loadMarkerForBatch, createDefaultMarkerDataUrl, getImageDimensions } from '../utils/markerHelper';
+import {
+  loadMarkerForBatch,
+  createDefaultMarkerDataUrl,
+  getImageDimensions,
+  resolveMarkerToFile,
+  compileMarkerWithMindAR
+} from '../utils/markerHelper';
 import {
   captureSceneCanvasThumbnail,
   captureModelThumbnailBlob,
@@ -81,6 +101,18 @@ const SHAPE_TEXTURE_SAMPLES = [
     name: 'Hazard',
     repeat: 3,
     url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60"><rect width="60" height="60" fill="%23eab308"/><path d="M0 60 L60 0 L30 0 L0 30 Z M30 60 L60 30 L60 60 Z" fill="%2318181b"/></svg>'
+  },
+  {
+    id: 'gingham_rose',
+    name: 'Gingham',
+    repeat: 3,
+    url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" fill="%23ffffff"/><rect x="32" y="0" width="32" height="32" fill="%23f43f5e" opacity="0.65"/><rect x="0" y="32" width="32" height="32" fill="%23f43f5e" opacity="0.65"/><rect x="32" y="32" width="32" height="32" fill="%239f1239" opacity="0.95"/></svg>'
+  },
+  {
+    id: 'checkerboard_classic',
+    name: 'Checker',
+    repeat: 2,
+    url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" fill="%23ffffff"/><rect x="0" y="0" width="32" height="32" fill="%2318181b"/><rect x="32" y="32" width="32" height="32" fill="%2318181b"/></svg>'
   }
 ];
 
@@ -736,6 +768,10 @@ const ARTest = () => {
   const sceneGroupsRef = useRef(sceneGroups);
   useEffect(() => {
     sceneGroupsRef.current = sceneGroups;
+    if (typeof window !== 'undefined') {
+      window.__starwearSceneGroups = sceneGroups;
+      window.dispatchEvent(new CustomEvent('starwear-scene-objects-updated'));
+    }
   }, [sceneGroups]);
 
   const selectedObjectsRef = useRef(selectedObjects);
@@ -883,6 +919,9 @@ const ARTest = () => {
   // Environment / Effects
   const [fogColor, setFogColor] = useState('#000000');
   const [fogDensity, setFogDensity] = useState(0.0);
+  const [envPreset, setEnvPreset] = useState('none');
+  const [envIntensity, setEnvIntensity] = useState(1.0);
+  const [exposure, setExposure] = useState(1.1);
 
   // UI Elements
   const [showBuyButton, setShowBuyButton] = useState(true);
@@ -995,6 +1034,26 @@ const ARTest = () => {
   const [markerLockAspect, setMarkerLockAspect] = useState(true);
   const markerFileInputRef = useRef(null);
   const stagedMarkerFileRef = useRef(null);
+
+  // "Save As" (Add Scene & Marker to Admin Inventory) Modal & Split-Button Menu States
+  const [isSaveAsModalOpen, setIsSaveAsModalOpen] = useState(false);
+  const [saveMenuOpen, setSaveMenuOpen] = useState(false);
+  const saveMenuRef = useRef(null);
+  const [showTrackingMarkerLibrary, setShowTrackingMarkerLibrary] = useState(false);
+  const [saveAsProgressStep, setSaveAsProgressStep] = useState(0);
+  const [saveAsProgressMsg, setSaveAsProgressMsg] = useState('');
+  const [lastCreatedInventoryId, setLastCreatedInventoryId] = useState('');
+
+  useEffect(() => {
+    if (!saveMenuOpen) return undefined;
+    const handleOutsideClick = (evt) => {
+      if (saveMenuRef.current && !saveMenuRef.current.contains(evt.target)) {
+        setSaveMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [saveMenuOpen]);
 
   // Initialize procedural default marker on mount if none loaded
   useEffect(() => {
@@ -1591,6 +1650,7 @@ const ARTest = () => {
       }))
     );
     setSelectedObjects((prev) => prev.filter((it) => !(it.type === 'customModel' && it.id === id)));
+    setVideoTargetMesh((prev) => (prev === id || (typeof prev === 'string' && prev.startsWith(`${id}::`)) ? 'auto' : prev));
     if (selectedCustomModelId === id) {
       selectSceneObject(null);
     }
@@ -1836,6 +1896,7 @@ const ARTest = () => {
       }))
     );
     setSelectedObjects((prev) => prev.filter((it) => !(it.type === 'geometry' && it.id === id)));
+    setVideoTargetMesh((prev) => (prev === id ? 'auto' : prev));
     if (selectedGeometryId === id) {
       selectSceneObject(null);
     }
@@ -1942,6 +2003,7 @@ const ARTest = () => {
       }))
     );
     setSelectedObjects((prev) => prev.filter((it) => !(it.type === 'text3d' && it.id === id)));
+    setVideoTargetMesh((prev) => (prev === id ? 'auto' : prev));
     if (selectedText3DId === id) {
       selectSceneObject(null);
     }
@@ -2273,6 +2335,9 @@ const ARTest = () => {
       if (normalizedData.scene.fogColor) setFogColor(normalizedData.scene.fogColor);
       if (normalizedData.scene.fogDensity !== undefined) setFogDensity(normalizedData.scene.fogDensity);
       if (normalizedData.scene.cameraAutoRotate !== undefined) setCameraAutoRotate(normalizedData.scene.cameraAutoRotate);
+      if (normalizedData.scene.envPreset) setEnvPreset(normalizedData.scene.envPreset);
+      if (normalizedData.scene.envIntensity !== undefined) setEnvIntensity(normalizedData.scene.envIntensity);
+      if (normalizedData.scene.exposure !== undefined) setExposure(normalizedData.scene.exposure);
     }
 
     // 8. Particle System
@@ -2367,6 +2432,9 @@ const ARTest = () => {
       fogColor,
       fogDensity,
       cameraAutoRotate,
+      envPreset,
+      envIntensity,
+      exposure,
       modelScale,
       modelPosX,
       modelPosY,
@@ -2425,6 +2493,9 @@ const ARTest = () => {
     fogColor,
     fogDensity,
     cameraAutoRotate,
+    envPreset,
+    envIntensity,
+    exposure,
     modelScale,
     modelPosX,
     modelPosY,
@@ -3309,7 +3380,7 @@ const ARTest = () => {
     const liveObj = findThreeObject('geometry', geomId);
     if (liveObj && liveObj.isMesh && liveObj.material) {
       if (liveObj.material.map) {
-        try { liveObj.material.map.dispose(); } catch {}
+        try { liveObj.material.map.dispose(); } catch { }
         liveObj.material.map = null;
       }
       if (liveObj.material.color) liveObj.material.color.set('#38bdf8');
@@ -5375,21 +5446,108 @@ const ARTest = () => {
   // Helper: Find selected mesh object metadata from state
   const selectedMesh = meshList.find((m) => m.uuid === selectedMeshUuid) || null;
 
-  // Real-Time Video Texture Mapping to 3D Model in Viewport on Upload
+  // Track async scene object readiness (custom GLB models, 3D text builds, shapes) and submeshes inside external models
+  const [sceneObjectsRevision, setSceneObjectsRevision] = useState(0);
+  const [customModelSubmeshes, setCustomModelSubmeshes] = useState({});
+
+  const refreshCustomModelSubmeshes = useCallback(() => {
+    const customAnchor = document.getElementById('ar-custom-models-anchor');
+    const customRoot = customAnchor?.getObject3D('customModelsRoot') || customAnchor?.object3D;
+    if (!customRoot) {
+      setCustomModelSubmeshes({});
+      return;
+    }
+    const nextMap = {};
+    customRoot.children.forEach((wrapper) => {
+      const mId = wrapper?.userData?.modelId;
+      if (!mId) return;
+      const subs = [];
+      wrapper.traverse((node) => {
+        if (node.isMesh && node.material && !/helper|picker|gizmo|__starwear/i.test(node.name || '')) {
+          const mat = Array.isArray(node.material) ? node.material[0] : node.material;
+          subs.push({
+            uuid: node.uuid,
+            name: node.name || `Submesh_${subs.length + 1}`,
+            materialName: mat?.name || 'Mat'
+          });
+        }
+      });
+      if (subs.length > 0) {
+        nextMap[mId] = subs;
+      }
+    });
+    setCustomModelSubmeshes(nextMap);
+  }, []);
+
+  useEffect(() => {
+    const handleSceneObjectsUpdated = () => {
+      setSceneObjectsRevision((r) => r + 1);
+      refreshCustomModelSubmeshes();
+    };
+    window.addEventListener('starwear-custom-model-loaded', handleSceneObjectsUpdated);
+    window.addEventListener('starwear-scene-objects-updated', handleSceneObjectsUpdated);
+    refreshCustomModelSubmeshes();
+    return () => {
+      window.removeEventListener('starwear-custom-model-loaded', handleSceneObjectsUpdated);
+      window.removeEventListener('starwear-scene-objects-updated', handleSceneObjectsUpdated);
+    };
+  }, [refreshCustomModelSubmeshes, customModels.length]);
+
+  // Human-readable display label for the currently selected video target layer
+  const getVideoTargetDisplayLabel = useCallback((targetVal) => {
+    const val = (targetVal || 'auto').trim();
+    const lower = val.toLowerCase();
+    if (!val || lower === 'auto') return 'Auto-Detect';
+    if (lower === 'all') return 'All Model Meshes';
+    if (lower === 'all-scene' || lower === 'all_scene') return 'Entire Scene';
+
+    const geom = additionalGeometries.find((g) => g.id === val || g.name === val);
+    if (geom) {
+      return `${geom.name || geom.type} (${geom.type === 'plane' ? 'Plane' : geom.type})`;
+    }
+
+    const mesh = meshList.find((m) => m.name === val || m.uuid === val);
+    if (mesh) return mesh.name;
+
+    if (val.includes('::')) {
+      const [mId, subKey] = val.split('::');
+      const parentModel = customModels.find((m) => m.id === mId || m.name === mId);
+      const sub = (customModelSubmeshes[mId] || []).find((s) => s.name === subKey || s.uuid === subKey);
+      if (parentModel) {
+        return `${parentModel.name} › ${sub?.name || subKey}`;
+      }
+    }
+
+    const cModel = customModels.find((m) => m.id === val || m.name === val);
+    if (cModel) return `${cModel.name} (Model)`;
+
+    const txt = custom3DTexts.find((t) => t.id === val || t.name === val);
+    if (txt) return `3D Text: "${txt.text || txt.name}"`;
+
+    const scatter = scatterLayers.find((l) => l.id === val || l.name === val);
+    if (scatter) return `Scatter: ${scatter.name}`;
+
+    const grp = sceneGroups.find((g) => g.id === val || g.name === val);
+    if (grp) return `Group: ${grp.name}`;
+
+    return val;
+  }, [additionalGeometries, meshList, customModels, customModelSubmeshes, custom3DTexts, scatterLayers, sceneGroups]);
+
+  // Real-Time Video Texture Mapping across all Scene Objects (3D Models, Shapes, Planes, 3D Texts, Scatter, Groups)
   useEffect(() => {
     const videoUrl = activeVideoUrl || customVideoUrl || arData?.videoUrl || '';
+    const sceneEl = document.querySelector('a-scene');
+    if (!sceneEl) return;
+
     const modelEl = document.getElementById('ar-model');
-    if (!modelEl) return;
-    const model3D = modelEl.getObject3D('mesh');
-    if (!model3D) return;
+    const model3D = modelEl ? modelEl.getObject3D('mesh') : null;
 
     if (!videoUrl) {
-      const sceneEl = document.querySelector('a-scene');
       purgeAllSceneVideoLayers(sceneEl);
       return;
     }
 
-    // Check if videoUrl is a YouTube URL: bypass HTML5 <video> to prevent fatal browser CORS errors
+    // Check if videoUrl is a YouTube URL: bypass HTML5 <video> to prevent fatal browser CORS errors (handled by play-gltf-video CSS3D)
     if (isYouTubeUrl(videoUrl)) {
       const existingVid = document.getElementById('artest-active-video-element');
       if (existingVid) {
@@ -5397,8 +5555,22 @@ const ARTest = () => {
         existingVid.removeAttribute('src');
         try { existingVid.load(); } catch { }
       }
+      const videoCtrlEl = modelEl || document.getElementById('ar-video-layer-controller') || sceneEl.querySelector('[play-gltf-video]');
+      if (videoCtrlEl?.components?.['play-gltf-video']) {
+        videoCtrlEl.components['play-gltf-video'].applyVideo();
+      }
       return;
     }
+
+    const selectedHint = selectedGeometryId || selectedCustomModelId || selectedText3DId || selectedScatterLayerId || selectedMeshUuid || null;
+    const { finalTargetMeshes = [], allMeshes = [] } = resolveSceneVideoTargets(videoTargetMesh, {
+      rootModelObj: model3D,
+      scopeEl: sceneEl,
+      selectedObjectHint: selectedHint,
+      sceneGroups
+    });
+
+    if (allMeshes.length === 0) return;
 
     // Create or find hidden DOM video element
     let video = document.getElementById('artest-active-video-element');
@@ -5430,7 +5602,7 @@ const ARTest = () => {
     }
 
     const startPlayback = () => {
-      video.muted = true;
+      video.muted = Boolean(mediaMuted);
       if (mediaPlaying) {
         video.play().catch(() => { });
       } else {
@@ -5441,98 +5613,62 @@ const ARTest = () => {
     video.addEventListener('canplay', startPlayback);
     startPlayback();
 
-    const videoTexture = new THREE.VideoTexture(video);
-    if (THREE.SRGBColorSpace !== undefined) {
-      videoTexture.colorSpace = THREE.SRGBColorSpace;
-    }
-    videoTexture.minFilter = THREE.LinearFilter;
-    videoTexture.magFilter = THREE.LinearFilter;
-    videoTexture.generateMipmaps = false;
-    videoTexture.flipY = false;
-
-    const targetParam = (videoTargetMesh || 'auto').trim().toLowerCase();
-    const screenKeywords = ['video', 'screen', 'display', 'cinema', 'videomat', 'screenmat'];
-
-    const matchedMeshes = [];
-    const allMeshes = [];
-    const autoScreenMeshes = [];
-
-    model3D.traverse((node) => {
-      if (node.isMesh && node.material) {
-        allMeshes.push(node);
-        const nodeName = (node.name || '').toLowerCase();
-        const nodeUuid = (node.uuid || '').toLowerCase();
-
-        if (targetParam === 'all') {
-          matchedMeshes.push(node);
-        } else if (targetParam !== 'auto' && (nodeName === targetParam || nodeUuid === targetParam)) {
-          matchedMeshes.push(node);
-        } else {
-          const hasVideo = !!(
-            node.userData?.hasVideo ||
-            node.userData?.videoUrl ||
-            (Array.isArray(node.material)
-              ? node.material.some((m) => m?.userData?.hasVideo || m?.userData?.isVideoLayer)
-              : (node.material?.userData?.hasVideo || node.material?.userData?.isVideoLayer))
-          );
-          if (hasVideo || screenKeywords.some((kw) => nodeName.includes(kw))) {
-            autoScreenMeshes.push(node);
-          }
-        }
+    const configureVideoTex = (flipYVal) => {
+      const tex = new THREE.VideoTexture(video);
+      if (THREE.SRGBColorSpace !== undefined) {
+        tex.colorSpace = THREE.SRGBColorSpace;
       }
-    });
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.generateMipmaps = false;
+      tex.flipY = flipYVal;
 
-    let finalTargetMeshes = matchedMeshes;
-    if (finalTargetMeshes.length === 0 && targetParam === 'auto') {
-      finalTargetMeshes = autoScreenMeshes;
-    }
+      const repX = videoTextureRepeatX || 1.0;
+      const repY = videoTextureRepeatY || 1.0;
+      const offX = videoTextureOffsetX || 0.0;
+      const offY = videoTextureOffsetY || 0.0;
+      const rot = videoRotation || 0.0;
 
-    // Ensure non-target meshes have any video texture stripped
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(videoFlipX ? -Math.abs(repX) : Math.abs(repX), repY);
+      tex.offset.set(videoFlipX ? (1.0 - offX) : offX, offY);
+      tex.center.set(0.5, 0.5);
+      tex.rotation = (rot * Math.PI) / 180;
+      tex.matrixAutoUpdate = true;
+      if (tex.updateMatrix) tex.updateMatrix();
+      tex.needsUpdate = true;
+      return tex;
+    };
+
+    let gltfVideoTex = null;
+    let proceduralVideoTex = null;
+
+    // Ensure non-target scene objects have any previous video texture stripped and pre-video material restored
     allMeshes.forEach((node) => {
       if (!finalTargetMeshes.includes(node)) {
-        const materials = Array.isArray(node.material) ? node.material : [node.material];
-        materials.forEach((mat) => {
-          if (mat.map && (mat.map.isVideoTexture || mat.map.image instanceof HTMLVideoElement)) {
-            try { mat.map.dispose(); } catch { }
-            mat.map = null;
-            mat.needsUpdate = true;
-          }
-          if (mat.emissiveMap && (mat.emissiveMap.isVideoTexture || mat.emissiveMap.image instanceof HTMLVideoElement)) {
-            try { mat.emissiveMap.dispose(); } catch { }
-            mat.emissiveMap = null;
-            mat.needsUpdate = true;
-          }
-        });
+        restoreMeshPreVideoMaterial(node);
       }
     });
 
     finalTargetMeshes.forEach((node) => {
+      if (!node || !node.material) return;
       const materials = Array.isArray(node.material) ? node.material : [node.material];
-      const targetSlot = typeof node.userData?.videoTargetMaterialIndex === 'number'
-        ? node.userData.videoTargetMaterialIndex
-        : null;
+      const targetSlots = getVideoTargetMaterialSlots(node, materials);
+      const needsFlipYTrue = isProceduralNonGltfMesh(node);
+      const texToApply = needsFlipYTrue
+        ? (proceduralVideoTex || (proceduralVideoTex = configureVideoTex(true)))
+        : (gltfVideoTex || (gltfVideoTex = configureVideoTex(false)));
 
       materials.forEach((mat, idx) => {
-        const isTarget = targetSlot !== null
-          ? idx === targetSlot
-          : (mat?.userData?.hasVideo || mat?.userData?.isVideoLayer || materials.length === 1 || (node.userData?.archetype === 'VIDEO_SCREEN' && idx === 4));
+        if (!mat || !targetSlots.includes(idx)) return;
 
-        if (!isTarget) return;
+        backupMaterialPreVideoState(mat);
+        mat.userData = mat.userData || {};
+        mat.userData.__hasMappedVideo = true;
 
-        if (videoFlipX) {
-          videoTexture.wrapS = THREE.RepeatWrapping;
-          videoTexture.repeat.set(-1, 1);
-          videoTexture.offset.set(1, 0);
-        } else {
-          videoTexture.wrapS = THREE.ClampToEdgeWrapping;
-          videoTexture.repeat.set(1, 1);
-          videoTexture.offset.set(0, 0);
-        }
-        videoTexture.matrixAutoUpdate = true;
-        if (videoTexture.updateMatrix) videoTexture.updateMatrix();
-        videoTexture.needsUpdate = true;
-        mat.map = videoTexture;
-        mat.emissiveMap = videoTexture;
+        mat.map = texToApply;
+        mat.emissiveMap = texToApply;
         if (mat.color && typeof mat.color.set === 'function') {
           mat.color.set(0xffffff);
         }
@@ -5547,71 +5683,65 @@ const ARTest = () => {
     return () => {
       video.removeEventListener('canplay', startPlayback);
     };
-  }, [activeVideoUrl, customVideoUrl, arData, videoTargetMesh, videoFlipX, mediaPlaying, meshList]);
+  }, [
+    activeVideoUrl,
+    customVideoUrl,
+    arData,
+    videoTargetMesh,
+    videoFlipX,
+    videoTextureRepeatX,
+    videoTextureRepeatY,
+    videoTextureOffsetX,
+    videoTextureOffsetY,
+    videoRotation,
+    mediaPlaying,
+    mediaMuted,
+    meshList,
+    additionalGeometries,
+    customModels,
+    custom3DTexts,
+    scatterLayers,
+    sceneGroups,
+    sceneObjectsRevision,
+    selectedGeometryId,
+    selectedCustomModelId,
+    selectedText3DId,
+    selectedScatterLayerId,
+    selectedMeshUuid
+  ]);
 
-  // Live Video Layer / Mesh Texture Transformations (Flip, Scale, Offset, Rotation)
+  // Live Video Layer / Mesh Texture Transformations (Flip, Scale, Offset, Rotation) across all Scene Objects
   const applyFlipXToScene = useCallback((isFlipped) => {
+    const hasActiveVideo = Boolean(activeVideoUrl || customVideoUrl || arData?.videoUrl);
+    const sceneEl = document.querySelector('a-scene');
+    if (!sceneEl) return;
     const modelEl = document.getElementById('ar-model');
-    if (!modelEl) return;
-    const model3D = modelEl.getObject3D('mesh');
-    if (!model3D) return;
+    const model3D = modelEl ? modelEl.getObject3D('mesh') : null;
 
-    const targetParam = (videoTargetMesh || 'auto').trim().toLowerCase();
-    const screenKeywords = ['video', 'screen', 'display', 'cinema', 'videomat', 'screenmat'];
-
-    const matchedMeshes = [];
-    const allMeshes = [];
-    const autoScreenMeshes = [];
-
-    model3D.traverse((node) => {
-      if (node.isMesh) {
-        allMeshes.push(node);
-        const nodeName = (node.name || '').toLowerCase();
-        const nodeUuid = (node.uuid || '').toLowerCase();
-
-        if (targetParam === 'all') {
-          matchedMeshes.push(node);
-        } else if (targetParam !== 'auto' && (nodeName === targetParam || nodeUuid === targetParam)) {
-          matchedMeshes.push(node);
-        } else if (targetParam === 'auto' && selectedMeshUuid && (node.uuid === selectedMeshUuid || node.name === selectedMeshUuid)) {
-          matchedMeshes.push(node);
-        } else {
-          const hasVideo = !!(
-            node.userData?.hasVideo ||
-            node.userData?.videoUrl ||
-            (Array.isArray(node.material)
-              ? node.material.some((m) => m?.userData?.hasVideo || m?.userData?.isVideoLayer)
-              : (node.material?.userData?.hasVideo || node.material?.userData?.isVideoLayer))
-          );
-          if (hasVideo || screenKeywords.some((kw) => nodeName.includes(kw))) {
-            autoScreenMeshes.push(node);
-          }
-        }
-      }
+    const selectedHint = selectedGeometryId || selectedCustomModelId || selectedText3DId || selectedScatterLayerId || selectedMeshUuid || null;
+    const { finalTargetMeshes = [] } = resolveSceneVideoTargets(videoTargetMesh, {
+      rootModelObj: model3D,
+      scopeEl: sceneEl,
+      selectedObjectHint: selectedHint,
+      sceneGroups
     });
 
-    let finalTargetMeshes = matchedMeshes;
-    if (finalTargetMeshes.length === 0 && targetParam === 'auto') {
-      finalTargetMeshes = autoScreenMeshes;
-    }
-
     finalTargetMeshes.forEach((node) => {
-      if (node.material) {
+      if (node && node.material) {
         const mats = Array.isArray(node.material) ? node.material : [node.material];
-        const targetSlot = typeof node.userData?.videoTargetMaterialIndex === 'number'
-          ? node.userData.videoTargetMaterialIndex
-          : null;
+        const targetSlots = getVideoTargetMaterialSlots(node, mats);
 
         mats.forEach((m, idx) => {
-          const isTarget = targetSlot !== null
-            ? idx === targetSlot
-            : (m?.userData?.hasVideo || m?.userData?.isVideoLayer || mats.length === 1 || (node.userData?.archetype === 'VIDEO_SCREEN' && idx === 4));
-
-          if (!isTarget) return;
+          if (!m || !targetSlots.includes(idx)) return;
 
           ['map', 'emissiveMap'].forEach((mapName) => {
             if (m[mapName]) {
               const tex = m[mapName];
+              const isVidTex = Boolean(
+                tex.isVideoTexture ||
+                (typeof HTMLVideoElement !== 'undefined' && (tex.image instanceof HTMLVideoElement || tex.source?.data instanceof HTMLVideoElement))
+              );
+              if (!hasActiveVideo && !isVidTex) return;
               const repX = (videoTextureRepeatX || 1.0);
               const repY = (videoTextureRepeatY || 1.0);
               const offX = (videoTextureOffsetX || 0.0);
@@ -5633,12 +5763,47 @@ const ARTest = () => {
         });
       }
     });
-  }, [selectedMeshUuid, videoTargetMesh, videoTextureRepeatX, videoTextureRepeatY, videoTextureOffsetX, videoTextureOffsetY, videoRotation]);
+  }, [
+    activeVideoUrl,
+    customVideoUrl,
+    arData,
+    selectedGeometryId,
+    selectedCustomModelId,
+    selectedText3DId,
+    selectedScatterLayerId,
+    selectedMeshUuid,
+    sceneGroups,
+    videoTargetMesh,
+    videoTextureRepeatX,
+    videoTextureRepeatY,
+    videoTextureOffsetX,
+    videoTextureOffsetY,
+    videoRotation
+  ]);
 
-  // Reactive Effect to apply Video Transforms whenever state, target, or model changes
+  // Reactive Effect to apply Video Transforms whenever state, target, or scene objects change
   useEffect(() => {
     applyFlipXToScene(videoFlipX);
-  }, [videoFlipX, videoScale, videoOffsetX, videoOffsetY, videoOffsetZ, videoRotation, videoTextureRepeatX, videoTextureRepeatY, videoTextureOffsetX, videoTextureOffsetY, applyFlipXToScene, localGlbUrl, meshList]);
+  }, [
+    videoFlipX,
+    videoScale,
+    videoOffsetX,
+    videoOffsetY,
+    videoOffsetZ,
+    videoRotation,
+    videoTextureRepeatX,
+    videoTextureRepeatY,
+    videoTextureOffsetX,
+    videoTextureOffsetY,
+    applyFlipXToScene,
+    localGlbUrl,
+    meshList,
+    additionalGeometries,
+    customModels,
+    custom3DTexts,
+    scatterLayers,
+    sceneObjectsRevision
+  ]);
 
   // Snap video layer to exact 3D geometry / face and reset mapping
   const snapVideoToLayer = (targetParam) => {
@@ -5654,7 +5819,11 @@ const ARTest = () => {
     setVideoTextureOffsetX(0.0);
     setVideoTextureOffsetY(0.0);
 
-    const modelEl = document.getElementById('ar-model') || document.getElementById('preview-model');
+    const modelEl =
+      document.getElementById('ar-model') ||
+      document.getElementById('ar-video-layer-controller') ||
+      document.getElementById('preview-model') ||
+      document.querySelector('[play-gltf-video]');
     if (modelEl && modelEl.components && modelEl.components['play-gltf-video']) {
       const comp = modelEl.components['play-gltf-video'];
       if (typeof comp.applyVideo === 'function') {
@@ -5905,6 +6074,101 @@ const ARTest = () => {
     handlePositionChange('y', Number((-markerH / 2).toFixed(3)));
   };
 
+  // Align / Ground Entire Composite Scene (Root Model + All Shapes + Custom Models) to the Target Marker
+  const alignEntireSceneToMarker = (mode = 'ground') => {
+    const compositeBox = new THREE.Box3();
+    let hasObjects = false;
+
+    // 1. Root Model
+    const modelEl = document.getElementById('ar-model');
+    const model3D = modelEl?.getObject3D('mesh');
+    if (model3D && modelEl.object3D) {
+      compositeBox.expandByObject(modelEl.object3D);
+      hasObjects = true;
+    }
+
+    // 2. Additional Geometries (Shapes / Floor Planes)
+    const geomEl = document.getElementById('ar-additional-geometries-anchor');
+    const geomRoot = geomEl?.getObject3D('additionalGeometriesRoot') || geomEl?.object3D;
+    if (geomRoot && geomRoot.children.length > 0) {
+      geomRoot.children.forEach((c) => {
+        compositeBox.expandByObject(c);
+        hasObjects = true;
+      });
+    }
+
+    // 3. Custom Models
+    const customModelsEl = document.getElementById('ar-custom-models-anchor');
+    const customModelsRoot = customModelsEl?.getObject3D('customModelsRoot') || customModelsEl?.object3D;
+    if (customModelsRoot && customModelsRoot.children.length > 0) {
+      customModelsRoot.children.forEach((c) => {
+        compositeBox.expandByObject(c);
+        hasObjects = true;
+      });
+    }
+
+    if (!hasObjects || compositeBox.isEmpty()) {
+      snapModelToMarkerOrigin();
+      return;
+    }
+
+    const center = new THREE.Vector3();
+    compositeBox.getCenter(center);
+
+    const markerH = markerWidth * (markerAspectRatio || 0.5926);
+    const markerBottomY = -markerH / 2;
+
+    const deltaX = -center.x; // Shift so scene center aligns horizontally with marker center X=0
+    let deltaY = 0;
+    let deltaZ = 0;
+
+    if (mode === 'ground') {
+      // Ground lowest surface (e.g. grass plane / feet) flush onto bottom edge of marker
+      const lowestY = compositeBox.min.y;
+      deltaY = markerBottomY - lowestY;
+      // If scene geometry is behind marker face (Z < 0), push forward flush to front of marker
+      if (compositeBox.min.z < 0) {
+        deltaZ = -compositeBox.min.z;
+      }
+    } else {
+      // Center entire scene on marker center (0, 0, 0)
+      deltaY = -center.y;
+      deltaZ = -center.z;
+    }
+
+    // Apply delta to root model
+    setModelPosX((prev) => Number((Number(prev || 0) + deltaX).toFixed(3)));
+    setModelPosY((prev) => Number((Number(prev || 0) + deltaY).toFixed(3)));
+    setModelPosZ((prev) => Number((Number(prev || 0) + deltaZ).toFixed(3)));
+
+    // Apply delta to all additionalGeometries
+    if (additionalGeometries.length > 0) {
+      setAdditionalGeometries((prev) =>
+        prev.map((g) => ({
+          ...g,
+          posX: Number((Number(g.posX || 0) + deltaX).toFixed(3)),
+          posY: Number((Number(g.posY || 0) + deltaY).toFixed(3)),
+          posZ: Number((Number(g.posZ || 0) + deltaZ).toFixed(3))
+        }))
+      );
+    }
+
+    // Apply delta to all customModels
+    if (customModels.length > 0) {
+      setCustomModels((prev) =>
+        prev.map((m) => ({
+          ...m,
+          posX: Number((Number(m.posX || 0) + deltaX).toFixed(3)),
+          posY: Number((Number(m.posY || 0) + deltaY).toFixed(3)),
+          posZ: Number((Number(m.posZ || 0) + deltaZ).toFixed(3))
+        }))
+      );
+    }
+
+    setSaveSuccessMsg(mode === 'ground' ? 'Entire 3D scene grounded onto marker base' : 'Entire 3D scene centered on marker');
+    setTimeout(() => setSaveSuccessMsg(''), 4000);
+  };
+
   const fitModelToMarkerBounds = () => {
     const modelEl = document.getElementById('ar-model');
     const model3D = modelEl?.getObject3D('mesh');
@@ -5962,6 +6226,11 @@ const ARTest = () => {
       console.error("Failed to upload custom marker:", err);
       setMarkerLoading(false);
     }
+  };
+
+  const handleSelectLibraryMarker = async (file) => {
+    if (!file) return;
+    await handleCustomMarkerUpload(file);
   };
 
   const handleResetMarkerToDefault = () => {
@@ -6673,6 +6942,16 @@ const ARTest = () => {
     }
   };
 
+  const resolveSelectedVideoLayerCandidate = () => {
+    if (selectedGeometryId) return selectedGeometryId;
+    if (selectedCustomModelId) return selectedCustomModelId;
+    if (selectedText3DId) return selectedText3DId;
+    if (selectedScatterLayerId) return selectedScatterLayerId;
+    if (selectedTargetType === 'group' && selectedGroupId) return selectedGroupId;
+    if (selectedMesh) return selectedMesh.name || selectedMesh.uuid;
+    return null;
+  };
+
   const pickLocalVideo = (e) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
@@ -6682,8 +6961,11 @@ const ARTest = () => {
       setCustomVideoUrl('');
       setLocalVideoName(file.name);
       setMediaPlaying(true);
-      if (selectedMesh) {
-        setVideoTargetMesh(selectedMesh.name || selectedMesh.uuid);
+      if (!videoTargetMesh || videoTargetMesh === 'auto') {
+        const candidate = resolveSelectedVideoLayerCandidate();
+        if (candidate) {
+          setVideoTargetMesh(candidate);
+        }
       }
     }
   };
@@ -6695,8 +6977,11 @@ const ARTest = () => {
     setSelectedVideoFile(null);
     setLocalVideoName('');
     setMediaPlaying(true);
-    if (selectedMesh) {
-      setVideoTargetMesh(selectedMesh.name || selectedMesh.uuid);
+    if (!videoTargetMesh || videoTargetMesh === 'auto') {
+      const candidate = resolveSelectedVideoLayerCandidate();
+      if (candidate) {
+        setVideoTargetMesh(candidate);
+      }
     }
     if (isYouTubeUrl(trimmed)) {
       setVideoMode('youtube');
@@ -6750,7 +7035,14 @@ const ARTest = () => {
     const sceneEl = document.querySelector('a-scene');
     purgeAllSceneVideoLayers(sceneEl);
 
-    // Explicitly restore material colors & emissive defaults on meshes in scene
+    // Explicitly restore pre-video materials on all scene meshes (root model, shapes, planes, custom models, 3D text, scatter)
+    if (sceneEl && sceneEl.object3D) {
+      sceneEl.object3D.traverse((node) => {
+        if (node.isMesh && node.material) {
+          restoreMeshPreVideoMaterial(node);
+        }
+      });
+    }
     const modelEl = document.getElementById('ar-model');
     const model3D = modelEl?.getObject3D('mesh');
     if (model3D) {
@@ -7530,6 +7822,7 @@ const ARTest = () => {
       customModels: (customModels || []).map(({ file, ...rest }) => rest),
       custom3DTexts: custom3DTexts || [],
       customLights: customLights || [],
+      scatterLayers: scatterLayers || [],
       sceneGroups: sceneGroups || [],
       updatedAt: new Date().toISOString()
     };
@@ -7561,6 +7854,7 @@ const ARTest = () => {
           additionalGeometries: currentConfig.additionalGeometries || [],
           custom3DTexts: currentConfig.custom3DTexts || [],
           customLights: currentConfig.customLights || [],
+          scatterLayers: currentConfig.scatterLayers || [],
           sceneGroups: currentConfig.sceneGroups || []
         };
         const launchBatch = writeBatch(db);
@@ -7584,7 +7878,7 @@ const ARTest = () => {
 
   const handleSaveConfig = async () => {
     if (!batchId.trim()) {
-      alert('Please enter a Batch ID in the input above before saving.');
+      setIsSaveAsModalOpen(true);
       return;
     }
 
@@ -8367,6 +8661,815 @@ const ARTest = () => {
     }
   };
 
+  // Dedicated "Save As" handler: compiles marker via MindAR, exports full 3D scene as .glb,
+  // uploads all files to their respective Storage buckets, and creates Asset + Batch in Admin Inventory.
+  const handleSaveAsInventory = async ({ assetId, name, description, price, merchantId }) => {
+    const cleanId = String(assetId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+    const cleanMerchantId = String(merchantId || 'default').trim().replace(/[^a-zA-Z0-9_-]/g, '_') || 'default';
+    if (!cleanId) {
+      alert('Please enter a valid Batch / Asset ID.');
+      return;
+    }
+
+    if (isSavingConfigRef.current) return;
+    isSavingConfigRef.current = true;
+    lastSaveTimeRef.current = Date.now();
+
+    setSavingConfig(true);
+    setSaveSuccessMsg('');
+    setLastCreatedInventoryId('');
+    setSaveAsProgressStep(1);
+    setSaveAsProgressMsg('Preparing 3D scene & exporting binary .glb...');
+    setUploadProgress('Preparing 3D scene & exporting binary .glb...');
+
+    try {
+      // -----------------------------------------------------------------------
+      // STEP 1: Build & Export Full 3D Scene as Binary .GLB -> assets/{id}/{id}_scene.glb
+      // -----------------------------------------------------------------------
+      const exportScene = new THREE.Scene();
+      exportScene.name = `${cleanId}_scene`;
+      exportScene.userData = { preserveSceneOrigin: true };
+
+      const exportContainer = new THREE.Group();
+      exportContainer.name = `${cleanId}_root`;
+      exportContainer.userData = { preserveSceneOrigin: true };
+      exportScene.add(exportContainer);
+
+      const usedNames = new Set();
+      const makeUniqueExportName = (rawBase, fallback = 'mesh') => {
+        const sanitized = String(rawBase || fallback)
+          .trim()
+          .replace(/[^a-zA-Z0-9_-]/g, '_')
+          .replace(/^_+|_+$/g, '') || fallback;
+        if (!usedNames.has(sanitized)) {
+          usedNames.add(sanitized);
+          return sanitized;
+        }
+        let suffix = 2;
+        while (usedNames.has(`${sanitized}_${suffix}`)) {
+          suffix += 1;
+        }
+        const unique = `${sanitized}_${suffix}`;
+        usedNames.add(unique);
+        return unique;
+      };
+
+      let remappedVideoTargetMesh = videoTargetMesh;
+
+      // 1a. Primary #ar-model (if present and not hidden by portal mode)
+      const modelEl = document.getElementById('ar-model');
+      const primaryModel3D = modelEl?.getObject3D('mesh');
+      if (primaryModel3D && !(portalEnabled && portalHideOutsideModel)) {
+        primaryModel3D.updateWorldMatrix(true, true);
+        const clonedPrimary = primaryModel3D.clone(true);
+        const toRemove = [];
+        clonedPrimary.traverse((c) => {
+          if (c.name && /helper|picker|gizmo|__starwear/i.test(c.name)) {
+            toRemove.push(c);
+          }
+        });
+        toRemove.forEach((c) => c.parent && c.parent.remove(c));
+
+        deletedMeshNames.forEach((deadName) => {
+          const deadNode = clonedPrimary.getObjectByName(deadName);
+          if (deadNode && deadNode.parent) {
+            deadNode.parent.remove(deadNode);
+          }
+        });
+
+        clonedPrimary.traverse((c) => {
+          if (c.isMesh && c.name) {
+            usedNames.add(c.name);
+          }
+        });
+
+        primaryModel3D.matrixWorld.decompose(
+          clonedPrimary.position,
+          clonedPrimary.quaternion,
+          clonedPrimary.scale
+        );
+        exportContainer.add(clonedPrimary);
+      }
+
+      // 1b. Additional Geometries (Shapes, Planes, Vector Extrusions)
+      if (Array.isArray(additionalGeometries)) {
+        additionalGeometries.forEach((g) => {
+          if (g.visible === false) return;
+          const liveObj = findThreeObject('geometry', g.id);
+          let primNode = null;
+          if (liveObj) {
+            liveObj.updateWorldMatrix(true, true);
+            primNode = liveObj.clone(true);
+            const toRemove = [];
+            primNode.traverse((c) => {
+              if (c.name && /helper|picker|gizmo|__starwear/i.test(c.name)) toRemove.push(c);
+            });
+            toRemove.forEach((c) => c.parent && c.parent.remove(c));
+            primNode.position.set(0, 0, 0);
+            primNode.quaternion.set(0, 0, 0, 1);
+            primNode.scale.set(1, 1, 1);
+            liveObj.matrixWorld.decompose(primNode.position, primNode.quaternion, primNode.scale);
+          } else {
+            primNode = createPrimitiveMesh(g, THREE);
+            primNode.position.set(g.posX || 0, g.posY || 0, g.posZ || 0);
+            primNode.rotation.set(
+              THREE.MathUtils.degToRad(g.rotX || 0),
+              THREE.MathUtils.degToRad(g.rotY || 0),
+              THREE.MathUtils.degToRad(g.rotZ || 0)
+            );
+            primNode.scale.set(g.scaleX ?? g.scale ?? 1, g.scaleY ?? g.scale ?? 1, g.scaleZ ?? g.scale ?? 1);
+          }
+
+          const uniqueShapeName = makeUniqueExportName(g.name || g.type || 'shape', 'shape');
+          primNode.name = uniqueShapeName;
+          if (!primNode.isMesh) {
+            let firstMesh = null;
+            primNode.traverse((c) => {
+              if (!firstMesh && c.isMesh) firstMesh = c;
+            });
+            if (firstMesh) firstMesh.name = uniqueShapeName;
+          }
+
+          const geomPrefix = `geom:${g.id}`;
+          if (videoTargetMesh === geomPrefix) {
+            remappedVideoTargetMesh = uniqueShapeName;
+          } else if (typeof videoTargetMesh === 'string' && videoTargetMesh.startsWith(`${geomPrefix}:slot:`)) {
+            const slotSuffix = videoTargetMesh.slice(geomPrefix.length);
+            remappedVideoTargetMesh = `${uniqueShapeName}${slotSuffix}`;
+          }
+
+          exportContainer.add(primNode);
+        });
+      }
+
+      // 1c. Custom 3D Typography Texts
+      const textAnchor = document.getElementById('ar-3d-texts-anchor');
+      const textsRoot = textAnchor?.getObject3D('texts3DRoot') || textAnchor?.object3D;
+      if (textsRoot && Array.isArray(custom3DTexts)) {
+        custom3DTexts.forEach((t) => {
+          if (t.visible === false) return;
+          textsRoot.traverse((node) => {
+            if (node.userData?.textId === t.id) {
+              node.updateWorldMatrix(true, true);
+              const clonedText = node.clone(true);
+              const toRemove = [];
+              clonedText.traverse((c) => {
+                if (c.name && /helper|picker|gizmo|__starwear/i.test(c.name)) toRemove.push(c);
+              });
+              toRemove.forEach((c) => c.parent && c.parent.remove(c));
+              node.matrixWorld.decompose(clonedText.position, clonedText.quaternion, clonedText.scale);
+
+              const uniqueTextName = makeUniqueExportName(t.text || 'text3d', 'text3d');
+              clonedText.name = uniqueTextName;
+              let primaryTextMesh = clonedText.isMesh ? clonedText : null;
+              if (!primaryTextMesh) {
+                clonedText.traverse((c) => {
+                  if (!primaryTextMesh && c.isMesh) primaryTextMesh = c;
+                });
+              }
+              if (primaryTextMesh) {
+                primaryTextMesh.name = uniqueTextName;
+              }
+
+              const textPrefix = `text3d:${t.id}`;
+              if (videoTargetMesh === textPrefix) {
+                remappedVideoTargetMesh = uniqueTextName;
+              } else if (typeof videoTargetMesh === 'string' && videoTargetMesh.startsWith(`${textPrefix}:slot:`)) {
+                const slotSuffix = videoTargetMesh.slice(textPrefix.length);
+                remappedVideoTargetMesh = `${uniqueTextName}${slotSuffix}`;
+              }
+
+              exportContainer.add(clonedText);
+            }
+          });
+        });
+      }
+
+      // 1d. Custom External 3D Models
+      const customModelsAnchor = document.getElementById('ar-custom-models-anchor');
+      const modelsRoot = customModelsAnchor?.getObject3D('customModelsRoot') || customModelsAnchor?.object3D;
+      if (modelsRoot && Array.isArray(customModels)) {
+        customModels.forEach((m) => {
+          if (m.visible === false) return;
+          modelsRoot.traverse((node) => {
+            if (node.userData?.modelId === m.id && node.userData?.isCustomModel) {
+              node.updateWorldMatrix(true, true);
+              const clonedMod = node.clone(true);
+              const toRemove = [];
+              clonedMod.traverse((c) => {
+                if (c.name && /helper|picker|gizmo|__starwear/i.test(c.name)) toRemove.push(c);
+              });
+              toRemove.forEach((c) => c.parent && c.parent.remove(c));
+              node.matrixWorld.decompose(clonedMod.position, clonedMod.quaternion, clonedMod.scale);
+
+              const uniqueModName = makeUniqueExportName(m.name || m.fileName || 'custom_model', 'model');
+              clonedMod.name = uniqueModName;
+              const childMeshes = [];
+              clonedMod.traverse((c) => {
+                if (c.isMesh) childMeshes.push(c);
+              });
+              if (childMeshes.length === 1) {
+                childMeshes[0].name = uniqueModName;
+              }
+
+              const modPrefix = `custommodel:${m.id}`;
+              if (videoTargetMesh === modPrefix) {
+                remappedVideoTargetMesh = childMeshes.length === 1 ? uniqueModName : (childMeshes[0]?.name || 'ALL_SCENE');
+              } else if (typeof videoTargetMesh === 'string' && videoTargetMesh.startsWith(`${modPrefix}:slot:`)) {
+                const slotSuffix = videoTargetMesh.slice(modPrefix.length);
+                const targetName = childMeshes[0]?.name || uniqueModName;
+                remappedVideoTargetMesh = `${targetName}${slotSuffix}`;
+              }
+
+              exportContainer.add(clonedMod);
+            }
+          });
+        });
+      }
+
+      // 1e. Surface Scattering & Foliage Instanced Meshes
+      if (scatterLayers.length > 0) {
+        scatterLayers.forEach((layer) => {
+          if (!layer.enabled || layer.visible === false) return;
+          const anchor = document.getElementById(`ar-scatter-layer-${layer.id}`);
+          const root = anchor?.getObject3D('scatterRoot') || anchor?.object3D;
+          if (root && anchor?.object3D) {
+            anchor.object3D.updateWorldMatrix(true, true);
+            const cloned = root.clone(true);
+            anchor.object3D.matrixWorld.decompose(cloned.position, cloned.quaternion, cloned.scale);
+            exportContainer.add(cloned);
+          }
+        });
+      } else {
+        const scatterAnchor = document.getElementById('ar-surface-scatter-anchor');
+        const scatterRoot = scatterAnchor?.getObject3D('scatterRoot') || scatterAnchor?.object3D;
+        if (scatterRoot && scatterEnabled) {
+          scatterRoot.updateWorldMatrix(true, true);
+          const clonedScatter = scatterRoot.clone(true);
+          scatterRoot.matrixWorld.decompose(clonedScatter.position, clonedScatter.quaternion, clonedScatter.scale);
+          exportContainer.add(clonedScatter);
+        }
+      }
+
+      if (remappedVideoTargetMesh === 'ALL_GEOMETRIES' && !primaryModel3D) {
+        remappedVideoTargetMesh = 'ALL';
+      }
+
+      exportScene.updateMatrixWorld(true);
+      sanitizeHierarchyForGLTFExport(exportScene, THREE);
+      exportScene.userData = { preserveSceneOrigin: true };
+      exportContainer.userData = { preserveSceneOrigin: true };
+
+      setSaveAsProgressMsg('Encoding 3D scene into binary .glb...');
+      setUploadProgress('Encoding 3D scene into binary .glb...');
+
+      const glbBlob = await new Promise((resolve, reject) => {
+        const exporter = new GLTFExporter();
+        const exportOptions = {
+          binary: true,
+          embedImages: true
+        };
+        if (primaryModel3D?.animations?.length > 0) {
+          exportOptions.animations = primaryModel3D.animations;
+        }
+        exporter.parse(
+          exportScene,
+          (result) => {
+            if (result instanceof ArrayBuffer) {
+              resolve(new Blob([result], { type: 'model/gltf-binary' }));
+            } else {
+              resolve(new Blob([JSON.stringify(result)], { type: 'application/json' }));
+            }
+          },
+          (err) => reject(err),
+          exportOptions
+        );
+      });
+
+      const sceneGlbFileName = `${cleanId}_scene.glb`;
+      const glbStoragePath = `assets/${cleanId}/${sceneGlbFileName}`;
+      setSaveAsProgressMsg(`Uploading 3D model to ${glbStoragePath}...`);
+      setUploadProgress(`Uploading 3D model to ${glbStoragePath}...`);
+
+      const glbStorageRef = ref(storage, glbStoragePath);
+      await uploadBytes(glbStorageRef, glbBlob, {
+        contentType: 'model/gltf-binary',
+        customMetadata: {
+          batchId: cleanId,
+          assetName: name,
+          exportedFrom: 'ar-test-studio'
+        }
+      });
+      const glbDownloadUrl = await getDownloadURL(glbStorageRef);
+
+      pendingTextureFilesRef.current?.clear();
+      pendingShapeTexturesRef.current?.clear();
+
+      // -----------------------------------------------------------------------
+      // STEP 2: Resolve & Upload Permanent Marker Image -> assets/{id}/marker_...
+      // -----------------------------------------------------------------------
+      setSaveAsProgressStep(2);
+      setSaveAsProgressMsg('Preparing & uploading target marker image...');
+      setUploadProgress('Preparing & uploading target marker image...');
+
+      const markerFile = await resolveMarkerToFile(
+        stagedMarkerFileRef.current,
+        markerImageUrl,
+        markerInfo,
+        `${cleanId}_marker`
+      );
+      const cleanMarkerName = (markerFile.name || 'marker.png').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const markerStoragePath = `assets/${cleanId}/marker_${Date.now()}_${cleanMarkerName}`;
+      const markerRef = ref(storage, markerStoragePath);
+      await uploadBytes(markerRef, markerFile, {
+        contentType: markerFile.type || 'image/png'
+      });
+      const finalMarkerDownloadUrl = await getDownloadURL(markerRef);
+
+      // -----------------------------------------------------------------------
+      // STEP 3: Run MindAR Marker Generator Workflow -> anchors/{merchant}/{id}.mind
+      // -----------------------------------------------------------------------
+      setSaveAsProgressStep(3);
+      const { mindFilePath } = await compileMarkerWithMindAR({
+        markerFile,
+        merchantId: cleanMerchantId,
+        assetId: cleanId,
+        onProgress: (msg) => {
+          setSaveAsProgressMsg(msg);
+          setUploadProgress(msg);
+        }
+      });
+
+      let mindDownloadUrl = '';
+      try {
+        mindDownloadUrl = await getDownloadURL(ref(storage, mindFilePath));
+      } catch (mindUrlErr) {
+        console.warn('[ARTest] Could not pre-resolve mindDownloadUrl:', mindUrlErr);
+      }
+
+      // -----------------------------------------------------------------------
+      // STEP 4: Upload Video Layer & Auxiliary Scene Media -> assets/{id}/...
+      // -----------------------------------------------------------------------
+      setSaveAsProgressStep(4);
+      let finalVideoUrl = activeVideoUrl || customVideoUrl || arData?.videoUrl || '';
+      if (typeof finalVideoUrl === 'string' && finalVideoUrl.startsWith('blob:') && !selectedVideoFile) {
+        finalVideoUrl = '';
+      }
+      let videoFilePath = arData?.config?.video_file_path || arData?.video_file_path || '';
+      if (!finalVideoUrl) videoFilePath = '';
+
+      if (selectedVideoFile) {
+        setSaveAsProgressMsg('Uploading video layer to assets bucket...');
+        setUploadProgress('Uploading video layer to assets bucket...');
+        const cleanVidName = selectedVideoFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        videoFilePath = `assets/${cleanId}/${cleanVidName}`;
+        const videoRef = ref(storage, videoFilePath);
+        await uploadBytes(videoRef, selectedVideoFile);
+        finalVideoUrl = await getDownloadURL(videoRef);
+        setActiveVideoUrl(finalVideoUrl);
+        setLocalVideoName(selectedVideoFile.name);
+      }
+
+      let finalPortalSkyboxUrl = portalSkyboxUrl;
+      if (selectedPortalSkyboxFile) {
+        setSaveAsProgressMsg('Uploading portal 360 skybox to Storage...');
+        setUploadProgress('Uploading portal 360 skybox to Storage...');
+        const cleanSkyName = selectedPortalSkyboxFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const skyStoragePath = `assets/${cleanId}/portal_${Date.now()}_${cleanSkyName}`;
+        const skyRef = ref(storage, skyStoragePath);
+        await uploadBytes(skyRef, selectedPortalSkyboxFile);
+        finalPortalSkyboxUrl = await getDownloadURL(skyRef);
+        setPortalSkyboxUrl(finalPortalSkyboxUrl);
+      } else if (typeof finalPortalSkyboxUrl === 'string' && finalPortalSkyboxUrl.startsWith('blob:')) {
+        finalPortalSkyboxUrl = '';
+      }
+
+      let finalPortalGlbUrl = portalCustomModelUrl;
+      if (selectedPortalGlbFile) {
+        setSaveAsProgressMsg('Uploading portal interior 3D model to Storage...');
+        setUploadProgress('Uploading portal interior 3D model to Storage...');
+        const cleanPName = selectedPortalGlbFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const pGlbStoragePath = `assets/${cleanId}/portal_model_${Date.now()}_${cleanPName}`;
+        const pGlbRef = ref(storage, pGlbStoragePath);
+        await uploadBytes(pGlbRef, selectedPortalGlbFile);
+        finalPortalGlbUrl = await getDownloadURL(pGlbRef);
+        setPortalCustomModelUrl(finalPortalGlbUrl);
+      } else if (typeof finalPortalGlbUrl === 'string' && finalPortalGlbUrl.startsWith('blob:')) {
+        finalPortalGlbUrl = '';
+      }
+
+      // -----------------------------------------------------------------------
+      // STEP 5: Capture & Upload 3D Showroom Thumbnail -> assets/{id}/thumbnails/...
+      // -----------------------------------------------------------------------
+      setSaveAsProgressStep(5);
+      setSaveAsProgressMsg('Capturing 3D scene thumbnail snapshot...');
+      setUploadProgress('Capturing 3D scene thumbnail snapshot...');
+
+      let finalThumbnailUrl = '';
+      try {
+        let thumbBlob = null;
+        const sceneContainer = document.getElementById('ar-scene-container');
+        const sceneEl = sceneContainer?.querySelector('a-scene');
+        if (sceneEl) {
+          const thumbResult = await captureSceneCanvasThumbnail(sceneEl, {
+            width: 512,
+            height: 512,
+            hideMarkers: true
+          });
+          if (thumbResult?.blob) {
+            thumbBlob = thumbResult.blob;
+          }
+        }
+        if (!thumbBlob) {
+          const offscreenThumb = await captureModelThumbnailBlob(glbBlob);
+          if (offscreenThumb?.blob) {
+            thumbBlob = offscreenThumb.blob;
+          }
+        }
+        if (thumbBlob) {
+          const thumbPath = `assets/${cleanId}/thumbnails/thumb_${Date.now()}.png`;
+          const thumbRef = ref(storage, thumbPath);
+          await uploadBytes(thumbRef, thumbBlob, {
+            contentType: 'image/png',
+            customMetadata: {
+              batchId: cleanId,
+              generatedAt: new Date().toISOString()
+            }
+          });
+          finalThumbnailUrl = await getDownloadURL(thumbRef);
+          invalidateThumbnailCache(cleanId);
+          invalidateThumbnailCache(finalThumbnailUrl);
+        }
+      } catch (thumbErr) {
+        console.warn('[ARTest] Non-fatal thumbnail capture warning during Save As:', thumbErr);
+      }
+
+      // -----------------------------------------------------------------------
+      // STEP 6: Register Asset & Batch in Admin Inventory (Firestore)
+      // -----------------------------------------------------------------------
+      setSaveAsProgressStep(6);
+      setSaveAsProgressMsg('Adding Asset & Batch to Admin Inventory...');
+      setUploadProgress('Adding Asset & Batch to Admin Inventory...');
+
+      const nowIso = new Date().toISOString();
+      const safeVideoUrl = (finalVideoUrl && !finalVideoUrl.startsWith('blob:')) ? finalVideoUrl : '';
+
+      const arConfigPayload = {
+        videoUrl: safeVideoUrl,
+        video_url: safeVideoUrl,
+        video_file_path: videoFilePath,
+        videoTargetMesh: remappedVideoTargetMesh,
+        videoFlipX,
+        videoScale,
+        videoOffsetX,
+        videoOffsetY,
+        videoOffsetZ,
+        videoRotation,
+        videoTextureRepeatX,
+        videoTextureRepeatY,
+        videoTextureOffsetX,
+        videoTextureOffsetY,
+        aspectRatio: videoAspectRatio,
+        videoAspectRatio,
+        ambientColor,
+        ambientIntensity,
+        dir1Color,
+        dir1Intensity,
+        dir1Position,
+        dir2Color,
+        dir2Intensity,
+        dir2Position,
+        rimColor,
+        rimIntensity,
+        rimPosition,
+        modelScale: 1,
+        modelRotSpeed,
+        modelRotX: 0,
+        modelRotY: 0,
+        modelRotZ: 0,
+        modelRotation: '0 0 0',
+        modelPosX: 0,
+        modelPosY: 0,
+        modelPosZ: 0,
+        modelPosition: '0 0 0',
+        matMetalness: useNativePBR ? -1 : (matMetalness < 0 ? 0.0 : matMetalness),
+        matRoughness: useNativePBR ? -1 : (matRoughness < 0 ? 1.0 : matRoughness),
+        matEmissive,
+        matEmissiveIntensity,
+        matWireframe,
+        matOpacity,
+        useNativePBR,
+        fogColor,
+        fogDensity,
+        showBuyButton,
+        buyButtonColor,
+        mediaPlaying,
+        meshOverrides: {},
+        trackingConfig: {
+          filterMinCF: Number(trackingFilterMinCF),
+          filterBeta: Number(trackingFilterBeta),
+          missTolerance: Number(trackingMissTolerance),
+          warmupTolerance: Number(trackingWarmupTolerance),
+          maxTrack: Number(trackingMaxTrack),
+          targetIndex: Number(trackingTargetIndex),
+          showStats: Boolean(trackingShowStats),
+          uiLoading: trackingUiLoading,
+          uiScanning: trackingUiScanning,
+          uiError: trackingUiError
+        },
+        portalConfig: {
+          enabled: Boolean(portalEnabled),
+          preset: portalPreset,
+          shape: portalShape,
+          width: Number(portalWidth),
+          height: Number(portalHeight),
+          radius: Number(portalRadius),
+          depth: Number(portalDepth),
+          frameColor: portalFrameColor,
+          frameWidth: Number(portalFrameWidth),
+          frameEmissive: portalFrameEmissive,
+          frameEmissiveIntensity: Number(portalFrameEmissiveIntensity),
+          frameGlow: Boolean(portalFrameGlow),
+          glassTint: portalGlassTint,
+          glassOpacity: Number(portalGlassOpacity),
+          posX: Number(portalPosX),
+          posY: Number(portalPosY),
+          posZ: Number(portalPosZ),
+          rotX: Number(portalRotX),
+          rotY: Number(portalRotY),
+          rotZ: Number(portalRotZ),
+          interiorType: portalInteriorType,
+          skyboxUrl: (finalPortalSkyboxUrl && !finalPortalSkyboxUrl.startsWith('blob:')) ? finalPortalSkyboxUrl : '',
+          skyboxScale: Number(portalSkyboxScale),
+          skyboxPosX: Number(portalSkyboxPosX),
+          skyboxPosY: Number(portalSkyboxPosY),
+          skyboxPosZ: Number(portalSkyboxPosZ),
+          skyboxRotX: Number(portalSkyboxRotX),
+          skyboxRotY: Number(portalSkyboxRotY),
+          skyboxRotZ: Number(portalSkyboxRotZ),
+          skyboxBlur: Number(portalSkyboxBlur),
+          interiorColor: portalInteriorColor,
+          wallColor: portalWallColor,
+          floorColor: portalFloorColor,
+          gridColor: portalGridColor,
+          interiorLightColor: portalLightColor,
+          interiorLightIntensity: Number(portalLightIntensity),
+          interiorModelType: portalModelType,
+          artifactType: portalArtifactType,
+          customModelUrl: (finalPortalGlbUrl && !finalPortalGlbUrl.startsWith('blob:')) ? finalPortalGlbUrl : '',
+          modelScale: Number(portalModelScale),
+          modelPosX: Number(portalModelPosX),
+          modelPosY: Number(portalModelPosY),
+          modelPosZ: Number(portalModelPosZ),
+          modelRotSpeed: Number(portalModelRotSpeed),
+          modelRotX: Number(portalModelRotX),
+          modelRotY: Number(portalModelRotY),
+          modelRotZ: Number(portalModelRotZ),
+          showVideo: Boolean(portalShowVideo),
+          videoUrl: portalVideoUrl || safeVideoUrl,
+          videoScale: Number(portalVideoScale),
+          videoPosY: Number(portalVideoPosY),
+          videoPosZ: Number(portalVideoPosZ),
+          particles: portalParticles,
+          particleCount: Number(portalParticleCount),
+          particleColor: portalParticleColor,
+          particleSpeed: Number(portalParticleSpeed),
+          floatingText: portalFloatingText,
+          textColor: portalTextColor,
+          textScale: Number(portalTextScale),
+          textPosY: Number(portalTextPosY),
+          textPosZ: Number(portalTextPosZ),
+          hideOutsideModel: Boolean(portalHideOutsideModel)
+        },
+        particleConfig: {
+          enabled: Boolean(particleSystemEnabled),
+          preset: particlePreset,
+          count: Number(particleCount),
+          size: Number(particleSize),
+          color: particleColor,
+          colorSecondary: particleColorSecondary,
+          opacity: Number(particleOpacity),
+          blending: particleBlending,
+          speed: Number(particleSpeed),
+          spreadX: Number(particleSpreadX),
+          spreadY: Number(particleSpreadY),
+          spreadZ: Number(particleSpreadZ),
+          direction: particleDirection,
+          shape: particleShape,
+          posX: Number(particlePosX),
+          posY: Number(particlePosY),
+          posZ: Number(particlePosZ),
+          rotationSpeed: Number(particleRotationSpeed),
+          twinkle: Boolean(particleTwinkle)
+        },
+        websiteLayer: {
+          enabled: Boolean(websiteEnabled),
+          url: websiteUrl,
+          width: Number(websiteWidth),
+          height: Number(websiteHeight),
+          aspectRatio: websiteAspectRatio,
+          resolution: websiteResolution,
+          interactive: Boolean(websiteInteractive),
+          opacity: Number(websiteOpacity),
+          frameStyle: websiteFrameStyle,
+          frameColor: websiteFrameColor,
+          frameGlow: Boolean(websiteFrameGlow),
+          curved: Boolean(websiteCurved),
+          curveRadius: Number(websiteCurveRadius),
+          billboard: Boolean(websiteBillboard),
+          posX: Number(websitePosX),
+          posY: Number(websitePosY),
+          posZ: Number(websitePosZ),
+          rotX: Number(websiteRotX),
+          rotY: Number(websiteRotY),
+          rotZ: Number(websiteRotZ),
+          scale: Number(websiteScale),
+          showAddressBar: Boolean(websiteShowAddressBar)
+        },
+        markerConfig: {
+          visible: Boolean(markerVisible),
+          opacity: Number(markerOpacity),
+          width: Number(markerWidth),
+          aspectRatio: Number(markerAspectRatio),
+          imageUrl: finalMarkerDownloadUrl,
+          widthPx: markerInfo?.width,
+          heightPx: markerInfo?.height,
+          source: 'storage_marker_image',
+          mindFilePath
+        },
+        additionalGeometries: [],
+        customModels: [],
+        custom3DTexts: [],
+        customLights: customLights || [],
+        scatterLayers: [],
+        sceneGroups: [],
+        ...(finalThumbnailUrl ? { thumbnailUrl: finalThumbnailUrl, thumbnail_url: finalThumbnailUrl } : {}),
+        updatedAt: nowIso
+      };
+
+      const sharedSceneFields = {
+        name,
+        description: description || '',
+        price: Number.isFinite(Number(price)) ? Number(price) : 0,
+        merchant_id: cleanMerchantId,
+        gltf_file_path: glbStoragePath,
+        gltf_url: glbDownloadUrl,
+        modelUrl: glbDownloadUrl,
+        mind_file_path: mindFilePath,
+        ...(mindDownloadUrl ? { mind_file_url: mindDownloadUrl, mind_url: mindDownloadUrl } : {}),
+        marker_file_path: markerStoragePath,
+        markerImageUrl: finalMarkerDownloadUrl,
+        video_file_path: videoFilePath,
+        video_url: safeVideoUrl,
+        videoUrl: safeVideoUrl,
+        ...(finalThumbnailUrl ? { thumbnailUrl: finalThumbnailUrl, thumbnail_url: finalThumbnailUrl } : {}),
+        ar_config: arConfigPayload,
+        portalConfig: arConfigPayload.portalConfig,
+        particleConfig: arConfigPayload.particleConfig,
+        websiteLayer: arConfigPayload.websiteLayer,
+        additionalGeometries: [],
+        customModels: [],
+        custom3DTexts: [],
+        customLights: customLights || [],
+        scatterLayers: [],
+        sceneGroups: [],
+        ambientColor,
+        ambientIntensity,
+        dir1Color,
+        dir1Intensity,
+        dir1Position,
+        dir2Color,
+        dir2Intensity,
+        dir2Position,
+        rimColor,
+        rimIntensity,
+        rimPosition,
+        modelScale: 1,
+        modelPosition: '0 0 0',
+        modelRotation: '0 0 0',
+        modelRotX: 0,
+        modelRotY: 0,
+        modelRotZ: 0,
+        modelPosX: 0,
+        modelPosY: 0,
+        modelPosZ: 0,
+        modelRotSpeed,
+        meshOverrides: {},
+        createdAt: nowIso,
+        updatedAt: nowIso
+      };
+
+      const sanitizedAssetDoc = sanitizeForFirestore({
+        ...sharedSceneFields,
+        revenue_tier: 'STANDARD'
+      });
+      const sanitizedBatchDoc = sanitizeForFirestore({
+        ...sharedSceneFields,
+        asset_id: cleanId
+      });
+
+      const firestoreBatch = writeBatch(db);
+      firestoreBatch.set(doc(db, 'assets', cleanId), sanitizedAssetDoc, { merge: true });
+      firestoreBatch.set(doc(db, 'batches', cleanId), sanitizedBatchDoc, { merge: true });
+      await safeCommitBatch(firestoreBatch);
+
+      try {
+        localStorage.setItem('starwear_live_preview_config_' + cleanId, JSON.stringify(arConfigPayload));
+        localStorage.setItem('starwear_live_preview_config_last', JSON.stringify(arConfigPayload));
+      } catch (storageErr) {
+        console.warn('[ARTest] localStorage sync warning:', storageErr);
+      }
+
+      // Bind current ARTest studio session to the newly created batch & unified scene .glb
+      const freshSceneUrl = withCacheBuster(glbDownloadUrl, Date.now());
+      clearSelectionAndDetachGizmo();
+      setBatchId(cleanId);
+      setLocalGlbUrl('');
+      setLocalGlbName(sceneGlbFileName);
+      setModelPosX(0);
+      setModelPosY(0);
+      setModelPosZ(0);
+      setModelScale(1);
+      setModelRotX(0);
+      setModelRotY(0);
+      setModelRotZ(0);
+      setAdditionalGeometries([]);
+      setCustom3DTexts([]);
+      setCustomModels([]);
+      setScatterEnabled(false);
+      setScatterLayers([]);
+      setSelectedScatterLayerId(null);
+      setDeletedMeshNames([]);
+      if (remappedVideoTargetMesh !== videoTargetMesh) {
+        setVideoTargetMesh(remappedVideoTargetMesh);
+      }
+
+      stagedMarkerFileRef.current = null;
+      setMarkerImageUrl(finalMarkerDownloadUrl);
+      if (typeof window !== 'undefined') {
+        window.__starwear_active_marker_image = finalMarkerDownloadUrl;
+      }
+      setMarkerInfo((prev) => ({
+        ...(prev || {}),
+        source: 'storage_marker_image',
+        mindFilePath,
+        storagePath: markerStoragePath
+      }));
+
+      setArData({
+        id: cleanId,
+        asset_id: cleanId,
+        name,
+        description: description || '',
+        price: Number.isFinite(Number(price)) ? Number(price) : 0,
+        merchant_id: cleanMerchantId,
+        gltf_file_path: glbStoragePath,
+        gltfPath: freshSceneUrl,
+        modelUrl: freshSceneUrl,
+        mind_file_path: mindFilePath,
+        marker_file_path: markerStoragePath,
+        markerImageUrl: finalMarkerDownloadUrl,
+        thumbnailUrl: finalThumbnailUrl,
+        thumbnail_url: finalThumbnailUrl,
+        videoUrl: safeVideoUrl,
+        video_url: safeVideoUrl,
+        video_file_path: videoFilePath,
+        config: arConfigPayload,
+        customModels: [],
+        arExperience: {
+          thumbnailUrl: finalThumbnailUrl,
+          thumbnail_url: finalThumbnailUrl,
+          modelUrl: freshSceneUrl,
+          videoUrl: safeVideoUrl,
+          config: arConfigPayload,
+          customModels: []
+        },
+        trackingConfig: {
+          mindUrl: mindDownloadUrl
+        }
+      });
+
+      setSelectedVideoFile(null);
+      setSelectedGlbFile(null);
+      setSelectedPortalSkyboxFile(null);
+      setSelectedPortalGlbFile(null);
+
+      setIsSaveAsModalOpen(false);
+      setLastCreatedInventoryId(cleanId);
+      setSaveSuccessMsg(`Added "${name}" (${cleanId}) + MindAR marker & .glb scene to Admin Inventory!`);
+      setTimeout(() => setSaveSuccessMsg(''), 10000);
+    } catch (err) {
+      console.error('[ARTest] Save As Inventory error:', err);
+      alert('Failed to add scene & marker to inventory: ' + (err?.message || err));
+    } finally {
+      setSavingConfig(false);
+      setSaveAsProgressStep(0);
+      setSaveAsProgressMsg('');
+      setUploadProgress('');
+      isSavingConfigRef.current = false;
+    }
+  };
+
   // Dedicated one-click handler to capture current live camera viewport angle as 3D asset thumbnail
   const handleCaptureThumbnail = async () => {
     if (editingTemplate) {
@@ -8783,68 +9886,145 @@ const ARTest = () => {
             </div>
           </form>
 
-          {/* Quick Local GLB Loader & Save Action */}
-          <div className="mt-2.5 pt-2.5 border-t border-neutral-800/80 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setIsArApiModalOpen(true)}
-              className="px-2.5 py-1.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-bold transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-emerald-950/40 cursor-pointer shrink-0"
-              title="Open AR-Test Scene Constructor API (Paste Google Gemini vision outputs or JSON to build 3D scenes)"
-            >
-              <span className="material-symbols-outlined text-[15px]">auto_awesome</span>
-              <span>AI Scene API</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsAddModelModalOpen(true)}
-              className="px-2.5 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-purple-950/40 cursor-pointer shrink-0"
-              title="Add External 3D Model (.glb / .gltf from local file, remote URL, or 3D library)"
-            >
-              <span className="material-symbols-outlined text-[15px]">view_in_ar</span>
-              <span>+ Add Model</span>
-            </button>
-
-            <label className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 hover:border-neutral-500 rounded text-xs font-medium cursor-pointer transition-colors text-neutral-200 truncate">
-              <span className="material-symbols-outlined text-[15px] text-indigo-400">folder_open</span>
-              <span className="truncate">{localGlbName ? `3D: ${localGlbName}` : 'Test Local GLB Model'}</span>
-              <input type="file" accept=".glb,.gltf" onChange={pickLocalModel} className="hidden" />
-            </label>
-
-            <button
-              type="button"
-              onClick={handleCaptureThumbnail}
-              disabled={savingConfig || (!editingTemplate && !batchId.trim())}
-              className="px-2.5 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-cyan-950/40 cursor-pointer"
-              title={editingTemplate ? `Capture & Update Template Thumbnail Preview` : "Capture & Save 3D Thumbnail from Current View"}
-            >
-              <span className="material-symbols-outlined text-[15px]">photo_camera</span>
-              <span>Snap</span>
-            </button>
-
-            {editingTemplate ? (
+          {/* Quick Creation, Import & Save Actions */}
+          <div className="mt-2.5 pt-2.5 border-t border-neutral-800/80 flex flex-col gap-2">
+            {/* Row 1: Studio Creation & Import Tools */}
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={handleSaveTemplate}
-                disabled={savingConfig}
-                className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-indigo-600 hover:from-amber-400 hover:to-indigo-500 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-indigo-950/40 cursor-pointer"
-                title={`Save all design updates directly back to template "${editingTemplate.cleanName || editingTemplate.name}"`}
+                onClick={() => setIsArApiModalOpen(true)}
+                className="flex-1 px-3 py-1.5 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-bold transition-all rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/40 cursor-pointer"
+                title="Open AR-Test Scene Constructor API (Paste Google Gemini vision outputs or JSON to build 3D scenes)"
               >
-                <span className="material-symbols-outlined text-sm">cloud_upload</span>
-                <span>{savingConfig ? 'Saving...' : 'Save Template'}</span>
+                <span className="material-symbols-outlined text-[15px]">auto_awesome</span>
+                <span>AI Scene API</span>
               </button>
-            ) : (
+
               <button
                 type="button"
-                onClick={handleSaveConfig}
-                disabled={savingConfig || !batchId.trim()}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded text-xs flex items-center gap-1 shadow-md shadow-emerald-950/40"
-                title="Save Configuration to Firebase Batch"
+                onClick={() => setIsAddModelModalOpen(true)}
+                className="flex-1 px-3 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold transition-all rounded-lg text-xs flex items-center justify-center gap-1.5 shadow-md shadow-purple-950/40 cursor-pointer"
+                title="Add External 3D Model (.glb / .gltf from local file, remote URL, or 3D library)"
               >
-                <span className="material-symbols-outlined text-sm">save</span>
-                <span>{savingConfig ? 'Saving...' : 'Save'}</span>
+                <span className="material-symbols-outlined text-[15px]">view_in_ar</span>
+                <span>+ Add Model</span>
               </button>
-            )}
+            </div>
+
+            {/* Row 2: Local File Testing, Snapshot & Save */}
+            <div className="flex items-center gap-2">
+              <label className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 hover:border-neutral-500 rounded-lg text-xs font-medium cursor-pointer transition-colors text-neutral-200 truncate min-w-0">
+                <span className="material-symbols-outlined text-[15px] text-indigo-400 shrink-0">folder_open</span>
+                <span className="truncate">{localGlbName ? `3D: ${localGlbName}` : 'Test Local GLB'}</span>
+                <input type="file" accept=".glb,.gltf" onChange={pickLocalModel} className="hidden" />
+              </label>
+
+              <button
+                type="button"
+                onClick={handleCaptureThumbnail}
+                disabled={savingConfig || (!editingTemplate && !batchId.trim())}
+                className="px-2.5 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded-lg text-xs flex items-center gap-1 shadow-md shadow-cyan-950/40 cursor-pointer shrink-0"
+                title={editingTemplate ? `Capture & Update Template Thumbnail Preview` : "Capture & Save 3D Thumbnail from Current View"}
+              >
+                <span className="material-symbols-outlined text-[15px]">photo_camera</span>
+                <span>Snap</span>
+              </button>
+
+              {editingTemplate ? (
+                <button
+                  type="button"
+                  onClick={handleSaveTemplate}
+                  disabled={savingConfig}
+                  className="px-3 py-1.5 bg-gradient-to-r from-amber-500 to-indigo-600 hover:from-amber-400 hover:to-indigo-500 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded-lg text-xs flex items-center gap-1 shadow-md shadow-indigo-950/40 cursor-pointer shrink-0"
+                  title={`Save all design updates directly back to template "${editingTemplate.cleanName || editingTemplate.name}"`}
+                >
+                  <span className="material-symbols-outlined text-sm">cloud_upload</span>
+                  <span>{savingConfig ? 'Saving...' : 'Save'}</span>
+                </button>
+              ) : (
+                <div ref={saveMenuRef} className="relative flex items-stretch shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSaveMenuOpen(false);
+                      if (batchId.trim()) {
+                        handleSaveConfig();
+                      } else {
+                        setIsSaveAsModalOpen(true);
+                      }
+                    }}
+                    disabled={savingConfig}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded-l-lg text-xs flex items-center gap-1 shadow-md shadow-emerald-950/40 cursor-pointer"
+                    title={
+                      batchId.trim()
+                        ? `Save updates to active batch "${batchId.trim()}"`
+                        : 'Save As New Inventory Asset & Batch (Compiles MindAR marker + exports 3D scene .glb)'
+                    }
+                  >
+                    <span className="material-symbols-outlined text-sm">
+                      {batchId.trim() ? 'save' : 'save_as'}
+                    </span>
+                    <span>{savingConfig ? 'Saving...' : batchId.trim() ? 'Save' : 'Save As'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingConfig}
+                    onClick={() => setSaveMenuOpen((prev) => !prev)}
+                    aria-label="More save options"
+                    aria-expanded={saveMenuOpen}
+                    className="px-1.5 py-1.5 bg-emerald-700 hover:bg-emerald-500 border-l border-emerald-400/40 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded-r-lg text-xs flex items-center justify-center shadow-md shadow-emerald-950/40 cursor-pointer"
+                    title="Choose Save or Save As (Add to Inventory)"
+                  >
+                    <span className="material-symbols-outlined text-sm">expand_more</span>
+                  </button>
+
+                  {saveMenuOpen && (
+                    <div className="absolute right-0 top-full mt-1.5 w-64 rounded-xl bg-neutral-950 border border-neutral-700 shadow-2xl shadow-black/90 p-1.5 z-50 space-y-1">
+                      <button
+                        type="button"
+                        disabled={!batchId.trim() || savingConfig}
+                        onClick={() => {
+                          setSaveMenuOpen(false);
+                          handleSaveConfig();
+                        }}
+                        className="w-full px-2.5 py-2 rounded-lg text-left hover:bg-neutral-800/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-start gap-2 cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-sm text-emerald-400 mt-0.5">save</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold text-white">Save</div>
+                          <div className="text-[10px] text-neutral-400 truncate">
+                            {batchId.trim() ? `Update loaded batch "${batchId.trim()}"` : 'Load a batch first to overwrite'}
+                          </div>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={savingConfig}
+                        onClick={() => {
+                          setSaveMenuOpen(false);
+                          setIsSaveAsModalOpen(true);
+                        }}
+                        className="w-full px-2.5 py-2 rounded-lg text-left bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-500/30 transition-colors flex items-start gap-2 cursor-pointer"
+                      >
+                        <span className="material-symbols-outlined text-sm text-emerald-300 mt-0.5">save_as</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold text-emerald-200 flex items-center justify-between gap-1">
+                            <span>Save As...</span>
+                            <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                              + Inventory
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-neutral-300 leading-snug mt-0.5">
+                            Compile marker with MindAR, export 3D scene as .glb & add batch to Admin Inventory
+                          </div>
+                        </div>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Active 3D Thumbnail Chip Preview */}
@@ -8892,9 +10072,33 @@ const ARTest = () => {
 
           {/* Success Banner */}
           {saveSuccessMsg && (
-            <div className="mt-2 p-2 bg-emerald-950/60 border border-emerald-500/50 rounded text-emerald-300 text-[11px] font-mono flex items-center gap-1.5 animate-fade-in">
-              <span className="material-symbols-outlined text-sm text-emerald-400">check_circle</span>
-              <span>{saveSuccessMsg}</span>
+            <div className="mt-2 p-2 bg-emerald-950/60 border border-emerald-500/50 rounded text-emerald-300 text-[11px] font-mono space-y-1.5 animate-fade-in">
+              <div className="flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-sm text-emerald-400">check_circle</span>
+                <span>{saveSuccessMsg}</span>
+              </div>
+              {lastCreatedInventoryId && (
+                <div className="flex items-center gap-2 pt-1 border-t border-emerald-500/20">
+                  <a
+                    href="/admin/inventory"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-[10px] text-emerald-200 font-bold flex items-center gap-1"
+                  >
+                    <span className="material-symbols-outlined text-xs">inventory_2</span>
+                    View in Inventory
+                  </a>
+                  <a
+                    href={`/ar/${lastCreatedInventoryId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2 py-0.5 rounded bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-400/40 text-[10px] text-indigo-200 font-bold flex items-center gap-1"
+                  >
+                    <span className="material-symbols-outlined text-xs">view_in_ar</span>
+                    Launch Live AR
+                  </a>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -8908,10 +10112,10 @@ const ARTest = () => {
 
         {/* Dynamic Multi-Mesh Target Selector Banner */}
         <div className="px-4 py-2.5 bg-neutral-900/90 border-b border-neutral-800 flex flex-col gap-1.5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-400">Active Target:</span>
-              <span className={`text-xs font-bold px-2 py-0.5 rounded flex items-center gap-1 border ${selectedTargetType === 'mesh'
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 min-w-0 flex-1">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-400 shrink-0">Active Target:</span>
+              <span className={`text-xs font-bold px-2 py-0.5 rounded flex items-center gap-1 border truncate ${selectedTargetType === 'mesh'
                 ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40 shadow-sm'
                 : selectedTargetType === 'customModel'
                   ? 'bg-purple-500/20 text-purple-300 border-purple-500/40 shadow-sm'
@@ -8925,17 +10129,17 @@ const ARTest = () => {
                           ? 'bg-emerald-950/70 text-emerald-300 border-emerald-500/50 shadow-sm ring-1 ring-emerald-500/20'
                           : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                 }`}>
-                <span className="material-symbols-outlined text-xs">
+                <span className="material-symbols-outlined text-xs shrink-0">
                   {currentSelectedObjectInfo?.icon || 'language'}
                 </span>
-                <span className="truncate max-w-[170px]">
+                <span className="truncate max-w-[150px]">
                   {currentSelectedObjectInfo?.name || 'Entire 3D Model (Root)'}
                 </span>
               </span>
             </div>
 
             {selectedTargetType !== 'model' && (
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center gap-1.5 shrink-0">
                 {selectedMesh && (
                   <button
                     type="button"
@@ -8975,12 +10179,12 @@ const ARTest = () => {
         </div>
 
         {/* Tab Navigation Strip */}
-        <div className="flex border-b border-neutral-800 bg-neutral-900/60 p-1 gap-1 text-xs select-none control-tabs">
+        <div className="flex items-center gap-1.5 p-1.5 border-b border-neutral-800 bg-neutral-900/80 overflow-x-auto scrollbar-thin scrollbar-thumb-neutral-700/60 select-none scroll-smooth shrink-0">
           <button
             type="button"
             onClick={() => setActiveTab('transform')}
-            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'transform'
-              ? 'bg-neutral-800 text-white font-bold shadow border border-neutral-700'
+            className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'transform'
+              ? 'bg-neutral-800 text-white shadow border border-neutral-700'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
@@ -8990,8 +10194,8 @@ const ARTest = () => {
           <button
             type="button"
             onClick={() => setActiveTab('hierarchy')}
-            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'hierarchy'
-              ? 'bg-neutral-800 text-white font-bold shadow border border-neutral-700'
+            className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'hierarchy'
+              ? 'bg-neutral-800 text-white shadow border border-neutral-700'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
@@ -9001,15 +10205,15 @@ const ARTest = () => {
           <button
             type="button"
             onClick={() => setActiveTab('shapes')}
-            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'shapes'
-              ? 'bg-neutral-800 text-teal-300 font-bold shadow border border-teal-500/50'
+            className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'shapes'
+              ? 'bg-neutral-800 text-teal-300 shadow border border-teal-500/50'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
             <span className="material-symbols-outlined text-sm text-teal-400">deployed_code</span>
             <span>Shapes</span>
             {additionalGeometries.length > 0 && (
-              <span className="text-[10px] bg-teal-500/20 text-teal-300 px-1 py-0.2 rounded-full font-mono ml-0.5">
+              <span className="text-[10px] bg-teal-500/20 text-teal-300 px-1.5 py-0.2 rounded-full font-mono ml-0.5">
                 {additionalGeometries.length}
               </span>
             )}
@@ -9017,15 +10221,15 @@ const ARTest = () => {
           <button
             type="button"
             onClick={() => setActiveTab('text3d')}
-            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'text3d'
-              ? 'bg-neutral-800 text-pink-300 font-bold shadow border border-pink-500/50'
+            className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'text3d'
+              ? 'bg-neutral-800 text-pink-300 shadow border border-pink-500/50'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
             <span className="material-symbols-outlined text-sm text-pink-400">title</span>
             <span>3D Text</span>
             {custom3DTexts.length > 0 && (
-              <span className="text-[10px] bg-pink-500/20 text-pink-300 px-1 py-0.2 rounded-full font-mono ml-0.5">
+              <span className="text-[10px] bg-pink-500/20 text-pink-300 px-1.5 py-0.2 rounded-full font-mono ml-0.5">
                 {custom3DTexts.length}
               </span>
             )}
@@ -9033,15 +10237,15 @@ const ARTest = () => {
           <button
             type="button"
             onClick={() => setActiveTab('lighting')}
-            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'lighting'
-              ? 'bg-neutral-800 text-amber-300 font-bold shadow border border-amber-500/50'
+            className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'lighting'
+              ? 'bg-neutral-800 text-amber-300 shadow border border-amber-500/50'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
             <span className="material-symbols-outlined text-sm text-amber-400">lightbulb</span>
             <span>Lighting</span>
             {customLights.length > 0 && (
-              <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1 py-0.2 rounded-full font-mono ml-0.5">
+              <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.2 rounded-full font-mono ml-0.5">
                 {customLights.length}
               </span>
             )}
@@ -9049,8 +10253,8 @@ const ARTest = () => {
           <button
             type="button"
             onClick={() => setActiveTab('materials')}
-            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'materials'
-              ? 'bg-neutral-800 text-white font-bold shadow border border-neutral-700'
+            className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'materials'
+              ? 'bg-neutral-800 text-white shadow border border-neutral-700'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
@@ -9060,8 +10264,8 @@ const ARTest = () => {
           <button
             type="button"
             onClick={() => setActiveTab('scene')}
-            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'scene'
-              ? 'bg-neutral-800 text-white font-bold shadow border border-neutral-700'
+            className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'scene'
+              ? 'bg-neutral-800 text-white shadow border border-neutral-700'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
@@ -9071,8 +10275,8 @@ const ARTest = () => {
           <button
             type="button"
             onClick={() => setActiveTab('portal')}
-            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'portal'
-              ? 'bg-neutral-800 text-sky-300 font-bold shadow border border-sky-500/50'
+            className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'portal'
+              ? 'bg-neutral-800 text-sky-300 shadow border border-sky-500/50'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
@@ -9085,8 +10289,8 @@ const ARTest = () => {
           <button
             type="button"
             onClick={() => setActiveTab('particles')}
-            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'particles'
-              ? 'bg-neutral-800 text-amber-300 font-bold shadow border border-amber-500/50'
+            className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'particles'
+              ? 'bg-neutral-800 text-amber-300 shadow border border-amber-500/50'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
@@ -9099,8 +10303,8 @@ const ARTest = () => {
           <button
             type="button"
             onClick={() => setActiveTab('scatter')}
-            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'scatter'
-              ? 'bg-neutral-800 text-emerald-300 font-bold shadow border border-emerald-500/50'
+            className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'scatter'
+              ? 'bg-neutral-800 text-emerald-300 shadow border border-emerald-500/50'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
@@ -9113,8 +10317,8 @@ const ARTest = () => {
           <button
             type="button"
             onClick={() => setActiveTab('website')}
-            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'website'
-              ? 'bg-neutral-800 text-indigo-300 font-bold shadow border border-indigo-500/50'
+            className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'website'
+              ? 'bg-neutral-800 text-indigo-300 shadow border border-indigo-500/50'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
@@ -9127,8 +10331,8 @@ const ARTest = () => {
           <button
             type="button"
             onClick={() => setActiveTab('tracking')}
-            className={`flex-1 py-1.5 px-2 rounded font-medium transition-all flex items-center justify-center gap-1 ${activeTab === 'tracking'
-              ? 'bg-neutral-800 text-cyan-300 font-bold shadow border border-cyan-500/50'
+            className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'tracking'
+              ? 'bg-neutral-800 text-cyan-300 shadow border border-cyan-500/50'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
@@ -9407,51 +10611,53 @@ const ARTest = () => {
           {/* ========================================================================= */}
           {activeTab === 'hierarchy' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between border-b border-neutral-800 pb-2">
-                <div>
+              <div className="flex flex-col gap-2 border-b border-neutral-800 pb-2.5">
+                <div className="flex items-center justify-between">
                   <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-purple-400">view_in_ar</span>
                     Detected 3D Objects ({meshList.length})
                   </h2>
-                  <p className="text-[10px] text-neutral-500">Click any mesh below or directly inside the 3D scene to inspect</p>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  {deletedMeshNames.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={handleRestoreAllMeshes}
-                      className="px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded text-[10px] font-mono flex items-center gap-1 transition-colors cursor-pointer"
-                      title="Restore all deleted objects"
-                    >
-                      <span className="material-symbols-outlined text-xs">undo</span> Restore ({deletedMeshNames.length})
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setIsAddModelModalOpen(true)}
-                    className="px-2 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shadow-xs border border-purple-500 transition-colors"
-                    title="Add External 3D Model (.glb / .gltf from file, URL, or sample library)"
-                  >
-                    <span className="material-symbols-outlined text-xs">view_in_ar</span>
-                    <span>+ Model</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setGeometryModalOpen(true)}
-                    className="px-2 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shadow-xs border border-sky-500 transition-colors"
-                    title="Add 3D Primitives (Cube, Sphere, Cylinder, Torus, etc.)"
-                  >
-                    <span className="material-symbols-outlined text-xs">deployed_code</span>
-                    <span>+ Shape</span>
-                  </button>
                   <button
                     type="button"
                     onClick={scanMeshes}
-                    className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 rounded text-[10px] font-medium text-neutral-300 flex items-center gap-1 cursor-pointer"
+                    className="px-2 py-0.5 bg-neutral-800 hover:bg-neutral-700 rounded text-[10px] font-medium text-neutral-300 flex items-center gap-1 cursor-pointer transition-colors"
                     title="Rescan model meshes"
                   >
                     <span className="material-symbols-outlined text-xs">refresh</span> Rescan
                   </button>
+                </div>
+                <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                  <p className="text-[10px] text-neutral-500">Click mesh below or in 3D scene to inspect</p>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {deletedMeshNames.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleRestoreAllMeshes}
+                        className="px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded text-[10px] font-mono flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Restore all deleted objects"
+                      >
+                        <span className="material-symbols-outlined text-xs">undo</span> Restore ({deletedMeshNames.length})
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setIsAddModelModalOpen(true)}
+                      className="px-2 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shadow-xs border border-purple-500 transition-colors"
+                      title="Add External 3D Model (.glb / .gltf from file, URL, or sample library)"
+                    >
+                      <span className="material-symbols-outlined text-xs">view_in_ar</span>
+                      <span>+ Model</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGeometryModalOpen(true)}
+                      className="px-2 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shadow-xs border border-sky-500 transition-colors"
+                      title="Add 3D Primitives (Cube, Sphere, Cylinder, Torus, etc.)"
+                    >
+                      <span className="material-symbols-outlined text-xs">deployed_code</span>
+                      <span>+ Shape</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -10542,6 +11748,12 @@ const ARTest = () => {
                       const isSelected = selectedGeometryId === geom.id && selectedTargetType === 'geometry';
                       const isMultiSelected = selectedObjects.some((it) => it.type === 'geometry' && it.id === geom.id);
                       const geomGroup = sceneGroups.find((g) => g.itemIds.some((it) => it.type === 'geometry' && it.id === geom.id));
+                      const isGeomVideoTarget = Boolean(activeVideoUrl || customVideoUrl || arData?.videoUrl) && (
+                        videoTargetMesh === geom.id ||
+                        videoTargetMesh === geom.name ||
+                        videoTargetMesh === 'all-scene' ||
+                        (geomGroup && videoTargetMesh === geomGroup.id)
+                      );
                       return (
                         <div
                           key={geom.id}
@@ -10600,6 +11812,12 @@ const ARTest = () => {
                                     {geomGroup.name}
                                   </button>
                                 )}
+                                {isGeomVideoTarget && (
+                                  <span className="text-[8px] bg-red-500/30 text-red-300 border border-red-500/50 px-1 py-0.2 rounded font-mono font-bold flex items-center gap-0.5">
+                                    <span className="material-symbols-outlined text-[10px]">movie</span>
+                                    VIDEO
+                                  </span>
+                                )}
                               </div>
                               <span className="text-[9px] text-teal-400 font-mono capitalize">
                                 {geom.type}
@@ -10607,6 +11825,29 @@ const ARTest = () => {
                             </div>
                           </div>
                           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            {Boolean(activeVideoUrl || customVideoUrl || arData?.videoUrl) && !isGeomVideoTarget && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setVideoTargetMesh(geom.id);
+                                  snapVideoToLayer(geom.id);
+                                }}
+                                className="w-6 h-6 rounded flex items-center justify-center text-neutral-400 hover:text-indigo-300 hover:bg-indigo-950/60 transition-colors cursor-pointer"
+                                title={`Map active video to ${geom.name}`}
+                              >
+                                <span className="material-symbols-outlined text-xs">movie</span>
+                              </button>
+                            )}
+                            {isGeomVideoTarget && (
+                              <button
+                                type="button"
+                                onClick={handleRemoveVideoLayer}
+                                className="w-6 h-6 rounded flex items-center justify-center text-red-400 hover:text-red-200 hover:bg-red-950/60 transition-colors cursor-pointer"
+                                title={`Remove video texture layer from ${geom.name}`}
+                              >
+                                <span className="material-symbols-outlined text-xs">videocam_off</span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => handleExportShapeAsGLB(geom.id)}
@@ -10681,6 +11922,13 @@ const ARTest = () => {
                       const isSelected = selectedCustomModelId === model.id && selectedTargetType === 'customModel';
                       const isMultiSelected = selectedObjects.some((it) => it.type === 'customModel' && it.id === model.id);
                       const modelGroup = sceneGroups.find((g) => g.itemIds.some((it) => it.type === 'customModel' && it.id === model.id));
+                      const isModelVideoTarget = Boolean(activeVideoUrl || customVideoUrl || arData?.videoUrl) && (
+                        videoTargetMesh === model.id ||
+                        videoTargetMesh === model.name ||
+                        videoTargetMesh === 'all-scene' ||
+                        (typeof videoTargetMesh === 'string' && videoTargetMesh.startsWith(`${model.id}::`)) ||
+                        (modelGroup && videoTargetMesh === modelGroup.id)
+                      );
                       return (
                         <div
                           key={model.id}
@@ -10737,6 +11985,12 @@ const ARTest = () => {
                                     {modelGroup.name}
                                   </button>
                                 )}
+                                {isModelVideoTarget && (
+                                  <span className="text-[8px] bg-red-500/30 text-red-300 border border-red-500/50 px-1 py-0.2 rounded font-mono font-bold flex items-center gap-0.5">
+                                    <span className="material-symbols-outlined text-[10px]">movie</span>
+                                    VIDEO
+                                  </span>
+                                )}
                               </div>
                               <span className="text-[9px] text-purple-400 font-mono truncate block">
                                 {model.fileName || '3D Model'} • {model.scale || 1}x {model.autoRotate ? '• ⟳ Auto' : ''}
@@ -10744,6 +11998,29 @@ const ARTest = () => {
                             </div>
                           </div>
                           <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                            {Boolean(activeVideoUrl || customVideoUrl || arData?.videoUrl) && !isModelVideoTarget && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setVideoTargetMesh(model.id);
+                                  snapVideoToLayer(model.id);
+                                }}
+                                className="w-6 h-6 rounded flex items-center justify-center text-neutral-400 hover:text-indigo-300 hover:bg-indigo-950/60 transition-colors cursor-pointer"
+                                title={`Map active video to ${model.name}`}
+                              >
+                                <span className="material-symbols-outlined text-xs">movie</span>
+                              </button>
+                            )}
+                            {isModelVideoTarget && (
+                              <button
+                                type="button"
+                                onClick={handleRemoveVideoLayer}
+                                className="w-6 h-6 rounded flex items-center justify-center text-red-400 hover:text-red-200 hover:bg-red-950/60 transition-colors cursor-pointer"
+                                title={`Remove video texture layer from ${model.name}`}
+                              >
+                                <span className="material-symbols-outlined text-xs">videocam_off</span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => handleExportShapeAsGLB(model.id)}
@@ -11016,47 +12293,39 @@ const ARTest = () => {
           {activeTab === 'shapes' && (
             <div className="space-y-5">
               {/* Header with Quick Add Action */}
-              <div className="flex shape-interact items-center justify-between border-b border-neutral-800 pb-2">
-                <div>
+              <div className="flex flex-col gap-2.5 border-b border-neutral-800 pb-3">
+                <div className="flex items-center justify-between">
                   <h2 className="text-xs font-bold uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-teal-400">deployed_code</span>
                     3D Shapes & Geometries ({additionalGeometries.length})
                   </h2>
-                  <p className="text-[10px] text-neutral-500">
-                    Add primitive 3D geometries (Cube, Sphere, Cylinder, Torus, etc.) locked to your scene
-                  </p>
+                  <span className="text-[10px] text-neutral-500 font-mono">
+                    {additionalGeometries.length} In Scene
+                  </span>
                 </div>
-                <div className=" shape-interact-buttons flex items-center gap-2">
+                <p className="text-[10px] text-neutral-400 -mt-1">
+                  Add 3D primitives (Cube, Sphere, Cylinder, Plane, Torus) or sketch vector shapes directly in 3D
+                </p>
+
+                {/* Clean Action Grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 pt-1">
                   <button
                     type="button"
                     onClick={() => setFaceSketchStudioOpen(true)}
-                    className="px-2.5 py-1.5 bg-gradient-to-r from-teal-500 via-cyan-600 to-indigo-600 hover:opacity-95 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-teal-950/40 transition-all cursor-pointer"
+                    className="px-2 py-1.5 bg-gradient-to-r from-teal-500 via-cyan-600 to-indigo-600 hover:opacity-95 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1 shadow-md shadow-teal-950/40 transition-all cursor-pointer"
                     title="Draw a shape on any object face and extrude it into 3D (X)"
                   >
                     <span className="material-symbols-outlined text-sm">draw</span>
-                    <span>+ Draw on Face</span>
+                    <span>Draw on Face</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => setIsAddModelModalOpen(true)}
-                    className="px-2.5 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-purple-950/40 transition-all cursor-pointer"
-                    title="Add External 3D Model (.glb / .gltf from file, URL, or sample library)"
+                    onClick={() => setGeometryModalOpen(true)}
+                    className="px-2 py-1.5 bg-gradient-to-r from-teal-600 to-sky-600 hover:from-teal-500 hover:to-sky-500 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1 shadow-md shadow-teal-950/40 transition-all cursor-pointer"
+                    title="Add new 3D primitive geometry"
                   >
-                    <span className="material-symbols-outlined text-sm">view_in_ar</span>
-                    <span>+ Add Model</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditingVectorGeom(null);
-                      setVectorPenInitialMode('inflate');
-                      setVectorPenModalOpen(true);
-                    }}
-                    className="px-2.5 py-1.5 bg-gradient-to-r from-teal-500 via-emerald-600 to-cyan-600 hover:opacity-95 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-teal-950/40 transition-all cursor-pointer"
-                    title="Draw 2D vector silhouette and inflate into curved 3D volumetric geometry"
-                  >
-                    <span className="material-symbols-outlined text-sm">bubble_chart</span>
-                    <span>+ Inflate</span>
+                    <span className="material-symbols-outlined text-sm">add_box</span>
+                    <span>+ Add Shape</span>
                   </button>
                   <button
                     type="button"
@@ -11065,20 +12334,33 @@ const ARTest = () => {
                       setVectorPenInitialMode('extrude');
                       setVectorPenModalOpen(true);
                     }}
-                    className="px-2.5 py-1.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:opacity-95 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-purple-950/40 transition-all cursor-pointer"
+                    className="px-2 py-1.5 bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:opacity-95 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1 shadow-md shadow-purple-950/40 transition-all cursor-pointer"
                     title="Draw custom vector shape using Photoshop-style pen tool and extrude into 3D"
                   >
                     <span className="material-symbols-outlined text-sm">gesture</span>
-                    <span>+ Pen Tool</span>
+                    <span>Pen Extrude</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => setGeometryModalOpen(true)}
-                    className="px-3 py-1.5 bg-gradient-to-r from-teal-600 to-sky-600 hover:from-teal-500 hover:to-sky-500 text-white rounded text-xs font-bold flex items-center gap-1.5 shadow-md shadow-teal-950/40 transition-all cursor-pointer"
-                    title="Add new 3D primitive geometry"
+                    onClick={() => {
+                      setEditingVectorGeom(null);
+                      setVectorPenInitialMode('inflate');
+                      setVectorPenModalOpen(true);
+                    }}
+                    className="px-2 py-1.5 bg-gradient-to-r from-teal-500 via-emerald-600 to-cyan-600 hover:opacity-95 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1 shadow-md shadow-teal-950/40 transition-all cursor-pointer"
+                    title="Draw 2D vector silhouette and inflate into curved 3D volumetric geometry"
                   >
-                    <span className="material-symbols-outlined text-sm">add_box</span>
-                    <span>+ Add Shape</span>
+                    <span className="material-symbols-outlined text-sm">bubble_chart</span>
+                    <span>+ Inflate</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddModelModalOpen(true)}
+                    className="col-span-2 sm:col-span-1 px-2 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1 shadow-md shadow-purple-950/40 transition-all cursor-pointer"
+                    title="Add External 3D Model (.glb / .gltf from file, URL, or sample library)"
+                  >
+                    <span className="material-symbols-outlined text-sm">view_in_ar</span>
+                    <span>+ Add Model</span>
                   </button>
                 </div>
               </div>
@@ -11600,6 +12882,73 @@ const ARTest = () => {
                                         step={1}
                                         color="purple"
                                       />
+
+                                      {/* Dual-Tone Bevel Material Controls */}
+                                      <div className="p-2 rounded bg-neutral-900 border border-neutral-800 space-y-2 mt-2">
+                                        <div className="flex items-center justify-between">
+                                          <span className="text-[10px] font-bold text-neutral-300 uppercase tracking-wider flex items-center gap-1">
+                                            <span className="material-symbols-outlined text-xs text-purple-400">palette</span>
+                                            <span>Dual-Tone Bevel Material</span>
+                                          </span>
+                                          {(currentGeom.params?.bevelColor || currentGeom.bevelColor) && (
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                handleUpdateGeometryParam(currentGeom.id, 'bevelColor', null);
+                                                handleUpdateGeometry(currentGeom.id, { bevelColor: null });
+                                              }}
+                                              className="text-[9px] text-red-400 hover:text-red-300 cursor-pointer"
+                                            >
+                                              Clear
+                                            </button>
+                                          )}
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2 items-center">
+                                          <div className="space-y-1">
+                                            <span className="text-[10px] text-neutral-400 block">Bevel/Side Color</span>
+                                            <div className="flex items-center gap-1.5">
+                                              <input
+                                                type="color"
+                                                value={currentGeom.params?.bevelColor || currentGeom.bevelColor || '#e2e8f0'}
+                                                onChange={(e) => {
+                                                  handleUpdateGeometryParam(currentGeom.id, 'bevelColor', e.target.value);
+                                                  handleUpdateGeometry(currentGeom.id, { bevelColor: e.target.value });
+                                                }}
+                                                className="w-7 h-6 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                                              />
+                                              <span className="text-[10px] font-mono text-neutral-300 uppercase">
+                                                {currentGeom.params?.bevelColor || currentGeom.bevelColor || '#e2e8f0'}
+                                              </span>
+                                            </div>
+                                          </div>
+                                          <div>
+                                            <NumberSliderInput
+                                              label="Bevel Metal"
+                                              value={currentGeom.params?.bevelMetalness ?? currentGeom.bevelMetalness ?? 0.95}
+                                              onChange={(val) => {
+                                                handleUpdateGeometryParam(currentGeom.id, 'bevelMetalness', val);
+                                                handleUpdateGeometry(currentGeom.id, { bevelMetalness: val });
+                                              }}
+                                              min={0.0}
+                                              max={1.0}
+                                              step={0.05}
+                                              color="purple"
+                                            />
+                                          </div>
+                                        </div>
+                                        <NumberSliderInput
+                                          label="Bevel Roughness"
+                                          value={currentGeom.params?.bevelRoughness ?? currentGeom.bevelRoughness ?? 0.1}
+                                          onChange={(val) => {
+                                            handleUpdateGeometryParam(currentGeom.id, 'bevelRoughness', val);
+                                            handleUpdateGeometry(currentGeom.id, { bevelRoughness: val });
+                                          }}
+                                          min={0.0}
+                                          max={1.0}
+                                          step={0.05}
+                                          color="purple"
+                                        />
+                                      </div>
                                     </div>
                                   )}
 
@@ -12143,11 +13492,10 @@ const ARTest = () => {
                                             textureRepeatY: rep
                                           })
                                         }
-                                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${
-                                          (currentGeom.textureRepeatX ?? 1) === rep && (currentGeom.textureRepeatY ?? 1) === rep
-                                            ? 'bg-teal-500 text-white shadow-sm'
-                                            : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-400'
-                                        }`}
+                                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold transition-colors cursor-pointer ${(currentGeom.textureRepeatX ?? 1) === rep && (currentGeom.textureRepeatY ?? 1) === rep
+                                          ? 'bg-teal-500 text-white shadow-sm'
+                                          : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-400'
+                                          }`}
                                       >
                                         {rep}x
                                       </button>
@@ -12188,22 +13536,22 @@ const ARTest = () => {
                                     (currentGeom.textureRotation ?? 0) !== 0 ||
                                     currentGeom.textureFlipX ||
                                     currentGeom.textureFlipY) && (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleUpdateGeometry(currentGeom.id, {
-                                          textureOffsetX: 0,
-                                          textureOffsetY: 0,
-                                          textureRotation: 0,
-                                          textureFlipX: false,
-                                          textureFlipY: false
-                                        })
-                                      }
-                                      className="text-[10px] text-teal-400 hover:underline cursor-pointer"
-                                    >
-                                      Reset UVs
-                                    </button>
-                                  )}
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleUpdateGeometry(currentGeom.id, {
+                                            textureOffsetX: 0,
+                                            textureOffsetY: 0,
+                                            textureRotation: 0,
+                                            textureFlipX: false,
+                                            textureFlipY: false
+                                          })
+                                        }
+                                        className="text-[10px] text-teal-400 hover:underline cursor-pointer"
+                                      >
+                                        Reset UVs
+                                      </button>
+                                    )}
                                 </div>
 
                                 <div className="grid grid-cols-2 gap-2">
@@ -12247,11 +13595,10 @@ const ARTest = () => {
                                         textureFlipX: !currentGeom.textureFlipX
                                       })
                                     }
-                                    className={`py-1 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                                      currentGeom.textureFlipX
-                                        ? 'bg-teal-500/20 border-teal-500 text-teal-300'
-                                        : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'
-                                    }`}
+                                    className={`py-1 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${currentGeom.textureFlipX
+                                      ? 'bg-teal-500/20 border-teal-500 text-teal-300'
+                                      : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'
+                                      }`}
                                   >
                                     <span className="material-symbols-outlined text-sm">flip</span>
                                     <span>Flip X</span>
@@ -12263,11 +13610,10 @@ const ARTest = () => {
                                         textureFlipY: !currentGeom.textureFlipY
                                       })
                                     }
-                                    className={`py-1 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                                      currentGeom.textureFlipY
-                                        ? 'bg-teal-500/20 border-teal-500 text-teal-300'
-                                        : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'
-                                    }`}
+                                    className={`py-1 px-2 rounded-lg text-xs font-semibold border flex items-center justify-center gap-1.5 transition-all cursor-pointer ${currentGeom.textureFlipY
+                                      ? 'bg-teal-500/20 border-teal-500 text-teal-300'
+                                      : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:bg-neutral-800'
+                                      }`}
                                   >
                                     <span className="material-symbols-outlined text-sm">swap_vertical_circle</span>
                                     <span>Flip Y</span>
@@ -12527,17 +13873,21 @@ const ARTest = () => {
                   <div className="pt-2 border-t border-neutral-800/80 space-y-2">
                     <button
                       type="button"
-                      disabled={savingConfig || (!editingTemplate && !batchId.trim())}
+                      disabled={savingConfig}
                       onClick={editingTemplate ? handleSaveTemplate : handleSaveConfig}
                       className="w-full py-2.5 px-4 bg-gradient-to-r from-teal-600 via-sky-600 to-indigo-600 hover:from-teal-500 hover:to-indigo-500 text-white font-bold rounded-lg shadow-lg shadow-teal-500/20 text-xs flex items-center justify-center gap-2 transition-all disabled:opacity-50 active:scale-[0.99] cursor-pointer"
                     >
-                      <span className="material-symbols-outlined text-sm">{editingTemplate ? 'cloud_upload' : 'save'}</span>
+                      <span className="material-symbols-outlined text-sm">
+                        {editingTemplate ? 'cloud_upload' : batchId.trim() ? 'save' : 'save_as'}
+                      </span>
                       <span>
                         {savingConfig
                           ? (editingTemplate ? 'Saving Changes to Template...' : 'Saving Geometries Configuration...')
                           : (editingTemplate
-                              ? `Save Shapes to Template (${editingTemplate.cleanName || editingTemplate.name})`
-                              : `Save Shapes to Batch (${batchId || 'Active'})`)}
+                            ? `Save Shapes to Template (${editingTemplate.cleanName || editingTemplate.name})`
+                            : batchId.trim()
+                              ? `Save Shapes to Batch (${batchId})`
+                              : 'Save Scene As New Inventory Batch...')}
                       </span>
                     </button>
                   </div>
@@ -12903,6 +14253,73 @@ const ARTest = () => {
                       )}
                     </div>
 
+                    {/* Curved / Arched Typography Path */}
+                    <div className="p-2.5 rounded-lg bg-neutral-950/60 border border-neutral-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+                          <span className="material-symbols-outlined text-xs text-amber-400">curved_arrow</span>
+                          <span>Curved Arc Typography</span>
+                        </label>
+                        {selectedText.curveRadius !== undefined && selectedText.curveRadius !== 0 && (
+                          <button
+                            type="button"
+                            onClick={() => handleUpdate3DText(selectedText.id, { curveRadius: 0, startAngle: undefined, endAngle: undefined })}
+                            className="text-[9px] text-amber-400 hover:text-amber-300 font-mono cursor-pointer"
+                          >
+                            Straighten
+                          </button>
+                        )}
+                      </div>
+                      <NumberSliderInput
+                        label="Arc Curve Radius"
+                        value={selectedText.curveRadius ?? 0}
+                        onChange={(val) => handleUpdate3DText(selectedText.id, { curveRadius: val })}
+                        min={-3.0}
+                        max={3.0}
+                        step={0.05}
+                        unit="m"
+                        color="amber"
+                        description="+ value = Header arch (rainbow), - value = Footer ribbon (smile), 0 = straight line"
+                      />
+                      {selectedText.curveRadius !== undefined && selectedText.curveRadius !== 0 && (
+                        <div className="space-y-2 pt-1 border-t border-neutral-800/80">
+                          <div className="grid grid-cols-2 gap-2">
+                            <NumberSliderInput
+                              label="Start Angle"
+                              value={selectedText.startAngle ?? -45}
+                              onChange={(val) => handleUpdate3DText(selectedText.id, { startAngle: val })}
+                              min={-180}
+                              max={180}
+                              step={1}
+                              unit="°"
+                              color="amber"
+                            />
+                            <NumberSliderInput
+                              label="End Angle"
+                              value={selectedText.endAngle ?? 45}
+                              onChange={(val) => handleUpdate3DText(selectedText.id, { endAngle: val })}
+                              min={-180}
+                              max={180}
+                              step={1}
+                              unit="°"
+                              color="amber"
+                            />
+                          </div>
+                          <NumberSliderInput
+                            label="Letter Spacing Offset"
+                            value={selectedText.letterSpacing ?? 0}
+                            onChange={(val) => handleUpdate3DText(selectedText.id, { letterSpacing: val })}
+                            min={-0.05}
+                            max={0.2}
+                            step={0.005}
+                            unit="m"
+                            color="amber"
+                            precision={3}
+                          />
+                        </div>
+                      )}
+                    </div>
+
                     {/* Colors & Glowing Emissive */}
                     <div className="space-y-2 pt-2 border-t border-neutral-800/80">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 block">
@@ -13106,16 +14523,20 @@ const ARTest = () => {
                       <button
                         type="button"
                         onClick={editingTemplate ? handleSaveTemplate : handleSaveConfig}
-                        disabled={savingConfig || (!editingTemplate && !batchId.trim())}
+                        disabled={savingConfig}
                         className="w-full py-2.5 px-3 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-pink-900/30 transition-all disabled:opacity-50 cursor-pointer"
                       >
-                        <span className="material-symbols-outlined text-sm">{editingTemplate ? 'cloud_upload' : 'save'}</span>
+                        <span className="material-symbols-outlined text-sm">
+                          {editingTemplate ? 'cloud_upload' : batchId.trim() ? 'save' : 'save_as'}
+                        </span>
                         <span>
                           {savingConfig
                             ? (editingTemplate ? 'Saving 3D Text to Template...' : 'Saving 3D Text Configuration...')
                             : (editingTemplate
-                                ? `Save 3D Text to Template (${editingTemplate.cleanName || editingTemplate.name})`
-                                : `Save 3D Text to Batch (${batchId || 'Active'})`)}
+                              ? `Save 3D Text to Template (${editingTemplate.cleanName || editingTemplate.name})`
+                              : batchId.trim()
+                                ? `Save 3D Text to Batch (${batchId})`
+                                : 'Save Scene As New Inventory Batch...')}
                         </span>
                       </button>
                     </div>
@@ -13254,7 +14675,7 @@ const ARTest = () => {
                               : 'bg-neutral-900/70 border-neutral-800/80 hover:border-neutral-700 text-neutral-300'
                             }`}
                         >
-                          <div className="flex listed-shapes items-center gap-2 min-w-0">
+                          <div className="flex items-center gap-2 min-w-0">
                             <input
                               type="checkbox"
                               checked={isMultiSelected}
@@ -13755,7 +15176,6 @@ const ARTest = () => {
                     title="Remove video texture layer and restore standard PBR textures"
                   >
                     <span className="material-symbols-outlined text-xs">videocam_off</span>
-                    Remove Layer
                   </button>
                 </div>
               )}
@@ -14172,11 +15592,11 @@ const ARTest = () => {
           {activeTab === 'scene' && (
             <div className="space-y-5">
               <div className="p-3 bg-neutral-900/90 border border-indigo-500/40 rounded-lg space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-widest text-indigo-400 flex items-center gap-1.5">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-xs font-bold uppercase tracking-widest text-indigo-400 flex items-center gap-1.5 shrink-0">
                     <span className="material-symbols-outlined text-sm">movie</span> Video Texture Layer
                   </span>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     {selectedVideoFile && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
                         PENDING STORAGE SAVE
@@ -14193,7 +15613,6 @@ const ARTest = () => {
                         title="Completely remove video texture layer from 3D model and clear video URL"
                       >
                         <span className="material-symbols-outlined text-xs">videocam_off</span>
-                        Remove Layer
                       </button>
                     )}
                   </div>
@@ -14229,7 +15648,6 @@ const ARTest = () => {
                       title="Remove video texture layer and restore default mesh materials"
                     >
                       <span className="material-symbols-outlined text-xs">videocam_off</span>
-                      Remove Layer
                     </button>
                   </div>
                 )}
@@ -14427,15 +15845,15 @@ const ARTest = () => {
                   )
                 )}
 
-                {/* Target Mesh Layer Selector */}
+                {/* Target Object / Layer Selector (All Scene Objects, Shapes & Planes) */}
                 <div className="flex flex-col gap-1.5 pt-2 border-t border-neutral-800">
-                  <label className="text-[11px] font-bold text-neutral-300 flex items-center justify-between">
-                    <span className="flex items-center gap-1">
+                  <label className="text-[11px] font-bold text-neutral-300 flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1 shrink-0">
                       <span className="material-symbols-outlined text-xs text-indigo-400">layers</span>
                       Map Video To Layer:
                     </span>
-                    <span className="text-[10px] font-mono text-indigo-400">
-                      {videoTargetMesh === 'auto' ? 'Auto-Detect' : videoTargetMesh === 'all' ? 'All Meshes' : (meshList.find(m => m.name === videoTargetMesh || m.uuid === videoTargetMesh)?.name || videoTargetMesh)}
+                    <span className="text-[10px] font-mono text-indigo-400 truncate text-right" title={getVideoTargetDisplayLabel(videoTargetMesh)}>
+                      {getVideoTargetDisplayLabel(videoTargetMesh)}
                     </span>
                   </label>
                   <select
@@ -14443,13 +15861,99 @@ const ARTest = () => {
                     onChange={(e) => setVideoTargetMesh(e.target.value)}
                     className="w-full px-2.5 py-1.5 bg-black border border-neutral-700 rounded text-xs text-neutral-200 focus:outline-none focus:border-indigo-400 font-mono"
                   >
-                    <option value="auto">Auto-Detect (Screen / Display / Graphic / Cloth)</option>
-                    <option value="all">Entire 3D Model (All Meshes)</option>
-                    {meshList.map((m, i) => (
-                      <option key={m.uuid} value={m.name || m.uuid}>
-                        Mesh {i + 1}: {m.name} ({m.materialName || 'Mat'})
-                      </option>
-                    ))}
+                    <option value="auto">Auto-Detect (Screen / Display / Plane / Graphic)</option>
+                    <option value="all-scene">Entire Scene (All Objects, Shapes &amp; Planes)</option>
+                    <option value="all">Entire 3D Model (All Model Meshes)</option>
+
+                    {additionalGeometries.length > 0 && (
+                      <optgroup label={`Shapes & Planes (${additionalGeometries.length})`}>
+                        {additionalGeometries.map((g, i) => {
+                          const kindLabel = g.type === 'plane' ? 'Plane' : 'Shape';
+                          return (
+                            <option key={g.id} value={g.id}>
+                              {kindLabel} {i + 1}: {g.name || g.type} ({g.type})
+                            </option>
+                          );
+                        })}
+                      </optgroup>
+                    )}
+
+                    {meshList.length > 0 && (
+                      <optgroup label={`3D Model Meshes (${meshList.length})`}>
+                        {meshList.map((m, i) => (
+                          <option key={m.uuid} value={m.name || m.uuid}>
+                            Mesh {i + 1}: {m.name} ({m.materialName || 'Mat'})
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+
+                    {customModels.length > 0 && (
+                      <optgroup label={`External 3D Models (${customModels.length})`}>
+                        {customModels.map((m, i) => {
+                          const subs = customModelSubmeshes[m.id] || [];
+                          return (
+                            <React.Fragment key={m.id}>
+                              <option value={m.id}>
+                                Model {i + 1}: {m.name}
+                              </option>
+                              {subs.length > 1 && subs.map((sub, sIdx) => (
+                                <option key={`${m.id}-${sub.uuid}`} value={`${m.id}::${sub.name || sub.uuid}`}>
+                                  ↳ {m.name} › Mesh {sIdx + 1}: {sub.name} ({sub.materialName || 'Mat'})
+                                </option>
+                              ))}
+                            </React.Fragment>
+                          );
+                        })}
+                      </optgroup>
+                    )}
+
+                    {custom3DTexts.length > 0 && (
+                      <optgroup label={`3D Text Layers (${custom3DTexts.length})`}>
+                        {custom3DTexts.map((t, i) => (
+                          <option key={t.id} value={t.id}>
+                            3D Text {i + 1}: &quot;{t.text || t.name}&quot;
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+
+                    {scatterLayers.length > 0 && (
+                      <optgroup label={`Surface Scatter Layers (${scatterLayers.length})`}>
+                        {scatterLayers.map((l, i) => (
+                          <option key={l.id} value={l.id}>
+                            Scatter {i + 1}: {l.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+
+                    {sceneGroups.length > 0 && (
+                      <optgroup label={`Scene Groups (${sceneGroups.length})`}>
+                        {sceneGroups.map((grp, i) => (
+                          <option key={grp.id} value={grp.id}>
+                            Group {i + 1}: {grp.name} ({grp.itemIds?.length || 0} items)
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+
+                    {(() => {
+                      const v = videoTargetMesh || 'auto';
+                      const isKnown =
+                        v === 'auto' ||
+                        v === 'all' ||
+                        v === 'all-scene' ||
+                        additionalGeometries.some((g) => g.id === v) ||
+                        meshList.some((m) => (m.name || m.uuid) === v) ||
+                        customModels.some((m) => m.id === v || (customModelSubmeshes[m.id] || []).some((sub) => `${m.id}::${sub.name || sub.uuid}` === v)) ||
+                        custom3DTexts.some((t) => t.id === v) ||
+                        scatterLayers.some((l) => l.id === v) ||
+                        sceneGroups.some((grp) => grp.id === v);
+                      return !isKnown ? (
+                        <option value={v}>Saved Target: {getVideoTargetDisplayLabel(v)}</option>
+                      ) : null;
+                    })()}
                   </select>
                   <button
                     type="button"
@@ -14778,6 +16282,56 @@ const ARTest = () => {
 
               <div className="space-y-3 pt-2">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-cyan-400">hdr_on</span>
+                  Environment Reflection Map (PBR)
+                </h2>
+                <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                  <span className="text-xs font-semibold text-neutral-300">Preset</span>
+                  <select
+                    value={envPreset}
+                    onChange={(e) => setEnvPreset(e.target.value)}
+                    className="text-xs bg-neutral-950 border border-neutral-700 text-neutral-200 rounded px-2 py-1 outline-none focus:border-cyan-500"
+                  >
+                    <option value="none">None (Black)</option>
+                    <option value="studio-chrome">Studio Chrome (Mirror)</option>
+                    <option value="city">City Skyline (Warm/Cyan)</option>
+                    <option value="sunset">Golden Sunset (Amber/Violet)</option>
+                    <option value="forest">Forest Canopy (Emerald/Earth)</option>
+                    <option value="cyber">Cyberpunk (Neon Magenta/Cyan)</option>
+                    <option value="night">Night City (Deep Glow)</option>
+                    <option value="neutral">Neutral Daylight</option>
+                  </select>
+                </div>
+                {envPreset !== 'none' && (
+                  <>
+                    <NumberSliderInput
+                      label="Environment Reflection Intensity"
+                      value={envIntensity}
+                      onChange={setEnvIntensity}
+                      min={0.0}
+                      max={3.0}
+                      step={0.05}
+                      color="cyan"
+                      precision={2}
+                      resetValue={1.0}
+                    />
+                    <NumberSliderInput
+                      label="Tone Mapping Exposure"
+                      value={exposure}
+                      onChange={setExposure}
+                      min={0.5}
+                      max={2.5}
+                      step={0.05}
+                      color="amber"
+                      precision={2}
+                      resetValue={1.1}
+                    />
+                  </>
+                )}
+              </div>
+
+              <div className="space-y-3 pt-2">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
                   <span className="material-symbols-outlined text-sm text-neutral-400">cloud</span>
                   Atmospheric Fog
                 </h2>
@@ -15052,8 +16606,35 @@ const ARTest = () => {
                     </div>
                   </div>
 
+                  {/* Scene-Wide Marker Alignment & Calibration */}
+                  <div className="pt-2">
+                    <label className="text-[11px] font-semibold text-neutral-400 block mb-1">
+                      Scene-to-Marker Alignment (Model + Shapes)
+                    </label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => alignEntireSceneToMarker('ground')}
+                        className="p-2 rounded-lg bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-600/40 hover:border-emerald-500 text-emerald-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm"
+                        title="Ground the entire scene (model, grass plane, and shapes) onto the bottom edge of the AR marker"
+                      >
+                        <span className="material-symbols-outlined text-sm text-emerald-400">vertical_align_bottom</span>
+                        Ground on Marker Base
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => alignEntireSceneToMarker('center')}
+                        className="p-2 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-600/40 hover:border-cyan-500 text-cyan-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-sm"
+                        title="Center the entire 3D scene (model and all shapes) exactly on the marker center (0, 0, 0)"
+                      >
+                        <span className="material-symbols-outlined text-sm text-cyan-400">filter_center_focus</span>
+                        Center Scene on Marker
+                      </button>
+                    </div>
+                  </div>
+
                   {/* Surface Snapping & Framing Actions */}
-                  <div className="grid grid-cols-4 gap-1.5 pt-1">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-1">
                     <button
                       type="button"
                       onClick={() => snapModelDepth(0)}
@@ -15092,34 +16673,68 @@ const ARTest = () => {
                     </button>
                   </div>
 
-                  {/* Marker Image Upload & Reset */}
-                  <div className="flex items-center gap-2 pt-2 border-t border-neutral-800/80">
-                    <input
-                      type="file"
-                      ref={markerFileInputRef}
-                      accept="image/png,image/jpeg,image/webp"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleCustomMarkerUpload(file);
-                        e.target.value = '';
-                      }}
-                    />
+                  {/* Marker Image Upload, Library Picker & Save As Inventory Action */}
+                  <div className="pt-2 border-t border-neutral-800/80 space-y-2">
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="file"
+                        ref={markerFileInputRef}
+                        accept="image/png,image/jpeg,image/webp"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleCustomMarkerUpload(file);
+                          e.target.value = '';
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => markerFileInputRef.current?.click()}
+                        className="flex-1 py-1.5 px-2 bg-neutral-800 hover:bg-emerald-900/60 text-neutral-200 hover:text-emerald-200 border border-neutral-700 hover:border-emerald-500/50 rounded text-xs font-semibold flex items-center justify-center gap-1 transition-all cursor-pointer"
+                        title="Upload a PNG, JPG, or WebP marker image from your device"
+                      >
+                        <span className="material-symbols-outlined text-xs">file_upload</span>
+                        Upload Marker
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowTrackingMarkerLibrary((v) => !v)}
+                        className={`flex-1 py-1.5 px-2 border rounded text-xs font-semibold flex items-center justify-center gap-1 transition-all cursor-pointer ${
+                          showTrackingMarkerLibrary
+                            ? 'bg-cyan-900/70 text-cyan-200 border-cyan-400/60'
+                            : 'bg-neutral-800 hover:bg-cyan-950/60 text-neutral-200 hover:text-cyan-200 border-neutral-700 hover:border-cyan-500/50'
+                        }`}
+                        title="Choose an existing marker image from Admin Inventory or built-in calibration targets"
+                      >
+                        <span className="material-symbols-outlined text-xs">photo_library</span>
+                        Choose Marker
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleResetMarkerToDefault}
+                        className="py-1.5 px-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-neutral-200 border border-neutral-700 rounded text-xs font-semibold transition-all cursor-pointer"
+                        title="Reset to procedural calibration marker"
+                      >
+                        Reset
+                      </button>
+                    </div>
+
+                    {showTrackingMarkerLibrary && (
+                      <MarkerLibrarySelector
+                        onSelectMarker={handleSelectLibraryMarker}
+                        onClose={() => setShowTrackingMarkerLibrary(false)}
+                      />
+                    )}
+
                     <button
                       type="button"
-                      onClick={() => markerFileInputRef.current?.click()}
-                      className="flex-1 py-1.5 px-2 bg-neutral-800 hover:bg-emerald-900/60 text-neutral-200 hover:text-emerald-200 border border-neutral-700 hover:border-emerald-500/50 rounded text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                      disabled={savingConfig}
+                      onClick={() => setIsSaveAsModalOpen(true)}
+                      className="w-full py-2 px-3 rounded-lg bg-gradient-to-r from-emerald-600/90 via-teal-600/90 to-indigo-600/90 hover:from-emerald-500 hover:to-indigo-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/40 transition-all cursor-pointer disabled:opacity-50"
+                      title="Compile this marker with MindAR, export the 3D scene as .glb, and add a new Asset & Batch to Admin Inventory"
                     >
-                      <span className="material-symbols-outlined text-xs">file_upload</span>
-                      Upload Custom Marker Artwork
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleResetMarkerToDefault}
-                      className="py-1.5 px-2.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-neutral-200 border border-neutral-700 rounded text-xs font-semibold transition-all"
-                      title="Reset to procedural calibration marker"
-                    >
-                      Reset
+                      <span className="material-symbols-outlined text-sm">inventory_2</span>
+                      <span>Compile Marker & Save Scene to Inventory (Save As...)</span>
                     </button>
                   </div>
                 </div>
@@ -17276,13 +18891,12 @@ const ARTest = () => {
                               setSelectedScatterLayerId(layer.id);
                             }
                           }}
-                          className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer transition-all ${
-                            isSelected
-                              ? 'bg-emerald-950/50 border-emerald-500/70 text-white shadow-sm ring-1 ring-emerald-500/40'
-                              : isMultiSelected
-                                ? 'bg-amber-950/20 border-amber-500/50 shadow-xs'
-                                : 'bg-neutral-900/70 border-neutral-800/80 hover:border-neutral-700 text-neutral-300'
-                          }`}
+                          className={`flex items-center justify-between p-2 rounded-lg border text-xs cursor-pointer transition-all ${isSelected
+                            ? 'bg-emerald-950/50 border-emerald-500/70 text-white shadow-sm ring-1 ring-emerald-500/40'
+                            : isMultiSelected
+                              ? 'bg-amber-950/20 border-amber-500/50 shadow-xs'
+                              : 'bg-neutral-900/70 border-neutral-800/80 hover:border-neutral-700 text-neutral-300'
+                            }`}
                         >
                           <div className="flex items-center gap-2 min-w-0">
                             <input
@@ -17333,9 +18947,8 @@ const ARTest = () => {
                             <button
                               type="button"
                               onClick={() => handleToggleScatterLayerVisibility(layer.id)}
-                              className={`p-1 rounded hover:bg-neutral-800 transition-colors cursor-pointer ${
-                                layer.visible !== false ? 'text-neutral-300' : 'text-neutral-600'
-                              }`}
+                              className={`p-1 rounded hover:bg-neutral-800 transition-colors cursor-pointer ${layer.visible !== false ? 'text-neutral-300' : 'text-neutral-600'
+                                }`}
                               title={layer.visible !== false ? 'Hide Scatter Layer' : 'Show Scatter Layer'}
                             >
                               <span className="material-symbols-outlined text-sm">
@@ -17597,11 +19210,10 @@ const ARTest = () => {
                             key={p.id}
                             type="button"
                             onClick={() => handleApplyScatterPreset(p.id)}
-                            className={`p-2 rounded-lg text-left transition-all border flex items-center gap-2 cursor-pointer ${
-                              isSelected
-                                ? 'bg-emerald-950/50 border-emerald-500/60 text-white shadow-sm ring-1 ring-emerald-500/40'
-                                : 'bg-neutral-800/50 border-neutral-700/50 text-neutral-300 hover:bg-neutral-800 hover:text-white'
-                            }`}
+                            className={`p-2 rounded-lg text-left transition-all border flex items-center gap-2 cursor-pointer ${isSelected
+                              ? 'bg-emerald-950/50 border-emerald-500/60 text-white shadow-sm ring-1 ring-emerald-500/40'
+                              : 'bg-neutral-800/50 border-neutral-700/50 text-neutral-300 hover:bg-neutral-800 hover:text-white'
+                              }`}
                           >
                             <span className="material-symbols-outlined text-base text-emerald-400">{p.icon}</span>
                             <div className="min-w-0">
@@ -17634,11 +19246,10 @@ const ARTest = () => {
                           onClick={() =>
                             handleUpdateScatterLayer(activeScatterLayer.id, { prototype: opt.id })
                           }
-                          className={`p-1.5 rounded-lg text-center transition-all border flex flex-col items-center gap-1 cursor-pointer ${
-                            (activeScatterLayer.prototype || 'leaf') === opt.id
-                              ? 'bg-emerald-950/60 border-emerald-500 text-white font-bold ring-1 ring-emerald-500/30'
-                              : 'bg-neutral-800/40 border-neutral-700/50 text-neutral-400 hover:text-white hover:bg-neutral-800'
-                          }`}
+                          className={`p-1.5 rounded-lg text-center transition-all border flex flex-col items-center gap-1 cursor-pointer ${(activeScatterLayer.prototype || 'leaf') === opt.id
+                            ? 'bg-emerald-950/60 border-emerald-500 text-white font-bold ring-1 ring-emerald-500/30'
+                            : 'bg-neutral-800/40 border-neutral-700/50 text-neutral-400 hover:text-white hover:bg-neutral-800'
+                            }`}
                         >
                           <span className="material-symbols-outlined text-base text-emerald-400">{opt.icon}</span>
                           <span className="text-[10px] truncate w-full">{opt.label}</span>
@@ -17794,11 +19405,10 @@ const ARTest = () => {
                             type="button"
                             onClick={() => handleUpdateScatterLayer(activeScatterLayer.id, { color: hex })}
                             style={{ backgroundColor: hex }}
-                            className={`w-6 h-6 rounded-md border transition-transform cursor-pointer ${
-                              (activeScatterLayer.color || '').toLowerCase() === hex.toLowerCase()
-                                ? 'scale-110 border-white shadow'
-                                : 'border-neutral-700'
-                            }`}
+                            className={`w-6 h-6 rounded-md border transition-transform cursor-pointer ${(activeScatterLayer.color || '').toLowerCase() === hex.toLowerCase()
+                              ? 'scale-110 border-white shadow'
+                              : 'border-neutral-700'
+                              }`}
                           />
                         ))}
                       </div>
@@ -18441,7 +20051,7 @@ const ARTest = () => {
         )}
 
         {/* Floating Viewport Controls: Camera View Angles on Top, 3D Transform Gizmo Toolbar Directly Beneath */}
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 pointer-events-none select-none max-w-[95vw]">
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 pointer-events-none select-none max-w-[calc(100vw-480px)] px-2">
           {/* Floating Multi-Select & Active Group Viewport Pill Banner */}
           {(selectedObjects.length > 1 || (selectedTargetType === 'group' && selectedGroupId)) && (
             <div className="pointer-events-auto flex items-center gap-2 px-3 py-1.5 bg-neutral-900/95 backdrop-blur-md border border-neutral-700/80 rounded-xl shadow-2xl animate-fade-in text-xs">
@@ -18653,9 +20263,9 @@ const ARTest = () => {
           )}
 
           {/* Beneath: 3D Transform Controls Gizmo Toolbar (Move, Rotate, Scale) */}
-          <div className="pointer-events-auto flex items-center gap-1.5 p-1.5 bg-neutral-900/90 backdrop-blur-md border border-neutral-700/80 rounded-xl shadow-2xl">
+          <div className="pointer-events-auto flex items-center gap-1.5 p-1.5 bg-neutral-900/90 backdrop-blur-md border border-neutral-700/80 rounded-xl shadow-2xl max-w-full overflow-x-auto scrollbar-none">
             {/* Gizmo Mode Toggle Buttons */}
-            <div className="flex items-center gap-0.5 bg-black/60 p-0.5 rounded-lg border border-neutral-800">
+            <div className="flex items-center gap-0.5 bg-black/60 p-0.5 rounded-lg border border-neutral-800 shrink-0">
               <button
                 type="button"
                 onClick={() => setGizmoMode('translate')}
@@ -18790,9 +20400,9 @@ const ARTest = () => {
 
             {/* Selection Info Badge */}
             {currentSelectedObjectInfo && (
-              <div className="flex items-center gap-1.5 pl-1.5 border-l border-neutral-800">
-                <div className="flex items-center gap-1 px-2 py-1 bg-neutral-800/90 border border-neutral-700/80 rounded-lg text-xs text-neutral-200 max-w-[160px] truncate">
-                  <span className="material-symbols-outlined text-xs text-indigo-400">
+              <div className="flex items-center gap-1.5 pl-1.5 border-l border-neutral-800 shrink-0">
+                <div className="flex items-center gap-1 px-2 py-1 bg-neutral-800/90 border border-neutral-700/80 rounded-lg text-xs text-neutral-200 max-w-[130px] truncate shrink-0">
+                  <span className="material-symbols-outlined text-xs text-indigo-400 shrink-0">
                     {currentSelectedObjectInfo.icon}
                   </span>
                   <span className="truncate font-semibold">{currentSelectedObjectInfo.name}</span>
@@ -18842,7 +20452,7 @@ const ARTest = () => {
           light="defaultLightsEnabled: false"
           vr-mode-ui="enabled: false"
           device-orientation-permission-ui="enabled: false"
-          scene-environment="exposure: 1.1; hdrIntensity: 0.0; enabled: false"
+          scene-environment={`exposure: ${exposure}; hdrIntensity: ${envIntensity}; enabled: ${envPreset !== 'none' || envIntensity > 0}; preset: ${envPreset}`}
           fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
           style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
         >
@@ -18896,8 +20506,8 @@ const ARTest = () => {
             ></a-entity>
           )}
 
-          {/* Center Model Entity Anchor */}
-          {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || arData?.modelUrl) && (
+          {/* Center Model Entity Anchor (or Fallback Video Controller when scene has Shapes/Planes/Custom Models without a root .glb) */}
+          {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || arData?.modelUrl) ? (
             <a-entity position="0 0 0">
               <a-gltf-model
                 id="ar-model"
@@ -18920,6 +20530,12 @@ const ARTest = () => {
               >
               </a-gltf-model>
             </a-entity>
+          ) : (
+            <a-entity
+              id="ar-video-layer-controller"
+              position="0 0 0"
+              play-gltf-video={`src: ${activeVideoUrl || customVideoUrl || arData?.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${videoTargetMesh}; flipX: ${videoFlipX}; videoScale: ${videoScale}; videoOffsetX: ${videoOffsetX}; videoOffsetY: ${videoOffsetY}; videoOffsetZ: ${videoOffsetZ}; videoRotation: ${videoRotation}; videoTextureRepeatX: ${videoTextureRepeatX}; videoTextureRepeatY: ${videoTextureRepeatY}; videoTextureOffsetX: ${videoTextureOffsetX}; videoTextureOffsetY: ${videoTextureOffsetY}; aspectRatio: ${videoAspectRatio}`}
+            ></a-entity>
           )}
 
           {/* AR Portal & Virtual Window Anchor */}
@@ -19018,105 +20634,71 @@ const ARTest = () => {
 
 
 
-        {/* Media Controls Floating Action Buttons (Play/Pause + Sound Mute/Unmute) */}
-        <div style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 1000, display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button
-            onClick={toggleMedia}
-            style={{
-              backgroundColor: 'rgba(0, 0, 0, 0.7)',
-              color: 'white',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
-              borderRadius: '50%',
-              width: '46px',
-              height: '46px',
-              display: 'flex',
-              justifyContent: 'center',
-              alignItems: 'center',
-              cursor: 'pointer',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-              backdropFilter: 'blur(8px)'
-            }}
-            title={mediaPlaying ? 'Pause Scene Animation/Video' : 'Play Scene Animation/Video'}
-          >
-            <span className="material-symbols-outlined text-xl">
-              {mediaPlaying ? 'pause' : 'play_arrow'}
-            </span>
-          </button>
+        {/* Top-Left Viewport Floating HUD: Media Controls & Active Target Pill */}
+        <div className="absolute top-3 left-3 z-40 flex flex-col items-start gap-2 pointer-events-none">
+          {/* Media Controls Floating Action Buttons */}
+          <div className="pointer-events-auto flex items-center gap-1.5 p-1 bg-black/80 backdrop-blur-md rounded-full border border-neutral-700/80 shadow-2xl">
+            <button
+              onClick={toggleMedia}
+              className="w-9 h-9 rounded-full bg-neutral-800/90 hover:bg-neutral-700 text-white flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95"
+              title={mediaPlaying ? 'Pause Scene Animation/Video' : 'Play Scene Animation/Video'}
+            >
+              <span className="material-symbols-outlined text-lg">
+                {mediaPlaying ? 'pause' : 'play_arrow'}
+              </span>
+            </button>
 
-          <button
-            onClick={toggleMediaMute}
-            style={{
-              backgroundColor: mediaMuted ? 'rgba(225, 29, 72, 0.85)' : 'rgba(16, 185, 129, 0.85)',
-              color: 'white',
-              border: '1px solid rgba(255, 255, 255, 0.3)',
-              borderRadius: '50%',
-              width: '46px',
-              height: '46px',
-              display: 'flex',
-              justifyContent: 'center',
-              alignItems: 'center',
-              cursor: 'pointer',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-              backdropFilter: 'blur(8px)'
-            }}
-            title={mediaMuted ? 'Unmute YouTube / Video Sound' : 'Mute YouTube / Video Sound'}
-          >
-            <span className="material-symbols-outlined text-xl">
-              {mediaMuted ? 'volume_off' : 'volume_up'}
-            </span>
-          </button>
+            <button
+              onClick={toggleMediaMute}
+              className={`w-9 h-9 rounded-full flex items-center justify-center text-white transition-all cursor-pointer shadow-sm active:scale-95 ${mediaMuted ? 'bg-rose-600 hover:bg-rose-500' : 'bg-emerald-600 hover:bg-emerald-500'
+                }`}
+              title={mediaMuted ? 'Unmute YouTube / Video Sound' : 'Mute YouTube / Video Sound'}
+            >
+              <span className="material-symbols-outlined text-lg">
+                {mediaMuted ? 'volume_off' : 'volume_up'}
+              </span>
+            </button>
 
-          <button
-            onClick={() => setShowDiagnosticsDrawer((prev) => !prev)}
-            style={{
-              backgroundColor: showDiagnosticsDrawer ? 'rgba(245, 158, 11, 0.95)' : 'rgba(0, 0, 0, 0.75)',
-              color: showDiagnosticsDrawer ? '#000000' : '#f59e0b',
-              border: '1px solid rgba(245, 158, 11, 0.4)',
-              borderRadius: '50%',
-              width: '46px',
-              height: '46px',
-              display: 'flex',
-              justifyContent: 'center',
-              alignItems: 'center',
-              cursor: 'pointer',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-              backdropFilter: 'blur(8px)'
-            }}
-            title="AR Point Light Diagnostics & Live DevTool Drawer"
-          >
-            <span className="material-symbols-outlined text-xl">
-              tune
-            </span>
-          </button>
-        </div>
+            <button
+              onClick={() => setShowDiagnosticsDrawer((prev) => !prev)}
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-all cursor-pointer shadow-sm active:scale-95 ${showDiagnosticsDrawer
+                ? 'bg-amber-500 text-black font-bold'
+                : 'bg-neutral-800/90 hover:bg-neutral-700 text-amber-400'
+                }`}
+              title="AR Point Light Diagnostics & Live DevTool Drawer"
+            >
+              <span className="material-symbols-outlined text-lg">
+                tune
+              </span>
+            </button>
+          </div>
 
-        {/* Floating Active Target HUD Indicator */}
-        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
-          <div className="absolute top-5 left-[184px] z-40 pointer-events-none">
-            <div className="px-3 py-1.5 rounded-full bg-black/80 backdrop-blur-md border border-neutral-700 text-xs font-medium text-neutral-200 shadow-xl flex items-center gap-2">
-              <span className={`w-2 h-2 rounded-full ${editingTemplate ? 'bg-amber-400 animate-pulse' : selectedMesh ? 'bg-indigo-400 animate-ping' : 'bg-emerald-400 animate-pulse'}`}></span>
-              <span>
+          {/* Floating Active Target HUD Indicator */}
+          {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
+            <div className="px-3 py-1.5 rounded-full bg-black/85 backdrop-blur-md border border-neutral-700/80 text-xs font-medium text-neutral-200 shadow-xl flex items-center gap-2 max-w-[280px]">
+              <span className={`w-2 h-2 rounded-full shrink-0 ${editingTemplate ? 'bg-amber-400 animate-pulse' : selectedMesh ? 'bg-indigo-400 animate-ping' : 'bg-emerald-400 animate-pulse'}`}></span>
+              <span className="truncate">
                 {editingTemplate ? (
-                  <>Template Mode: <strong className="text-amber-300">{editingTemplate.cleanName || editingTemplate.name}</strong></>
+                  <>Template: <strong className="text-amber-300">{editingTemplate.cleanName || editingTemplate.name}</strong></>
                 ) : selectedMesh ? (
-                  <>Selected Mesh: <strong className="text-indigo-300">{selectedMesh.name}</strong></>
+                  <>Mesh: <strong className="text-indigo-300">{selectedMesh.name}</strong></>
                 ) : (
-                  <>Active Target: <strong className="text-emerald-300">Entire 3D Model</strong></>
+                  <>Target: <strong className="text-emerald-300">Entire 3D Model</strong></>
                 )}
               </span>
               {selectedMesh && (
-                <span className="text-[10px] text-neutral-400 font-mono pl-1 border-l border-neutral-700">
-                  Click canvas background to deselect
+                <span className="text-[10px] text-neutral-400 font-mono pl-1 border-l border-neutral-700 shrink-0">
+                  Esc
                 </span>
               )}
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Live Coordinate Overlay HUD */}
         {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
-          <div className="absolute top-5 right-5 z-40 pointer-events-none hidden sm:flex flex-col gap-1 items-end">
-            <div className="px-3 py-1.5 rounded-lg bg-black/75 backdrop-blur-md border border-neutral-800 text-[10px] font-mono text-neutral-300 shadow-lg space-y-0.5">
+          <div className="absolute top-3 right-3 z-40 pointer-events-none hidden sm:flex flex-col gap-1 items-end">
+            <div className="px-3 py-1.5 rounded-lg bg-black/80 backdrop-blur-md border border-neutral-800 text-[10px] font-mono text-neutral-300 shadow-xl space-y-0.5">
               <div className="flex items-center gap-2">
                 <span className="text-neutral-500">POS:</span>
                 <span className="text-rose-400 font-bold">X:{currentPosX.toFixed(2)}</span>
@@ -19142,7 +20724,7 @@ const ARTest = () => {
 
         {/* Bottom Floating Interactive Control Pill (matching ProductViewer) */}
         {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 bg-black/85 backdrop-blur-lg px-3 py-1.5 rounded-full border border-white/15 shadow-2xl">
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 bg-black/85 backdrop-blur-lg px-3 py-1.5 rounded-full border border-white/15 shadow-2xl whitespace-nowrap flex-nowrap max-w-[95vw] overflow-x-auto scrollbar-none">
             <button
               type="button"
               onClick={toggleCameraAutoRotate}
@@ -19331,6 +20913,52 @@ const ARTest = () => {
         sceneRef={sceneRef}
         selectedTarget={selectedStudioTarget}
       />
+
+      {/* Save As — Compile MindAR Marker + Export 3D Scene .GLB + Add to Admin Inventory */}
+      {isSaveAsModalOpen && (
+        <SaveAsInventoryModal
+          isOpen={isSaveAsModalOpen}
+          onClose={() => {
+            if (!savingConfig) setIsSaveAsModalOpen(false);
+          }}
+          onConfirmSaveAs={handleSaveAsInventory}
+          isSaving={savingConfig}
+          progressStep={saveAsProgressStep}
+          progressMessage={saveAsProgressMsg || uploadProgress}
+          defaultName={
+            arData?.name
+              ? `${arData.name} Copy`
+              : localGlbName
+                ? localGlbName.replace(/\.(glb|gltf)$/i, '')
+                : additionalGeometries.length > 0
+                  ? (additionalGeometries[0]?.name || 'Custom Studio Scene')
+                  : 'Custom AR Scene'
+          }
+          defaultMerchantId={arData?.merchant_id || 'default'}
+          defaultPrice={arData?.price !== undefined ? String(arData.price) : '99.00'}
+          defaultDescription={arData?.description || ''}
+          markerImageUrl={markerImageUrl}
+          markerInfo={markerInfo}
+          markerWidth={markerWidth}
+          markerAspectRatio={markerAspectRatio}
+          onUploadMarkerFile={handleCustomMarkerUpload}
+          onSelectLibraryMarker={handleSelectLibraryMarker}
+          sceneSummary={{
+            hasRootModel: Boolean(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath || arData?.modelUrl),
+            rootModelName: localGlbName || arData?.name || (batchId ? `Batch: ${batchId}` : ''),
+            shapesCount: Array.isArray(additionalGeometries) ? additionalGeometries.filter((g) => g.visible !== false).length : 0,
+            textsCount: Array.isArray(custom3DTexts) ? custom3DTexts.filter((t) => t.visible !== false).length : 0,
+            customModelsCount: Array.isArray(customModels) ? customModels.filter((m) => m.visible !== false).length : 0,
+            scatterCount: Array.isArray(scatterLayers) ? scatterLayers.filter((l) => l.enabled && l.visible !== false).length : (scatterEnabled ? 1 : 0),
+            lightsCount: Array.isArray(customLights) ? customLights.length : 0,
+            hasVideo: Boolean(selectedVideoFile || activeVideoUrl || customVideoUrl || arData?.videoUrl),
+            videoTargetLabel: videoTargetMesh,
+            portalEnabled: Boolean(portalEnabled),
+            particlesEnabled: Boolean(particleSystemEnabled),
+            websiteEnabled: Boolean(websiteEnabled && websiteUrl)
+          }}
+        />
+      )}
     </div>
   );
 };

@@ -344,6 +344,13 @@ export default function StoreFront() {
                           : (Array.isArray(pCfg.additionalGeometries) && pCfg.additionalGeometries.length > 0)
                           ? pCfg.additionalGeometries
                           : (Array.isArray(featuredAsset?.additionalGeometries) ? featuredAsset.additionalGeometries : []);
+                        res.scatterLayers = (Array.isArray(bCfg.scatterLayers) && bCfg.scatterLayers.length > 0)
+                          ? bCfg.scatterLayers
+                          : (Array.isArray(featuredBatchConfig?.scatterLayers) && featuredBatchConfig.scatterLayers.length > 0)
+                          ? featuredBatchConfig.scatterLayers
+                          : (Array.isArray(pCfg.scatterLayers) && pCfg.scatterLayers.length > 0)
+                          ? pCfg.scatterLayers
+                          : (Array.isArray(featuredAsset?.scatterLayers) ? featuredAsset.scatterLayers : []);
                         return res;
                       })()}
                       assetName={featuredAsset?.name || featuredAsset?.id || 'Featured Digital Asset'}

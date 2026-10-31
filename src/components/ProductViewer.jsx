@@ -11,6 +11,17 @@ import { createPortalObject3D, createParticleSystemObject3D } from '../utils/por
 import { createGeometriesGroup } from '../utils/geometryHelper';
 import { createCustomLightsGroup } from '../utils/lightingHelper';
 import { create3DTextsGroup } from '../utils/text3DHelper';
+import { generateSurfaceScatterMesh } from '../utils/surfaceScatter';
+
+// Module-level helper: Parse 3-element vector coordinates from array or whitespace-delimited string
+export function parseVector3(pos, fallback = [0, 0, 0]) {
+  if (Array.isArray(pos) && pos.length === 3) return pos.map(Number);
+  if (typeof pos === 'string') {
+    const parts = pos.trim().split(/\s+/).map(Number);
+    if (parts.length === 3 && !parts.some(isNaN)) return parts;
+  }
+  return fallback;
+}
 
 // Safe runtime detection of WebGL capability
 export function isWebGLAvailable() {
@@ -81,7 +92,16 @@ export function applyMeshStyling(rootObject, config = {}, videoUrl = '', videoTe
   let targetNode = dedicatedNode;
   if (!targetNode && targetMeshKey !== 'auto') {
     rootObject.traverse((n) => {
-      if (n.isMesh && (n.name === targetMeshKey || n.uuid === targetMeshKey)) targetNode = n;
+      if (
+        n.isMesh &&
+        (n.name === targetMeshKey ||
+          n.uuid === targetMeshKey ||
+          n.userData?.geometryId === targetMeshKey ||
+          n.userData?.modelId === targetMeshKey ||
+          n.userData?.textId === targetMeshKey)
+      ) {
+        targetNode = n;
+      }
     });
   }
   if (!targetNode) {
@@ -95,8 +115,14 @@ export function applyMeshStyling(rootObject, config = {}, videoUrl = '', videoTe
     if (node.isMesh) {
       const isTargetForVideo = (
         (dedicatedNode && node === dedicatedNode) ||
-        (targetMeshKey === 'all') ||
-        (targetMeshKey !== 'auto' && (node.name === targetMeshKey || node.uuid === targetMeshKey)) ||
+        (targetMeshKey === 'all' || targetMeshKey === 'all-scene' || targetMeshKey === 'all_scene') ||
+        (targetMeshKey !== 'auto' && (
+          node.name === targetMeshKey ||
+          node.uuid === targetMeshKey ||
+          node.userData?.geometryId === targetMeshKey ||
+          node.userData?.modelId === targetMeshKey ||
+          node.userData?.textId === targetMeshKey
+        )) ||
         (targetMeshKey === 'auto' && !dedicatedNode && (
           node.name.toLowerCase().includes('screen') ||
           node.name.toLowerCase().includes('video') ||
@@ -430,31 +456,30 @@ function SceneContent({
   // Dynamically frame camera to fit the loaded 3D asset dimensions
   useEffect(() => {
     if (!modelBoundingData) return;
-    const { maxDim } = modelBoundingData;
+    const { maxDim, center } = modelBoundingData;
     const fovRad = camera.fov * (Math.PI / 180);
     let cameraDistance = Math.abs(maxDim / 2 / Math.tan(fovRad / 2)) * 1.5;
     cameraDistance = Math.max(cameraDistance, 1.0);
 
-    camera.position.set(0, maxDim * 0.15, cameraDistance);
-    defaultCamPosRef.current.set(0, maxDim * 0.15, cameraDistance);
-    camera.lookAt(0, 0, 0);
+    const cX = center ? center.x : 0;
+    const cY = center ? center.y : 0;
+    const cZ = center ? center.z : 0;
+
+    camera.position.set(cX, cY + maxDim * 0.15, cZ + cameraDistance);
+    defaultCamPosRef.current.set(cX, cY + maxDim * 0.15, cZ + cameraDistance);
+    camera.lookAt(cX, cY, cZ);
 
     if (controlsRef.current) {
-      controlsRef.current.target.set(0, 0, 0);
+      controlsRef.current.target.set(cX, cY, cZ);
       controlsRef.current.update();
     }
   }, [modelBoundingData, camera, controlsRef, defaultCamPosRef]);
 
-  const gridY = modelBoundingData ? -modelBoundingData.maxDim / 2 - 0.05 : -0.5;
+  const gridY = modelBoundingData
+    ? (modelBoundingData.center?.y ?? 0) - modelBoundingData.maxDim / 2 - 0.05
+    : -0.5;
 
-  const parsePos = (pos, fallback) => {
-    if (Array.isArray(pos) && pos.length === 3) return pos;
-    if (typeof pos === 'string') {
-      const parts = pos.trim().split(/\s+/).map(Number);
-      if (parts.length === 3 && !parts.some(isNaN)) return parts;
-    }
-    return fallback;
-  };
+  const parsePos = parseVector3;
 
   const normCfg = useMemo(() => {
     return {
@@ -592,6 +617,198 @@ function SceneContent({
     };
   }, [JSON.stringify(custom3DTexts)]);
 
+  // Map WebGL video texture onto procedural Shapes, Planes & 3D Texts when targeted by videoTargetMesh
+  useEffect(() => {
+    if (activeVideoType !== 'webgl' || !resolvedVideoUrl) return undefined;
+    const rawTarget = (normCfg?.videoTargetMesh || 'auto').trim();
+    const targetLower = rawTarget.toLowerCase();
+    const candidateNodes = [];
+
+    const checkProceduralNode = (node) => {
+      if (!node || !node.isMesh || !node.material) return;
+      const gId = node.userData?.geometryId || '';
+      const tId = node.userData?.textId || '';
+      const uName = node.userData?.name || node.name || '';
+      const isMatch =
+        targetLower === 'all-scene' ||
+        targetLower === 'all_scene' ||
+        (targetLower !== 'auto' &&
+          targetLower !== 'all' &&
+          (gId === rawTarget ||
+            tId === rawTarget ||
+            uName === rawTarget ||
+            gId.toLowerCase() === targetLower ||
+            tId.toLowerCase() === targetLower ||
+            uName.toLowerCase() === targetLower)) ||
+        (targetLower === 'auto' && !modelGroup && (node.userData?.type === 'plane' || /screen|display|video|plane|backdrop/i.test(uName)));
+      if (isMatch) candidateNodes.push(node);
+    };
+
+    if (geometriesGroup) geometriesGroup.traverse(checkProceduralNode);
+    if (texts3DGroup) texts3DGroup.traverse(checkProceduralNode);
+    if (candidateNodes.length === 0) return undefined;
+
+    const procVideo = document.createElement('video');
+    procVideo.crossOrigin = 'anonymous';
+    procVideo.muted = Boolean(isMuted);
+    procVideo.defaultMuted = true;
+    procVideo.playsInline = true;
+    procVideo.autoplay = true;
+    procVideo.loop = true;
+    procVideo.src = resolvedVideoUrl;
+    procVideo.play().catch(() => {});
+
+    const procTex = new THREE.VideoTexture(procVideo);
+    if (THREE.SRGBColorSpace !== undefined) procTex.colorSpace = THREE.SRGBColorSpace;
+    procTex.minFilter = THREE.LinearFilter;
+    procTex.magFilter = THREE.LinearFilter;
+    procTex.generateMipmaps = false;
+    procTex.flipY = true;
+    if (normCfg?.videoFlipX) {
+      procTex.wrapS = THREE.RepeatWrapping;
+      procTex.repeat.set(-1, 1);
+      procTex.offset.set(1, 0);
+    }
+
+    candidateNodes.forEach((node) => {
+      const mats = Array.isArray(node.material) ? node.material : [node.material];
+      const slotLimit = mats.length === 2 ? 1 : mats.length;
+      for (let i = 0; i < slotLimit; i++) {
+        const m = mats[i];
+        if (!m) continue;
+        m.map = procTex;
+        m.emissiveMap = procTex;
+        if (m.color) m.color.set(0xffffff);
+        if (m.emissive) m.emissive.set(0xffffff);
+        m.emissiveIntensity = 0.45;
+        m.needsUpdate = true;
+      }
+    });
+
+    return () => {
+      procVideo.pause();
+      procVideo.removeAttribute('src');
+      try { procVideo.load(); } catch { /* ignore */ }
+      procTex.dispose();
+    };
+  }, [activeVideoType, resolvedVideoUrl, geometriesGroup, texts3DGroup, modelGroup, normCfg?.videoTargetMesh, normCfg?.videoFlipX, isMuted]);
+
+  // Surface Scattering & Foliage Layers (InstancedMesh)
+  const scatterLayers = normCfg?.scatterLayers || [];
+  const [scatterGroup, setScatterGroup] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    if (!Array.isArray(scatterLayers) || scatterLayers.length === 0) {
+      setScatterGroup(null);
+      return;
+    }
+
+    const group = new THREE.Group();
+    group.name = 'product_scatter_layers_group';
+
+    // Helper: Find target host surface across geometriesGroup and modelGroup
+    const resolveTarget = (targetKey) => {
+      if (!targetKey || targetKey === '#ar-model' || targetKey === 'model' || targetKey === 'root') {
+        return modelGroup;
+      }
+      let found = null;
+      const targetClean = String(targetKey).replace(/^[#.]/, '').toLowerCase();
+
+      // 1. Search geometriesGroup (e.g. "Plane" shape)
+      if (geometriesGroup) {
+        geometriesGroup.traverse((child) => {
+          if (!found) {
+            const cName = (child.name || '').toLowerCase();
+            const gId = (child.userData?.geometryId || '').toLowerCase();
+            const uName = (child.userData?.name || '').toLowerCase();
+            if (cName === targetClean || gId === targetClean || uName === targetClean || child.name === targetKey) {
+              found = child;
+            }
+          }
+        });
+      }
+      // 2. Search modelGroup
+      if (!found && modelGroup) {
+        modelGroup.traverse((child) => {
+          if (!found) {
+            const cName = (child.name || '').toLowerCase();
+            const uUuid = (child.userData?.meshUuid || '').toLowerCase();
+            const uName = (child.userData?.name || '').toLowerCase();
+            if (cName === targetClean || uUuid === targetClean || uName === targetClean || child.name === targetKey) {
+              found = child;
+            }
+          }
+        });
+      }
+      return found || geometriesGroup || modelGroup;
+    };
+
+    scatterLayers.forEach((layer) => {
+      if (!layer || layer.enabled === false || layer.visible === false) return;
+      const targetObj = resolveTarget(layer.target);
+      if (!targetObj) return;
+
+      try {
+        const instancedMesh = generateSurfaceScatterMesh({
+          target: targetObj,
+          prototype: layer.prototype || 'leaf',
+          distribution: layer.distribution || 'random',
+          count: layer.count || 200,
+          minScale: layer.minScale ?? 0.8,
+          maxScale: layer.maxScale ?? 1.2,
+          randomRotation: layer.randomRotation ?? 45,
+          normalAlign: layer.normalAlign !== false,
+          normalOffset: layer.normalOffset ?? 0.005,
+          color: layer.color || '#4ade80',
+          colorVariation: layer.colorVariation ?? 0.2,
+          roughness: layer.roughness ?? 0.7,
+          metalness: layer.metalness ?? 0.1,
+          seed: layer.seed || 1,
+          THREE_LIB: THREE
+        });
+
+        if (instancedMesh) {
+          const posX = Number(layer.posX || 0);
+          const posY = Number(layer.posY || 0);
+          const posZ = Number(layer.posZ || 0);
+          const rotX = Number(layer.rotX || 0);
+          const rotY = Number(layer.rotY || 0);
+          const rotZ = Number(layer.rotZ || 0);
+          const scaleX = Number(layer.scaleX ?? layer.scale ?? 1);
+          const scaleY = Number(layer.scaleY ?? layer.scale ?? 1);
+          const scaleZ = Number(layer.scaleZ ?? layer.scale ?? 1);
+
+          instancedMesh.position.set(posX, posY, posZ);
+          instancedMesh.rotation.set(
+            (rotX * Math.PI) / 180,
+            (rotY * Math.PI) / 180,
+            (rotZ * Math.PI) / 180
+          );
+          instancedMesh.scale.set(scaleX, scaleY, scaleZ);
+          group.add(instancedMesh);
+        }
+      } catch (err) {
+        console.warn('[ProductViewer] Scatter layer build error:', layer.id, err);
+      }
+    });
+
+    if (active) {
+      setScatterGroup(group);
+    }
+
+    return () => {
+      active = false;
+      group.traverse((child) => {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) {
+          if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+          else child.material.dispose();
+        }
+      });
+    };
+  }, [JSON.stringify(scatterLayers), modelGroup, geometriesGroup]);
+
   // Ensure model, geometries, and 3D text materials recompile shader programs to receive custom lights illumination
   useEffect(() => {
     const updateMaterials = (group) => {
@@ -608,7 +825,8 @@ function SceneContent({
     updateMaterials(modelGroup);
     updateMaterials(geometriesGroup);
     updateMaterials(texts3DGroup);
-  }, [modelGroup, geometriesGroup, texts3DGroup, customLightsGroup]);
+    updateMaterials(scatterGroup);
+  }, [modelGroup, geometriesGroup, texts3DGroup, scatterGroup, customLightsGroup]);
 
   useFrame((state, delta) => {
     if (portalInstance) {
@@ -718,6 +936,11 @@ function SceneContent({
       {/* Additional 3D Primitive Geometries */}
       {geometriesGroup && (
         <primitive object={geometriesGroup} />
+      )}
+
+      {/* Surface Scattering & Foliage Layers */}
+      {scatterGroup && (
+        <primitive object={scatterGroup} />
       )}
 
       {/* Extruded 3D Typography Texts */}
@@ -972,43 +1195,38 @@ export default function ProductViewer({
           ...(config || {})
         };
 
-        // Center the model at origin
-        model.position.x = -center.x;
-        model.position.y = -center.y;
-        model.position.z = -center.z;
-
-        // Apply custom model rotation if configured
-        const rotX = normCfg.modelRotX !== undefined ? Number(normCfg.modelRotX) : null;
-        const rotY = normCfg.modelRotY !== undefined ? Number(normCfg.modelRotY) : null;
-        const rotZ = normCfg.modelRotZ !== undefined ? Number(normCfg.modelRotZ) : null;
-        if (rotX !== null || rotY !== null || rotZ !== null) {
-          model.rotation.set(
-            THREE.MathUtils.degToRad(rotX || 0),
-            THREE.MathUtils.degToRad(rotY || 0),
-            THREE.MathUtils.degToRad(rotZ || 0)
-          );
-        } else if (normCfg.modelRotation) {
-          const r = parsePos(normCfg.modelRotation, [0, 0, 0]);
-          model.rotation.set(
-            THREE.MathUtils.degToRad(r[0]),
-            THREE.MathUtils.degToRad(r[1]),
-            THREE.MathUtils.degToRad(r[2])
-          );
-        }
-
-        // Apply fine-tuned position offset
-        const posX = normCfg.modelPosX !== undefined ? Number(normCfg.modelPosX) : null;
-        const posY = normCfg.modelPosY !== undefined ? Number(normCfg.modelPosY) : null;
-        const posZ = normCfg.modelPosZ !== undefined ? Number(normCfg.modelPosZ) : null;
-        if (posX !== null || posY !== null || posZ !== null) {
-          model.position.x += (posX || 0);
-          model.position.y += (posY || 0);
-          model.position.z += (posZ || 0);
+        // Center the model at origin (matching model-auto-center in ARTest/ARExperience)
+        if (maxDim > 10 || maxDim < 0.05) {
+          const autoScale = 1.0 / maxDim;
+          model.scale.set(autoScale, autoScale, autoScale);
+          const scaledBox = new THREE.Box3().setFromObject(model);
+          const scaledCenter = scaledBox.getCenter(new THREE.Vector3());
+          model.position.set(-scaledCenter.x, -scaledCenter.y, -scaledCenter.z);
+        } else {
+          model.position.set(-center.x, -center.y, -center.z);
         }
 
         const anchorGroup = new THREE.Group();
         anchorGroup.name = 'product_anchor_group';
         anchorGroup.add(model);
+
+        // Apply scale matching ARTest (<a-gltf-model scale="s s s">)
+        const scaleVal = normCfg.modelScale !== undefined && normCfg.modelScale !== null
+          ? Number(normCfg.modelScale)
+          : (normCfg.scale !== undefined && normCfg.scale !== null ? Number(normCfg.scale) : 1.0);
+        anchorGroup.scale.set(scaleVal, scaleVal, scaleVal);
+
+        // Apply rotation matching ARTest (<a-gltf-model rotation="rx ry rz">)
+        const rotCoords = parseVector3(normCfg.modelRotation || [normCfg.modelRotX || 0, normCfg.modelRotY || 0, normCfg.modelRotZ || 0], [0, 0, 0]);
+        anchorGroup.rotation.set(
+          THREE.MathUtils.degToRad(rotCoords[0] || 0),
+          THREE.MathUtils.degToRad(rotCoords[1] || 0),
+          THREE.MathUtils.degToRad(rotCoords[2] || 0)
+        );
+
+        // Apply position matching ARTest (<a-gltf-model position="px py pz">)
+        const posCoords = parseVector3(normCfg.modelPosition || [normCfg.modelPosX || 0, normCfg.modelPosY || 0, normCfg.modelPosZ || 0], [0, 0, 0]);
+        anchorGroup.position.set(posCoords[0] || 0, posCoords[1] || 0, posCoords[2] || 0);
 
         // Apply materials, video textures & overrides
         const { totalMeshes, detectedTargetNode, ytId: discoveredYtId, resolvedUrl } =
@@ -1044,6 +1262,24 @@ export default function ProductViewer({
         }
 
         const framedBox = new THREE.Box3().setFromObject(anchorGroup);
+        const additionalGeoms = normCfg?.additionalGeometries || [];
+        if (Array.isArray(additionalGeoms) && additionalGeoms.length > 0) {
+          try {
+            const tempGeomGroup = createGeometriesGroup(additionalGeoms, THREE);
+            if (tempGeomGroup) {
+              framedBox.union(new THREE.Box3().setFromObject(tempGeomGroup));
+              tempGeomGroup.traverse((c) => {
+                if (c.geometry) c.geometry.dispose();
+                if (c.material) {
+                  if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose());
+                  else c.material.dispose();
+                }
+              });
+            }
+          } catch (bErr) {
+            console.warn('[ProductViewer] Geometry box union notice:', bErr);
+          }
+        }
         const framedCenter = framedBox.getCenter(new THREE.Vector3());
         const framedSize = framedBox.getSize(new THREE.Vector3());
         const framedMaxDim = Math.max(framedSize.x, framedSize.y, framedSize.z) || 1;

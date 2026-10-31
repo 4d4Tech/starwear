@@ -27,10 +27,25 @@ export default function AddGeometryModal({
 
   const currentDef = GEOMETRY_DEFINITIONS.find((g) => g.id === selectedGeometryId) || GEOMETRY_DEFINITIONS[0];
 
+  const isVectorTool = (id) =>
+    ['vectorExtrude', 'vectorInflate', 'vectorRevolve', 'vectorSweep', 'vectorCarve'].includes(id);
+
+  const getVectorInitialMode = (id) => {
+    switch (id) {
+      case 'vectorInflate': return 'inflate';
+      case 'vectorRevolve': return 'revolve';
+      case 'vectorSweep': return 'sweep';
+      case 'vectorCarve': return 'carve';
+      case 'vectorExtrude':
+      default:
+        return 'extrude';
+    }
+  };
+
   const handleSelectGeometry = (geom) => {
     setSelectedGeometryId(geom.id);
     setParams({ ...geom.defaultParams });
-    if (geom.id === 'vectorExtrude' || geom.id === 'vectorInflate') {
+    if (isVectorTool(geom.id)) {
       setIsVectorPenOpen(true);
     }
   };
@@ -44,7 +59,7 @@ export default function AddGeometryModal({
 
   const handleAddGeometry = (overrideDef = null) => {
     const defToUse = overrideDef || currentDef;
-    if (defToUse.id === 'vectorExtrude' || defToUse.id === 'vectorInflate') {
+    if (isVectorTool(defToUse.id)) {
       setIsVectorPenOpen(true);
       return;
     }
@@ -404,7 +419,7 @@ export default function AddGeometryModal({
           isOpen={isVectorPenOpen}
           onClose={() => setIsVectorPenOpen(false)}
           initialColor={selectedColor}
-          initialMode={selectedGeometryId === 'vectorInflate' ? 'inflate' : 'extrude'}
+          initialMode={getVectorInitialMode(selectedGeometryId)}
           onExtrude={(payload) => {
             setIsVectorPenOpen(false);
             if (typeof onAddGeometry === 'function') {

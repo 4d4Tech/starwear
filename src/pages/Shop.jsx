@@ -1158,6 +1158,13 @@ export default function Shop() {
                       : (Array.isArray(pCfg.additionalGeometries) && pCfg.additionalGeometries.length > 0)
                       ? pCfg.additionalGeometries
                       : (Array.isArray(selectedProduct?.additionalGeometries) ? selectedProduct.additionalGeometries : []);
+                    res.scatterLayers = (Array.isArray(bCfg.scatterLayers) && bCfg.scatterLayers.length > 0)
+                      ? bCfg.scatterLayers
+                      : (Array.isArray(selectedBatchConfig?.scatterLayers) && selectedBatchConfig.scatterLayers.length > 0)
+                      ? selectedBatchConfig.scatterLayers
+                      : (Array.isArray(pCfg.scatterLayers) && pCfg.scatterLayers.length > 0)
+                      ? pCfg.scatterLayers
+                      : (Array.isArray(selectedProduct?.scatterLayers) ? selectedProduct.scatterLayers : []);
                     return res;
                   })()}
                   assetName={selectedProduct?.name || selectedProduct?.id}

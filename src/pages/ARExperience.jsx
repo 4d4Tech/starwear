@@ -6,8 +6,12 @@ import * as THREE from 'three';
 import BuyNowButton from '../components/BuyNowButton';
 import ARLightDiagnosticsDrawer from '../components/ARLightDiagnosticsDrawer';
 import { useAuth } from '../context/AuthContext';
-import { isYouTubeShortUrl } from '../utils/aframe-components';
+import { isYouTubeShortUrl, resolveSceneVideoTargets, getVideoTargetMaterialSlots } from '../utils/aframe-components';
+import { registerSurfaceScatterComponent } from '../utils/surfaceScatter';
 import { db, storage } from '../firebase';
+
+// Initialize Surface Scattering & Instanced Foliage Distribution component
+registerSurfaceScatterComponent();
 import { doc, getDoc, getDocFromServer } from 'firebase/firestore';
 import { ref, getDownloadURL } from 'firebase/storage';
 
@@ -25,8 +29,8 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const { currentUser, isSuperAdmin, isSuperUser } = useAuth();
   const isSuperUserAuthenticated = Boolean(
     currentUser && (
-      isSuperAdmin || 
-      isSuperUser || 
+      isSuperAdmin ||
+      isSuperUser ||
       currentUser.email?.toLowerCase() === 'brandonrobinson81@gmail.com'
     )
   );
@@ -350,11 +354,14 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           if (Array.isArray(docData.additionalGeometries)) cfg.additionalGeometries = docData.additionalGeometries;
           if (Array.isArray(docData.custom3DTexts)) cfg.custom3DTexts = docData.custom3DTexts;
           if (Array.isArray(docData.customLights)) cfg.customLights = docData.customLights;
+          if (Array.isArray(docData.scatterLayers)) cfg.scatterLayers = docData.scatterLayers;
           if (Array.isArray(docData.ar_config?.additionalGeometries)) cfg.additionalGeometries = docData.ar_config.additionalGeometries;
           if (Array.isArray(docData.ar_config?.custom3DTexts)) cfg.custom3DTexts = docData.ar_config.custom3DTexts;
           if (Array.isArray(docData.ar_config?.customLights)) cfg.customLights = docData.ar_config.customLights;
+          if (Array.isArray(docData.ar_config?.scatterLayers)) cfg.scatterLayers = docData.ar_config.scatterLayers;
           if (Array.isArray(docData.config?.custom3DTexts)) cfg.custom3DTexts = docData.config.custom3DTexts;
           if (Array.isArray(docData.config?.customLights)) cfg.customLights = docData.config.customLights;
+          if (Array.isArray(docData.config?.scatterLayers)) cfg.scatterLayers = docData.config.scatterLayers;
 
           const directLightingKeys = [
             'ambientColor', 'ambientIntensity',
@@ -396,7 +403,11 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           ...(Array.isArray(assetDocData?.customLights) ? { customLights: assetDocData.customLights } : {}),
           ...(Array.isArray(assetDocData?.ar_config?.customLights) ? { customLights: assetDocData.ar_config.customLights } : {}),
           ...(Array.isArray(batchDocData?.customLights) ? { customLights: batchDocData.customLights } : {}),
-          ...(Array.isArray(batchDocData?.ar_config?.customLights) ? { customLights: batchDocData.ar_config.customLights } : {})
+          ...(Array.isArray(batchDocData?.ar_config?.customLights) ? { customLights: batchDocData.ar_config.customLights } : {}),
+          ...(Array.isArray(assetDocData?.scatterLayers) ? { scatterLayers: assetDocData.scatterLayers } : {}),
+          ...(Array.isArray(assetDocData?.ar_config?.scatterLayers) ? { scatterLayers: assetDocData.ar_config.scatterLayers } : {}),
+          ...(Array.isArray(batchDocData?.scatterLayers) ? { scatterLayers: batchDocData.scatterLayers } : {}),
+          ...(Array.isArray(batchDocData?.ar_config?.scatterLayers) ? { scatterLayers: batchDocData.ar_config.scatterLayers } : {})
         };
         const hasFsConfig = Object.keys(mergedFsConfig).length > 0;
         if (hasFsConfig) {
@@ -418,7 +429,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
               logToScreen('LOCAL_PREVIEW_CONFIG', 'Loaded fallback calibration config from AR Test session.');
             }
           }
-        } catch {}
+        } catch { }
 
         // Check URL search params for preview overrides (e.g. ?portal=1, ?particles=1, ?particle=1)
         let urlPortalOverride = null;
@@ -436,7 +447,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           ) {
             urlParticlesOverride = { enabled: true };
           }
-        } catch {}
+        } catch { }
 
         const isFlipX = !!(
           liveConfig?.videoFlipX ??
@@ -454,12 +465,12 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           if (globalTrackingSnap.exists()) {
             globalTracking = globalTrackingSnap.data();
           }
-        } catch {}
+        } catch { }
 
         const activeTracking = liveConfig?.trackingConfig || liveConfig?.tracking ||
-                               localPreviewConfig?.trackingConfig ||
-                               data?.arExperience?.config?.trackingConfig || data?.ar_config?.trackingConfig ||
-                               data?.trackingConfig || {};
+          localPreviewConfig?.trackingConfig ||
+          data?.arExperience?.config?.trackingConfig || data?.ar_config?.trackingConfig ||
+          data?.trackingConfig || {};
 
         const mergedTracking = {
           filterMinCF: 0.0005,
@@ -529,6 +540,17 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           data?.ar_config?.customModels
         );
 
+        const resolvedScatterLayers = getNonEmptyArray(
+          localPreviewConfig?.scatterLayers,
+          localPreviewConfig?.ar_config?.scatterLayers,
+          batchDocData?.scatterLayers,
+          batchDocData?.ar_config?.scatterLayers,
+          assetDocData?.scatterLayers,
+          assetDocData?.ar_config?.scatterLayers,
+          data?.scatterLayers,
+          data?.ar_config?.scatterLayers
+        );
+
         const mergedConfig = {
           ...(data.arExperience?.config || {}),
           ...(data.ar_config || {}),
@@ -552,6 +574,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           customModels: resolvedCustomModels,
           custom3DTexts: resolved3DTexts,
           customLights: resolvedLights,
+          scatterLayers: resolvedScatterLayers,
           ...(urlPortalOverride ? { portalConfig: { ...(liveConfig?.portalConfig || {}), ...(localPreviewConfig?.portalConfig || {}), ...urlPortalOverride } } : {}),
           ...(urlParticlesOverride ? { particleConfig: { ...(liveConfig?.particleConfig || {}), ...(localPreviewConfig?.particleConfig || {}), ...urlParticlesOverride } } : {}),
           videoFlipX: isFlipX,
@@ -575,7 +598,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                 videoFilePath = aData.ar_config?.video_file_path || aData.video_file_path || '';
               }
             }
-          } catch {}
+          } catch { }
         }
 
         // If we have a storage path but no direct http URL, resolve download URL from Firebase Storage
@@ -659,7 +682,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           v.srcObject.getTracks().forEach((track) => {
             track.enabled = true;
           });
-          v.play().catch(() => {});
+          v.play().catch(() => { });
         }
       });
 
@@ -745,59 +768,24 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     };
   }, []);
 
-  // Live Mirror Video Layer / Mesh Texture Inversion (Flip X) for WebAR
+  // Live Mirror Video Layer / Mesh Texture Inversion (Flip X) for WebAR across all Scene Objects
   const applyFlipXToMesh = (model3D, isFlipped, targetParam = 'auto') => {
-    if (!model3D) return;
-    const THREE_LIB = (typeof AFRAME !== 'undefined' && AFRAME.THREE) ? AFRAME.THREE : THREE;
+    const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME?.THREE) ? window.AFRAME.THREE : THREE;
+    const sceneEl = sceneRef.current || document.querySelector('a-scene');
+    const scopeEl = document.getElementById(cameraEnabled ? 'target-entity' : 'preview-anchor') || sceneEl;
 
-    const screenKeywords = ['video', 'screen', 'display', 'cinema', 'videomat', 'screenmat'];
-
-    const matchedMeshes = [];
-    const allMeshes = [];
-    const autoScreenMeshes = [];
-
-    model3D.traverse((node) => {
-      if (node.isMesh && node.material) {
-        allMeshes.push(node);
-        const nodeName = (node.name || '').toLowerCase();
-        const nodeUuid = (node.uuid || '').toLowerCase();
-
-        if (targetParam === 'all') {
-          matchedMeshes.push(node);
-        } else if (targetParam !== 'auto' && (nodeName === targetParam || nodeUuid === targetParam)) {
-          matchedMeshes.push(node);
-        } else {
-          const hasVideo = !!(
-            node.userData?.hasVideo ||
-            node.userData?.videoUrl ||
-            (Array.isArray(node.material)
-              ? node.material.some((m) => m?.userData?.hasVideo || m?.userData?.isVideoLayer)
-              : (node.material?.userData?.hasVideo || node.material?.userData?.isVideoLayer))
-          );
-          if (hasVideo || screenKeywords.some((kw) => nodeName.includes(kw))) {
-            autoScreenMeshes.push(node);
-          }
-        }
-      }
+    const { finalTargetMeshes = [] } = resolveSceneVideoTargets(targetParam, {
+      rootModelObj: model3D || null,
+      scopeEl
     });
 
-    let finalTargetMeshes = matchedMeshes;
-    if (finalTargetMeshes.length === 0) {
-      finalTargetMeshes = autoScreenMeshes;
-    }
-
     finalTargetMeshes.forEach((node) => {
+      if (!node || !node.material) return;
       const materials = Array.isArray(node.material) ? node.material : [node.material];
-      const targetSlot = typeof node.userData?.videoTargetMaterialIndex === 'number'
-        ? node.userData.videoTargetMaterialIndex
-        : null;
+      const targetSlots = getVideoTargetMaterialSlots(node, materials);
 
       materials.forEach((mat, idx) => {
-        const isTarget = targetSlot !== null
-          ? idx === targetSlot
-          : (mat?.userData?.hasVideo || mat?.userData?.isVideoLayer || materials.length === 1 || (node.userData?.archetype === 'VIDEO_SCREEN' && idx === 4));
-
-        if (!isTarget) return;
+        if (!mat || !targetSlots.includes(idx)) return;
 
         ['map', 'emissiveMap'].forEach((mapName) => {
           if (mat[mapName]) {
@@ -926,7 +914,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
       // Ensure all 3D video layers start playing immediately upon target acquisition
       document.querySelectorAll('video').forEach((v) => {
         if (v && v.paused && !v.srcObject) {
-          v.play().catch(() => {});
+          v.play().catch(() => { });
         }
       });
 
@@ -1033,7 +1021,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
       const refreshAllMaterials = () => {
         if (sceneEl?.renderer?.renderLists?.dispose) {
-          try { sceneEl.renderer.renderLists.dispose(); } catch (e) {}
+          try { sceneEl.renderer.renderLists.dispose(); } catch (e) { }
         }
 
         if (targetEntity && targetEntity.object3D) {
@@ -1091,7 +1079,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
       // Auto-play all video textures embedded in the 3D model
       document.querySelectorAll('video').forEach((v) => {
         if (v && v.paused && !v.srcObject) {
-          v.play().catch(() => {});
+          v.play().catch(() => { });
         }
       });
 
@@ -1112,223 +1100,223 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           if (mesh) {
             const overrides = arData?.config?.meshOverrides;
             const nodesToDelete = [];
-          mesh.traverse((node) => {
-            if (node.isMesh) {
-              if (overrides) {
-                const ovr = overrides[node.name] || overrides[node.uuid];
-                if (ovr) {
-                  if (ovr.deleted || ovr.visible === false) {
-                    node.visible = false;
-                    if (ovr.deleted && node.parent) {
-                      nodesToDelete.push(node);
-                    }
-                    return;
-                  }
-                  if (ovr.position) node.position.set(ovr.position.x, ovr.position.y, ovr.position.z);
-                  if (ovr.rotation) {
-                    node.rotation.set(
-                      ((ovr.rotation.x || 0) * Math.PI) / 180,
-                      ((ovr.rotation.y || 0) * Math.PI) / 180,
-                      ((ovr.rotation.z || 0) * Math.PI) / 180
-                    );
-                  }
-                  if (ovr.scale) {
-                    const sx = typeof ovr.scale === 'number' ? ovr.scale : (ovr.scale.x || 1);
-                    node.scale.set(sx, sx, sx);
-                  }
-                  if (ovr.visible !== undefined) node.visible = !!ovr.visible;
-                  if (ovr.material && node.material) {
-                    const mats = Array.isArray(node.material) ? node.material : [node.material];
-                    mats.forEach((m) => {
-                      if (ovr.material.color && m.color) m.color.set(ovr.material.color);
-                      if (ovr.material.metalness !== undefined && m.metalness !== undefined) m.metalness = ovr.material.metalness;
-                      if (ovr.material.roughness !== undefined && m.roughness !== undefined) m.roughness = ovr.material.roughness;
-                      if (ovr.material.emissive && m.emissive) m.emissive.set(ovr.material.emissive);
-                      if (ovr.material.opacity !== undefined) {
-                        m.opacity = ovr.material.opacity;
-                        if (m.opacity < 1.0) m.transparent = true;
+            mesh.traverse((node) => {
+              if (node.isMesh) {
+                if (overrides) {
+                  const ovr = overrides[node.name] || overrides[node.uuid];
+                  if (ovr) {
+                    if (ovr.deleted || ovr.visible === false) {
+                      node.visible = false;
+                      if (ovr.deleted && node.parent) {
+                        nodesToDelete.push(node);
                       }
-                      if (ovr.material.wireframe !== undefined) m.wireframe = !!ovr.material.wireframe;
-                      m.needsUpdate = true;
-                    });
-                    const THREE_LIB = (typeof AFRAME !== 'undefined' && AFRAME.THREE) ? AFRAME.THREE : THREE;
-                    const applyTexTransform = (tex) => {
-                      if (!tex) return;
-                      tex.wrapS = THREE_LIB.RepeatWrapping;
-                      tex.wrapT = THREE_LIB.RepeatWrapping;
-                      if (tex.center) tex.center.set(0.5, 0.5);
-                      const repX = ovr.material.textureRepeatX !== undefined && ovr.material.textureRepeatX !== null ? Number(ovr.material.textureRepeatX) : 1.0;
-                      const repY = ovr.material.textureRepeatY !== undefined && ovr.material.textureRepeatY !== null ? Number(ovr.material.textureRepeatY) : 1.0;
-                      const flipX = Boolean(ovr.material.textureFlipX);
-                      const flipY = Boolean(ovr.material.textureFlipY);
-                      const offX = ovr.material.textureOffsetX !== undefined && ovr.material.textureOffsetX !== null ? Number(ovr.material.textureOffsetX) : 0.0;
-                      const offY = ovr.material.textureOffsetY !== undefined && ovr.material.textureOffsetY !== null ? Number(ovr.material.textureOffsetY) : 0.0;
-                      const rotDeg = ovr.material.textureRotation !== undefined && ovr.material.textureRotation !== null ? Number(ovr.material.textureRotation) : 0.0;
-
-                      if (tex.repeat) tex.repeat.set(flipX ? -repX : repX, flipY ? -repY : repY);
-                      if (tex.offset) tex.offset.set(offX, offY);
-                      tex.rotation = (rotDeg * Math.PI) / 180;
-                      tex.matrixAutoUpdate = true;
-                      if (typeof tex.updateMatrix === 'function') tex.updateMatrix();
-                      tex.needsUpdate = true;
-                    };
-
-                    if (ovr.material.textureUrl && typeof ovr.material.textureUrl === 'string' && !ovr.material.textureUrl.startsWith('blob:')) {
-                      const loader = new THREE_LIB.TextureLoader();
-                      loader.load(ovr.material.textureUrl, (tex) => {
-                        if (THREE_LIB.SRGBColorSpace !== undefined) {
-                          tex.colorSpace = THREE_LIB.SRGBColorSpace;
-                        }
-                        tex.flipY = false;
-                        applyTexTransform(tex);
-                        mats.forEach((m) => {
-                          m.map = tex;
-                          m.needsUpdate = true;
-                        });
-                      });
-                    } else {
+                      return;
+                    }
+                    if (ovr.position) node.position.set(ovr.position.x, ovr.position.y, ovr.position.z);
+                    if (ovr.rotation) {
+                      node.rotation.set(
+                        ((ovr.rotation.x || 0) * Math.PI) / 180,
+                        ((ovr.rotation.y || 0) * Math.PI) / 180,
+                        ((ovr.rotation.z || 0) * Math.PI) / 180
+                      );
+                    }
+                    if (ovr.scale) {
+                      const sx = typeof ovr.scale === 'number' ? ovr.scale : (ovr.scale.x || 1);
+                      node.scale.set(sx, sx, sx);
+                    }
+                    if (ovr.visible !== undefined) node.visible = !!ovr.visible;
+                    if (ovr.material && node.material) {
+                      const mats = Array.isArray(node.material) ? node.material : [node.material];
                       mats.forEach((m) => {
-                        ['map', 'emissiveMap', 'roughnessMap', 'metalnessMap'].forEach((slot) => {
-                          if (m[slot]) applyTexTransform(m[slot]);
-                        });
+                        if (ovr.material.color && m.color) m.color.set(ovr.material.color);
+                        if (ovr.material.metalness !== undefined && m.metalness !== undefined) m.metalness = ovr.material.metalness;
+                        if (ovr.material.roughness !== undefined && m.roughness !== undefined) m.roughness = ovr.material.roughness;
+                        if (ovr.material.emissive && m.emissive) m.emissive.set(ovr.material.emissive);
+                        if (ovr.material.opacity !== undefined) {
+                          m.opacity = ovr.material.opacity;
+                          if (m.opacity < 1.0) m.transparent = true;
+                        }
+                        if (ovr.material.wireframe !== undefined) m.wireframe = !!ovr.material.wireframe;
                         m.needsUpdate = true;
                       });
+                      const THREE_LIB = (typeof AFRAME !== 'undefined' && AFRAME.THREE) ? AFRAME.THREE : THREE;
+                      const applyTexTransform = (tex) => {
+                        if (!tex) return;
+                        tex.wrapS = THREE_LIB.RepeatWrapping;
+                        tex.wrapT = THREE_LIB.RepeatWrapping;
+                        if (tex.center) tex.center.set(0.5, 0.5);
+                        const repX = ovr.material.textureRepeatX !== undefined && ovr.material.textureRepeatX !== null ? Number(ovr.material.textureRepeatX) : 1.0;
+                        const repY = ovr.material.textureRepeatY !== undefined && ovr.material.textureRepeatY !== null ? Number(ovr.material.textureRepeatY) : 1.0;
+                        const flipX = Boolean(ovr.material.textureFlipX);
+                        const flipY = Boolean(ovr.material.textureFlipY);
+                        const offX = ovr.material.textureOffsetX !== undefined && ovr.material.textureOffsetX !== null ? Number(ovr.material.textureOffsetX) : 0.0;
+                        const offY = ovr.material.textureOffsetY !== undefined && ovr.material.textureOffsetY !== null ? Number(ovr.material.textureOffsetY) : 0.0;
+                        const rotDeg = ovr.material.textureRotation !== undefined && ovr.material.textureRotation !== null ? Number(ovr.material.textureRotation) : 0.0;
+
+                        if (tex.repeat) tex.repeat.set(flipX ? -repX : repX, flipY ? -repY : repY);
+                        if (tex.offset) tex.offset.set(offX, offY);
+                        tex.rotation = (rotDeg * Math.PI) / 180;
+                        tex.matrixAutoUpdate = true;
+                        if (typeof tex.updateMatrix === 'function') tex.updateMatrix();
+                        tex.needsUpdate = true;
+                      };
+
+                      if (ovr.material.textureUrl && typeof ovr.material.textureUrl === 'string' && !ovr.material.textureUrl.startsWith('blob:')) {
+                        const loader = new THREE_LIB.TextureLoader();
+                        loader.load(ovr.material.textureUrl, (tex) => {
+                          if (THREE_LIB.SRGBColorSpace !== undefined) {
+                            tex.colorSpace = THREE_LIB.SRGBColorSpace;
+                          }
+                          tex.flipY = false;
+                          applyTexTransform(tex);
+                          mats.forEach((m) => {
+                            m.map = tex;
+                            m.needsUpdate = true;
+                          });
+                        });
+                      } else {
+                        mats.forEach((m) => {
+                          ['map', 'emissiveMap', 'roughnessMap', 'metalnessMap'].forEach((slot) => {
+                            if (m[slot]) applyTexTransform(m[slot]);
+                          });
+                          m.needsUpdate = true;
+                        });
+                      }
                     }
                   }
                 }
+                if (node.material) {
+                  const mats = Array.isArray(node.material) ? node.material : [node.material];
+                  mats.forEach((m) => {
+                    m.needsUpdate = true;
+                  });
+                  const mat = node.material;
+                  const hasMap = mat.map ? 'YES' : 'NO';
+                  const matType = mat.type || 'Standard';
+                  logToScreen(`MESH_AUDIT [${node.name || 'mesh'}]`, `Material: ${matType} | Texture: ${hasMap} | Roughness: ${mat.roughness ?? 'N/A'} | Metalness: ${mat.metalness ?? 'N/A'}`);
+                }
               }
-              if (node.material) {
-                const mats = Array.isArray(node.material) ? node.material : [node.material];
-                mats.forEach((m) => {
-                  m.needsUpdate = true;
-                });
-                const mat = node.material;
-                const hasMap = mat.map ? 'YES' : 'NO';
-                const matType = mat.type || 'Standard';
-                logToScreen(`MESH_AUDIT [${node.name || 'mesh'}]`, `Material: ${matType} | Texture: ${hasMap} | Roughness: ${mat.roughness ?? 'N/A'} | Metalness: ${mat.metalness ?? 'N/A'}`);
+            });
+            nodesToDelete.forEach((node) => {
+              if (node.parent) {
+                node.parent.remove(node);
               }
-            }
-          });
-          nodesToDelete.forEach((node) => {
-            if (node.parent) {
-              node.parent.remove(node);
-            }
-          });
+            });
+          }
         }
-      }
-    });
+      });
 
-    // Compute bounding box and auto-frame camera distance (matching Studio4D4 studio angle)
-    ['preview-model', 'ar-model'].forEach((id) => {
-      const el = document.getElementById(id);
-      const model3D = el?.getObject3D('mesh');
-      if (model3D && defaultCamPosRef.current.length() <= 2.6) {
-        const box = new THREE.Box3().setFromObject(model3D);
-        if (!box.isEmpty()) {
-          const size = box.getSize(new THREE.Vector3());
-          const maxDim = Math.max(size.x, size.y, size.z) || 1;
-          const fov = 45 * (Math.PI / 180);
-          let cameraDistance = Math.abs(maxDim / 2 / Math.tan(fov / 2)) * 1.5;
-          cameraDistance = Math.max(cameraDistance, 1.5);
+      // Compute bounding box and auto-frame camera distance (matching Studio4D4 studio angle)
+      ['preview-model', 'ar-model'].forEach((id) => {
+        const el = document.getElementById(id);
+        const model3D = el?.getObject3D('mesh');
+        if (model3D && defaultCamPosRef.current.length() <= 2.6) {
+          const box = new THREE.Box3().setFromObject(model3D);
+          if (!box.isEmpty()) {
+            const size = box.getSize(new THREE.Vector3());
+            const maxDim = Math.max(size.x, size.y, size.z) || 1;
+            const fov = 45 * (Math.PI / 180);
+            let cameraDistance = Math.abs(maxDim / 2 / Math.tan(fov / 2)) * 1.5;
+            cameraDistance = Math.max(cameraDistance, 1.5);
 
-          // Studio4D4 camera perspective: elevated at ~18-20° above horizon
-          const initialCamPos = new THREE.Vector3(0, maxDim * 0.35, cameraDistance);
-          defaultCamPosRef.current.copy(initialCamPos);
-          defaultTargetRef.current.set(0, 0, 0);
+            // Studio4D4 camera perspective: elevated at ~18-20° above horizon
+            const initialCamPos = new THREE.Vector3(0, maxDim * 0.35, cameraDistance);
+            defaultCamPosRef.current.copy(initialCamPos);
+            defaultTargetRef.current.set(0, 0, 0);
 
-          if (!cameraEnabled) {
-            const controls = getOrbitControls();
-            const camera = getThreeCamera();
-            if (camera) {
-              camera.position.copy(initialCamPos);
-              camera.lookAt(0, 0, 0);
-              camera.updateMatrixWorld();
-            }
-            if (controls) {
-              controls.target.set(0, 0, 0);
-              controls.update();
+            if (!cameraEnabled) {
+              const controls = getOrbitControls();
+              const camera = getThreeCamera();
+              if (camera) {
+                camera.position.copy(initialCamPos);
+                camera.lookAt(0, 0, 0);
+                camera.updateMatrixWorld();
+              }
+              if (controls) {
+                controls.target.set(0, 0, 0);
+                controls.update();
+              }
             }
           }
         }
-      }
-    });
-  };
+      });
+    };
 
-  const onModelError = (e) => {
-    logToScreen('GLTF_ERROR', e.detail || 'Error loading 3D asset.');
-  };
+    const onModelError = (e) => {
+      logToScreen('GLTF_ERROR', e.detail || 'Error loading 3D asset.');
+    };
 
-  sceneEl.addEventListener('arReady', onArReady);
-  sceneEl.addEventListener('arError', onArError);
-  sceneEl.addEventListener('targetFound', onTargetFound);
-  sceneEl.addEventListener('targetLost', onTargetLost);
+    sceneEl.addEventListener('arReady', onArReady);
+    sceneEl.addEventListener('arError', onArError);
+    sceneEl.addEventListener('targetFound', onTargetFound);
+    sceneEl.addEventListener('targetLost', onTargetLost);
 
-  // If MindAR is already initialized, trigger ready handler immediately
-  if (sceneEl.systems && sceneEl.systems['mindar-image-system']?.controller) {
-    onArReady();
-  }
-
-  const modelIds = ['ar-model', 'preview-model', 'ar-model-forced'];
-  modelIds.forEach((id) => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.addEventListener('model-loaded', onModelLoad);
-      el.addEventListener('model-error', onModelError);
-      if (el.getObject3D('mesh')) {
-        onModelLoad();
-      }
+    // If MindAR is already initialized, trigger ready handler immediately
+    if (sceneEl.systems && sceneEl.systems['mindar-image-system']?.controller) {
+      onArReady();
     }
-  });
 
-  const onTargetUpdate = () => {
-    if (targetEl && targetEl.object3D) {
-      targetEl.object3D.matrixWorldNeedsUpdate = true;
-      targetEl.object3D.updateMatrixWorld(true);
-    }
-  };
-
-  const targetEl = document.getElementById('target-entity');
-  if (targetEl) {
-    targetEl.addEventListener('targetFound', onTargetFound);
-    targetEl.addEventListener('targetLost', onTargetLost);
-    targetEl.addEventListener('targetUpdate', onTargetUpdate);
-  }
-
-  return () => {
-    if (sceneEl) {
-      sceneEl.removeEventListener('arReady', onArReady);
-      sceneEl.removeEventListener('arError', onArError);
-      sceneEl.removeEventListener('targetFound', onTargetFound);
-      sceneEl.removeEventListener('targetLost', onTargetLost);
-    }
+    const modelIds = ['ar-model', 'preview-model', 'ar-model-forced'];
     modelIds.forEach((id) => {
       const el = document.getElementById(id);
       if (el) {
-        el.removeEventListener('model-loaded', onModelLoad);
-        el.removeEventListener('model-error', onModelError);
+        el.addEventListener('model-loaded', onModelLoad);
+        el.addEventListener('model-error', onModelError);
+        if (el.getObject3D('mesh')) {
+          onModelLoad();
+        }
       }
     });
-    if (targetEl) {
-      targetEl.removeEventListener('targetFound', onTargetFound);
-      targetEl.removeEventListener('targetLost', onTargetLost);
-      targetEl.removeEventListener('targetUpdate', onTargetUpdate);
-    }
-  };
-}, [arData, cameraEnabled, getOrbitControls, getThreeCamera]);
 
-// Reactive Effect to ensure flipX is applied if arData config loads after model is in memory
-useEffect(() => {
-  if (!arData?.config) return;
-  const isFlipX = !!(arData.config.videoFlipX);
-  const targetMesh = arData.config.videoTargetMesh || 'auto';
-  ['ar-model', 'preview-model', 'ar-model-forced'].forEach((id) => {
-    const el = document.getElementById(id);
-    if (el) {
-      const mesh = el.getObject3D('mesh');
-      if (mesh) applyFlipXToMesh(mesh, isFlipX, targetMesh);
+    const onTargetUpdate = () => {
+      if (targetEl && targetEl.object3D) {
+        targetEl.object3D.matrixWorldNeedsUpdate = true;
+        targetEl.object3D.updateMatrixWorld(true);
+      }
+    };
+
+    const targetEl = document.getElementById('target-entity');
+    if (targetEl) {
+      targetEl.addEventListener('targetFound', onTargetFound);
+      targetEl.addEventListener('targetLost', onTargetLost);
+      targetEl.addEventListener('targetUpdate', onTargetUpdate);
     }
-  });
-}, [arData]);
+
+    return () => {
+      if (sceneEl) {
+        sceneEl.removeEventListener('arReady', onArReady);
+        sceneEl.removeEventListener('arError', onArError);
+        sceneEl.removeEventListener('targetFound', onTargetFound);
+        sceneEl.removeEventListener('targetLost', onTargetLost);
+      }
+      modelIds.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.removeEventListener('model-loaded', onModelLoad);
+          el.removeEventListener('model-error', onModelError);
+        }
+      });
+      if (targetEl) {
+        targetEl.removeEventListener('targetFound', onTargetFound);
+        targetEl.removeEventListener('targetLost', onTargetLost);
+        targetEl.removeEventListener('targetUpdate', onTargetUpdate);
+      }
+    };
+  }, [arData, cameraEnabled, getOrbitControls, getThreeCamera]);
+
+  // Reactive Effect to ensure flipX is applied if arData config loads after model is in memory
+  useEffect(() => {
+    if (!arData?.config) return;
+    const isFlipX = !!(arData.config.videoFlipX);
+    const targetMesh = arData.config.videoTargetMesh || 'auto';
+    ['ar-model', 'preview-model', 'ar-model-forced'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) {
+        const mesh = el.getObject3D('mesh');
+        if (mesh) applyFlipXToMesh(mesh, isFlipX, targetMesh);
+      }
+    });
+  }, [arData]);
 
   // Media Toggle Helper
   const toggleMedia = () => {
@@ -1357,7 +1345,7 @@ useEffect(() => {
             '*'
           );
         }
-      } catch (e) {}
+      } catch (e) { }
     });
     logToScreen('MEDIA_MUTE_TOGGLE', `Audio state changed: ${nextMuted ? 'MUTED' : 'UNMUTED'}`);
   };
@@ -1439,14 +1427,14 @@ useEffect(() => {
   const customLights = (Array.isArray(cfg?.customLights) && cfg.customLights.length > 0)
     ? cfg.customLights
     : (Array.isArray(cfg?.ar_config?.customLights) && cfg.ar_config.customLights.length > 0)
-    ? cfg.ar_config.customLights
-    : (Array.isArray(arData?.customLights) && arData.customLights.length > 0)
-    ? arData.customLights
-    : (Array.isArray(arData?.config?.customLights) && arData.config.customLights.length > 0)
-    ? arData.config.customLights
-    : (Array.isArray(arData?.ar_config?.customLights) && arData.ar_config.customLights.length > 0)
-    ? arData.ar_config.customLights
-    : (Array.isArray(cfg?.customLights) ? cfg.customLights : []);
+      ? cfg.ar_config.customLights
+      : (Array.isArray(arData?.customLights) && arData.customLights.length > 0)
+        ? arData.customLights
+        : (Array.isArray(arData?.config?.customLights) && arData.config.customLights.length > 0)
+          ? arData.config.customLights
+          : (Array.isArray(arData?.ar_config?.customLights) && arData.ar_config.customLights.length > 0)
+            ? arData.ar_config.customLights
+            : (Array.isArray(cfg?.customLights) ? cfg.customLights : []);
   const hasCustomLights = Array.isArray(customLights) && customLights.some((l) => l && l.visible !== false);
   const customLightsAttr = customLights && customLights.length > 0
     ? `lights: ${encodeURIComponent(JSON.stringify(customLights))}; showHelpers: false; showBulbs: false;`
@@ -1532,16 +1520,16 @@ useEffect(() => {
   const portalEnabled = urlPortalFlag !== null
     ? urlPortalFlag
     : !!(
-        portalCfg &&
-        (portalCfg.enabled === true ||
-          portalCfg.enabled === 'true' ||
-          portalCfg.enabled === 1 ||
-          portalCfg.enabled === '1' ||
-          (portalCfg.enabled !== false &&
-            portalCfg.enabled !== 'false' &&
-            portalCfg.enabled !== 0 &&
-            (Boolean(portalCfg.shape) || Boolean(portalCfg.interiorType) || Boolean(portalCfg.preset))))
-      );
+      portalCfg &&
+      (portalCfg.enabled === true ||
+        portalCfg.enabled === 'true' ||
+        portalCfg.enabled === 1 ||
+        portalCfg.enabled === '1' ||
+        (portalCfg.enabled !== false &&
+          portalCfg.enabled !== 'false' &&
+          portalCfg.enabled !== 0 &&
+          (Boolean(portalCfg.shape) || Boolean(portalCfg.interiorType) || Boolean(portalCfg.preset))))
+    );
   const portalHideOutsideModel = portalEnabled && !!portalCfg?.hideOutsideModel;
   const portalAttr = portalEnabled
     ? `enabled: true; shape: ${portalCfg.shape || 'arch'}; width: ${portalCfg.width ?? 1.1}; height: ${portalCfg.height ?? 1.8}; radius: ${portalCfg.radius ?? 0.7}; depth: ${portalCfg.depth ?? 3.5}; frameColor: ${portalCfg.frameColor || '#38bdf8'}; frameWidth: ${portalCfg.frameWidth ?? 0.08}; frameDepth: 0.08; frameEmissive: ${portalCfg.frameEmissive || '#0284c7'}; frameEmissiveIntensity: ${portalCfg.frameEmissiveIntensity ?? 1.5}; frameGlow: ${portalCfg.frameGlow ?? true}; glassTint: ${portalCfg.glassTint || '#38bdf8'}; glassOpacity: ${portalCfg.glassOpacity ?? 0.05}; interiorType: ${portalCfg.interiorType || 'nebula'}; skyboxUrl: ${portalCfg.skyboxUrl || ''}; skyboxScale: ${portalCfg.skyboxScale ?? 1.0}; skyboxPosX: ${portalCfg.skyboxPosX ?? 0}; skyboxPosY: ${portalCfg.skyboxPosY ?? 0}; skyboxPosZ: ${portalCfg.skyboxPosZ ?? 0}; skyboxRotX: ${portalCfg.skyboxRotX ?? 0}; skyboxRotY: ${portalCfg.skyboxRotY ?? 0}; skyboxRotZ: ${portalCfg.skyboxRotZ ?? 0}; skyboxBlur: ${portalCfg.skyboxBlur ?? 0}; interiorColor: ${portalCfg.interiorColor || '#050714'}; wallColor: ${portalCfg.wallColor || '#0f172a'}; floorColor: ${portalCfg.floorColor || '#020617'}; gridColor: ${portalCfg.gridColor || '#38bdf8'}; interiorLightColor: ${portalCfg.interiorLightColor || '#e0f2fe'}; interiorLightIntensity: ${portalCfg.interiorLightIntensity ?? 2.0}; interiorModelType: ${portalCfg.interiorModelType || 'artifact'}; artifactType: ${portalCfg.artifactType || 'crystal'}; customModelUrl: ${portalCfg.customModelUrl || ''}; currentModelUrl: ${arData?.gltfPath || ''}; modelScale: ${portalCfg.modelScale ?? 0.4}; modelPosX: ${portalCfg.modelPosX ?? 0}; modelPosY: ${portalCfg.modelPosY ?? 0}; modelPosZ: ${portalCfg.modelPosZ ?? -1.3}; modelRotSpeed: ${portalCfg.modelRotSpeed ?? 6000}; modelRotX: ${portalCfg.modelRotX ?? 0}; modelRotY: ${portalCfg.modelRotY ?? 0}; modelRotZ: ${portalCfg.modelRotZ ?? 0}; showVideo: ${portalCfg.showVideo ?? false}; videoUrl: ${portalCfg.videoUrl || arData?.videoUrl || ''}; videoScale: ${portalCfg.videoScale ?? 1.0}; videoPosY: ${portalCfg.videoPosY ?? 0}; videoPosZ: ${portalCfg.videoPosZ ?? -1.8}; particles: ${portalCfg.particles || 'stars'}; particleCount: ${portalCfg.particleCount ?? 180}; particleColor: ${portalCfg.particleColor || '#38bdf8'}; particleSpeed: ${portalCfg.particleSpeed ?? 1.0}; floatingText: ${portalCfg.floatingText || 'STAR weAR'}; textColor: ${portalCfg.textColor || '#38bdf8'}; textScale: ${portalCfg.textScale ?? 1.0}; textPosY: ${portalCfg.textPosY ?? 0.65}; textPosZ: ${portalCfg.textPosZ ?? -1.2}; posX: ${portalCfg.posX ?? 0}; posY: ${portalCfg.posY ?? 0}; posZ: ${portalCfg.posZ ?? 0}; rotX: ${portalCfg.rotX ?? 0}; rotY: ${portalCfg.rotY ?? 0}; rotZ: ${portalCfg.rotZ ?? 0};`
@@ -1572,16 +1560,16 @@ useEffect(() => {
   const particleEnabled = urlParticlesFlag !== null
     ? urlParticlesFlag
     : !!(
-        particleCfg &&
-        (particleCfg.enabled === true ||
-          particleCfg.enabled === 'true' ||
-          particleCfg.enabled === 1 ||
-          particleCfg.enabled === '1' ||
-          (particleCfg.enabled !== false &&
-            particleCfg.enabled !== 'false' &&
-            particleCfg.enabled !== 0 &&
-            (Boolean(particleCfg.preset) || (Number(particleCfg.count) > 0))))
-      );
+      particleCfg &&
+      (particleCfg.enabled === true ||
+        particleCfg.enabled === 'true' ||
+        particleCfg.enabled === 1 ||
+        particleCfg.enabled === '1' ||
+        (particleCfg.enabled !== false &&
+          particleCfg.enabled !== 'false' &&
+          particleCfg.enabled !== 0 &&
+          (Boolean(particleCfg.preset) || (Number(particleCfg.count) > 0))))
+    );
 
   const particleRotX = particleCfg?.rotX !== undefined ? Number(particleCfg.rotX) : 0;
   const particleRotY = particleCfg?.rotY !== undefined ? Number(particleCfg.rotY) : 0;
@@ -1593,8 +1581,8 @@ useEffect(() => {
   const additionalGeometries = Array.isArray(cfg?.additionalGeometries)
     ? cfg.additionalGeometries
     : Array.isArray(arData?.additionalGeometries)
-    ? arData.additionalGeometries
-    : [];
+      ? arData.additionalGeometries
+      : [];
   const additionalGeometriesAttr = additionalGeometries && additionalGeometries.length > 0
     ? `geometries: ${encodeURIComponent(JSON.stringify(additionalGeometries))};`
     : '';
@@ -1602,14 +1590,14 @@ useEffect(() => {
   const customModels = (Array.isArray(cfg?.customModels) && cfg.customModels.length > 0)
     ? cfg.customModels
     : (Array.isArray(cfg?.ar_config?.customModels) && cfg.ar_config.customModels.length > 0)
-    ? cfg.ar_config.customModels
-    : (Array.isArray(arData?.customModels) && arData.customModels.length > 0)
-    ? arData.customModels
-    : (Array.isArray(arData?.config?.customModels) && arData.config.customModels.length > 0)
-    ? arData.config.customModels
-    : (Array.isArray(arData?.ar_config?.customModels) && arData.ar_config.customModels.length > 0)
-    ? arData.ar_config.customModels
-    : (Array.isArray(cfg?.customModels) ? cfg.customModels : []);
+      ? cfg.ar_config.customModels
+      : (Array.isArray(arData?.customModels) && arData.customModels.length > 0)
+        ? arData.customModels
+        : (Array.isArray(arData?.config?.customModels) && arData.config.customModels.length > 0)
+          ? arData.config.customModels
+          : (Array.isArray(arData?.ar_config?.customModels) && arData.ar_config.customModels.length > 0)
+            ? arData.ar_config.customModels
+            : (Array.isArray(cfg?.customModels) ? cfg.customModels : []);
   const customModelsAttr = customModels && customModels.length > 0
     ? `models: ${encodeURIComponent(JSON.stringify(customModels))};`
     : '';
@@ -1617,17 +1605,27 @@ useEffect(() => {
   const custom3DTexts = (Array.isArray(cfg?.custom3DTexts) && cfg.custom3DTexts.length > 0)
     ? cfg.custom3DTexts
     : (Array.isArray(cfg?.ar_config?.custom3DTexts) && cfg.ar_config.custom3DTexts.length > 0)
-    ? cfg.ar_config.custom3DTexts
-    : (Array.isArray(arData?.custom3DTexts) && arData.custom3DTexts.length > 0)
-    ? arData.custom3DTexts
-    : (Array.isArray(arData?.config?.custom3DTexts) && arData.config.custom3DTexts.length > 0)
-    ? arData.config.custom3DTexts
-    : (Array.isArray(arData?.ar_config?.custom3DTexts) && arData.ar_config.custom3DTexts.length > 0)
-    ? arData.ar_config.custom3DTexts
-    : (Array.isArray(cfg?.custom3DTexts) ? cfg.custom3DTexts : []);
+      ? cfg.ar_config.custom3DTexts
+      : (Array.isArray(arData?.custom3DTexts) && arData.custom3DTexts.length > 0)
+        ? arData.custom3DTexts
+        : (Array.isArray(arData?.config?.custom3DTexts) && arData.config.custom3DTexts.length > 0)
+          ? arData.config.custom3DTexts
+          : (Array.isArray(arData?.ar_config?.custom3DTexts) && arData.ar_config.custom3DTexts.length > 0)
+            ? arData.ar_config.custom3DTexts
+            : (Array.isArray(cfg?.custom3DTexts) ? cfg.custom3DTexts : []);
   const custom3DTextsAttr = custom3DTexts && custom3DTexts.length > 0
     ? `texts: ${encodeURIComponent(JSON.stringify(custom3DTexts))};`
     : '';
+
+  const scatterLayers = (Array.isArray(cfg?.scatterLayers) && cfg.scatterLayers.length > 0)
+    ? cfg.scatterLayers
+    : (Array.isArray(cfg?.ar_config?.scatterLayers) && cfg.ar_config.scatterLayers.length > 0)
+      ? cfg.ar_config.scatterLayers
+      : (Array.isArray(arData?.scatterLayers) && arData.scatterLayers.length > 0)
+        ? arData.scatterLayers
+        : (Array.isArray(arData?.ar_config?.scatterLayers) && arData.ar_config.scatterLayers.length > 0)
+          ? arData.ar_config.scatterLayers
+          : [];
 
   const webCfg = cfg?.websiteLayer || cfg?.webLayer || arData?.websiteLayer || null;
   const websiteLayerEnabled = Boolean(webCfg && (webCfg.enabled !== false) && webCfg.url);
@@ -1637,11 +1635,10 @@ useEffect(() => {
 
   return (
     <div
-      className={`fixed inset-0 w-full h-[100dvh] overflow-hidden select-none transition-colors duration-300 ${
-        cameraEnabled && trackingStatus !== 'INITIALIZING' && trackingStatus !== 'ERROR'
+      className={`fixed inset-0 w-full h-[100dvh] overflow-hidden select-none transition-colors duration-300 ${cameraEnabled && trackingStatus !== 'INITIALIZING' && trackingStatus !== 'ERROR'
           ? 'bg-transparent'
           : 'bg-slate-950'
-      }`}
+        }`}
     >
       {/* Top Floating Control Bar */}
       <div className="absolute top-4 left-4 right-4 z-40 flex items-center justify-between pointer-events-none">
@@ -1693,11 +1690,10 @@ useEffect(() => {
           {/* Camera / 3D Preview Toggle */}
           <button
             onClick={() => setCameraEnabled(!cameraEnabled)}
-            className={`w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-full border shadow-lg backdrop-blur-md active:scale-95 transition-all ${
-              cameraEnabled
+            className={`w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-full border shadow-lg backdrop-blur-md active:scale-95 transition-all ${cameraEnabled
                 ? 'bg-black/60 text-white border-white/10 hover:bg-black/80'
                 : 'bg-indigo-600 text-white border-indigo-400/40 hover:bg-indigo-500'
-            }`}
+              }`}
             title={cameraEnabled ? 'Switch to 3D Preview Mode' : 'Switch to AR Camera Mode'}
           >
             <span className="material-symbols-outlined text-base sm:text-lg">
@@ -1719,11 +1715,10 @@ useEffect(() => {
           {/* Media Audio Mute/Unmute Button */}
           <button
             onClick={toggleMediaMute}
-            className={`w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center text-white rounded-full border shadow-lg backdrop-blur-md active:scale-95 transition-all ${
-              mediaMuted
+            className={`w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center text-white rounded-full border shadow-lg backdrop-blur-md active:scale-95 transition-all ${mediaMuted
                 ? 'bg-rose-600/80 hover:bg-rose-600 border-rose-400/30'
                 : 'bg-emerald-600/80 hover:bg-emerald-600 border-emerald-400/30'
-            }`}
+              }`}
             title={mediaMuted ? 'Unmute Video Audio (Sound Off)' : 'Mute Video Audio (Sound On)'}
           >
             <span className="material-symbols-outlined text-base sm:text-lg">
@@ -1735,11 +1730,10 @@ useEffect(() => {
           {isSuperUserAuthenticated && (
             <button
               onClick={() => setShowDiagnostics(!showDiagnostics)}
-              className={`w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-full border shadow-lg backdrop-blur-md active:scale-95 transition-all ${
-                showDiagnostics
+              className={`w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center rounded-full border shadow-lg backdrop-blur-md active:scale-95 transition-all ${showDiagnostics
                   ? 'bg-amber-500 text-black border-amber-300'
                   : 'bg-black/60 text-white border-white/10 hover:bg-black/80'
-              }`}
+                }`}
               title="AR Light Diagnostics & DevTools Drawer"
             >
               <span className="material-symbols-outlined text-base sm:text-lg">tune</span>
@@ -1819,7 +1813,7 @@ useEffect(() => {
             </>
           )}
 
-          {cameraEnabled && !portalHideOutsideModel && (
+          {cameraEnabled && !portalHideOutsideModel && arData.gltfPath ? (
             <a-gltf-model
               id="ar-model"
               src={arData.gltfPath}
@@ -1828,17 +1822,22 @@ useEffect(() => {
               rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
               {...(modelRotSpeed > 0
                 ? {
-                    animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${
-                      modelRotY + 360
+                  animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${modelRotY + 360
                     } ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;`
-                  }
+                }
                 : {})}
               model-auto-center="enabled: true"
               dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
               play-gltf-video={playGltfVideoAttr}
               play-gltf-animation={`playing: ${mediaPlaying}`}
             ></a-gltf-model>
-          )}
+          ) : cameraEnabled ? (
+            <a-entity
+              id="ar-video-layer-controller"
+              position="0 0 0"
+              play-gltf-video={playGltfVideoAttr}
+            ></a-entity>
+          ) : null}
 
           {cameraEnabled && portalEnabled && (
             <a-entity
@@ -1888,6 +1887,32 @@ useEffect(() => {
               ar-website-layer={websiteLayerAttr}
             ></a-entity>
           )}
+
+          {/* Surface Scattering & Foliage Layers in Live AR Tracking */}
+          {cameraEnabled && scatterLayers.length > 0 && scatterLayers.map((layer) => {
+            if (!layer || layer.enabled === false || layer.visible === false) return null;
+            const posX = layer.posX ?? 0;
+            const posY = layer.posY ?? 0;
+            const posZ = layer.posZ ?? 0;
+            const rotX = layer.rotX ?? 0;
+            const rotY = layer.rotY ?? 0;
+            const rotZ = layer.rotZ ?? 0;
+            const scaleX = layer.scaleX ?? layer.scale ?? 1;
+            const scaleY = layer.scaleY ?? layer.scale ?? 1;
+            const scaleZ = layer.scaleZ ?? layer.scale ?? 1;
+
+            return (
+              <a-entity
+                key={layer.id}
+                id={`ar-scatter-layer-${layer.id}`}
+                data-layer-id={layer.id}
+                position={`${posX} ${posY} ${posZ}`}
+                rotation={`${rotX} ${rotY} ${rotZ}`}
+                scale={`${scaleX} ${scaleY} ${scaleZ}`}
+                surface-scatter={`enabled: true; target: ${layer.target || '#ar-model'}; prototype: ${layer.prototype || 'leaf'}; count: ${layer.count || 200}; minScale: ${layer.minScale ?? 0.8}; maxScale: ${layer.maxScale ?? 1.2}; randomRotation: ${layer.randomRotation ?? 45}; normalAlign: ${layer.normalAlign !== false}; normalOffset: ${layer.normalOffset ?? 0.005}; color: ${layer.color || '#4ade80'}; colorVariation: ${layer.colorVariation ?? 0.2}; roughness: ${layer.roughness ?? 0.7}; metalness: ${layer.metalness ?? 0.1}; seed: ${layer.seed || 1}; layerId: ${layer.id};`}
+              ></a-entity>
+            );
+          })}
         </a-entity>
 
         {/* Center 3D Model Anchor: Active in 3D Preview Mode (Studio4D4 OrbitControls) */}
@@ -1918,7 +1943,7 @@ useEffect(() => {
               <a-entity id="preview-rim-aim" position="0 0 0"></a-entity>
             </a-entity>
 
-            {!portalHideOutsideModel && (
+            {!portalHideOutsideModel && arData.gltfPath ? (
               <a-gltf-model
                 id="preview-model"
                 src={arData.gltfPath}
@@ -1927,16 +1952,21 @@ useEffect(() => {
                 rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
                 {...(modelRotSpeed > 0
                   ? {
-                      animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${
-                        modelRotY + 360
+                    animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${modelRotY + 360
                       } ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;`
-                    }
+                  }
                   : {})}
                 model-auto-center="enabled: true"
                 dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
                 play-gltf-video={playGltfVideoAttr}
                 play-gltf-animation={`playing: ${mediaPlaying}`}
               ></a-gltf-model>
+            ) : (
+              <a-entity
+                id="ar-video-layer-controller"
+                position="0 0 0"
+                play-gltf-video={playGltfVideoAttr}
+              ></a-entity>
             )}
 
             {portalEnabled && (
@@ -1987,6 +2017,32 @@ useEffect(() => {
                 ar-website-layer={websiteLayerAttr}
               ></a-entity>
             )}
+
+            {/* Surface Scattering & Foliage Layers in 3D Preview Mode */}
+            {scatterLayers.length > 0 && scatterLayers.map((layer) => {
+              if (!layer || layer.enabled === false || layer.visible === false) return null;
+              const posX = layer.posX ?? 0;
+              const posY = layer.posY ?? 0;
+              const posZ = layer.posZ ?? 0;
+              const rotX = layer.rotX ?? 0;
+              const rotY = layer.rotY ?? 0;
+              const rotZ = layer.rotZ ?? 0;
+              const scaleX = layer.scaleX ?? layer.scale ?? 1;
+              const scaleY = layer.scaleY ?? layer.scale ?? 1;
+              const scaleZ = layer.scaleZ ?? layer.scale ?? 1;
+
+              return (
+                <a-entity
+                  key={`preview-${layer.id}`}
+                  id={`ar-scatter-layer-preview-${layer.id}`}
+                  data-layer-id={layer.id}
+                  position={`${posX} ${posY} ${posZ}`}
+                  rotation={`${rotX} ${rotY} ${rotZ}`}
+                  scale={`${scaleX} ${scaleY} ${scaleZ}`}
+                  surface-scatter={`enabled: true; target: ${layer.target || '#preview-model'}; prototype: ${layer.prototype || 'leaf'}; count: ${layer.count || 200}; minScale: ${layer.minScale ?? 0.8}; maxScale: ${layer.maxScale ?? 1.2}; randomRotation: ${layer.randomRotation ?? 45}; normalAlign: ${layer.normalAlign !== false}; normalOffset: ${layer.normalOffset ?? 0.005}; color: ${layer.color || '#4ade80'}; colorVariation: ${layer.colorVariation ?? 0.2}; roughness: ${layer.roughness ?? 0.7}; metalness: ${layer.metalness ?? 0.1}; seed: ${layer.seed || 1}; layerId: ${layer.id};`}
+                ></a-entity>
+              );
+            })}
           </a-entity>
         )}
 
@@ -2025,10 +2081,9 @@ useEffect(() => {
                 rotation={`${modelRotX} ${modelRotY} ${modelRotZ}`}
                 {...(modelRotSpeed > 0
                   ? {
-                      animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${
-                        modelRotY + 360
+                    animation: `property: rotation; from: ${modelRotX} ${modelRotY} ${modelRotZ}; to: ${modelRotX} ${modelRotY + 360
                       } ${modelRotZ}; loop: true; dur: ${modelRotSpeed}; easing: linear;`
-                    }
+                  }
                   : {})}
                 model-auto-center="enabled: true"
                 dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
@@ -2078,6 +2133,32 @@ useEffect(() => {
                 ar-custom-lights={customLightsAttr}
               ></a-entity>
             )}
+
+            {/* Surface Scattering & Foliage Layers in Forced Test Mode */}
+            {scatterLayers.length > 0 && scatterLayers.map((layer) => {
+              if (!layer || layer.enabled === false || layer.visible === false) return null;
+              const posX = layer.posX ?? 0;
+              const posY = layer.posY ?? 0;
+              const posZ = layer.posZ ?? 0;
+              const rotX = layer.rotX ?? 0;
+              const rotY = layer.rotY ?? 0;
+              const rotZ = layer.rotZ ?? 0;
+              const scaleX = layer.scaleX ?? layer.scale ?? 1;
+              const scaleY = layer.scaleY ?? layer.scale ?? 1;
+              const scaleZ = layer.scaleZ ?? layer.scale ?? 1;
+
+              return (
+                <a-entity
+                  key={`forced-${layer.id}`}
+                  id={`ar-scatter-layer-forced-${layer.id}`}
+                  data-layer-id={layer.id}
+                  position={`${posX} ${posY} ${posZ}`}
+                  rotation={`${rotX} ${rotY} ${rotZ}`}
+                  scale={`${scaleX} ${scaleY} ${scaleZ}`}
+                  surface-scatter={`enabled: true; target: ${layer.target || '#ar-model-forced'}; prototype: ${layer.prototype || 'leaf'}; count: ${layer.count || 200}; minScale: ${layer.minScale ?? 0.8}; maxScale: ${layer.maxScale ?? 1.2}; randomRotation: ${layer.randomRotation ?? 45}; normalAlign: ${layer.normalAlign !== false}; normalOffset: ${layer.normalOffset ?? 0.005}; color: ${layer.color || '#4ade80'}; colorVariation: ${layer.colorVariation ?? 0.2}; roughness: ${layer.roughness ?? 0.7}; metalness: ${layer.metalness ?? 0.1}; seed: ${layer.seed || 1}; layerId: ${layer.id};`}
+                ></a-entity>
+              );
+            })}
 
             {websiteLayerEnabled && (
               <a-entity
@@ -2206,7 +2287,7 @@ useEffect(() => {
             Starting AR Camera Feed...
           </h2>
           <p className="text-xs text-neutral-400 max-w-xs mb-6 leading-relaxed">
-            Initializing computer vision tracking pipeline. Please allow camera permissions when prompted.
+            Initializing computer vision tracking. Please allow camera permissions when prompted.
           </p>
 
           <button
@@ -2258,11 +2339,10 @@ useEffect(() => {
             <button
               type="button"
               onClick={toggleCameraAutoRotate}
-              className={`px-2.5 py-1 rounded-full text-xs font-mono flex items-center gap-1.5 transition-all cursor-pointer ${
-                cameraAutoRotate
+              className={`px-2.5 py-1 rounded-full text-xs font-mono flex items-center gap-1.5 transition-all cursor-pointer ${cameraAutoRotate
                   ? 'bg-indigo-600 text-white shadow-sm'
                   : 'text-neutral-300 hover:text-white hover:bg-white/10'
-              }`}
+                }`}
               title="Toggle 360 Auto-Rotation"
             >
               <span className={`material-symbols-outlined text-sm ${cameraAutoRotate ? 'animate-spin' : ''}`} style={{ animationDuration: '6s' }}>

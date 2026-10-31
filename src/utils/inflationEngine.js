@@ -101,6 +101,87 @@ export function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
 }
 
 /**
+ * Universal Vector Point Normalizer
+ * Accepts [x, y], [x, y, z], {x, y}, {X, Y}, {u, v}, {posX, posY},
+ * and preserves bezier handleIn/handleOut if present.
+ */
+export function normalizeVectorPoint(pt) {
+  if (!pt) return null;
+  let x = 0;
+  let y = 0;
+  let handleIn = null;
+  let handleOut = null;
+
+  if (Array.isArray(pt)) {
+    x = Number(pt[0]);
+    y = Number(pt[1]);
+  } else if (typeof pt === 'object') {
+    x = Number(pt.x ?? pt.X ?? pt.u ?? pt.posX ?? (Array.isArray(pt.pos) ? pt.pos[0] : 0));
+    y = Number(pt.y ?? pt.Y ?? pt.v ?? pt.posY ?? (Array.isArray(pt.pos) ? pt.pos[1] : 0));
+
+    if (pt.handleIn) {
+      if (Array.isArray(pt.handleIn)) {
+        handleIn = { x: Number(pt.handleIn[0]) || 0, y: Number(pt.handleIn[1]) || 0 };
+      } else if (typeof pt.handleIn === 'object') {
+        handleIn = { x: Number(pt.handleIn.x ?? pt.handleIn.X) || 0, y: Number(pt.handleIn.y ?? pt.handleIn.Y) || 0 };
+      }
+    }
+    if (pt.handleOut) {
+      if (Array.isArray(pt.handleOut)) {
+        handleOut = { x: Number(pt.handleOut[0]) || 0, y: Number(pt.handleOut[1]) || 0 };
+      } else if (typeof pt.handleOut === 'object') {
+        handleOut = { x: Number(pt.handleOut.x ?? pt.handleOut.X) || 0, y: Number(pt.handleOut.y ?? pt.handleOut.Y) || 0 };
+      }
+    }
+  }
+
+  if (isNaN(x) || !isFinite(x) || isNaN(y) || !isFinite(y)) {
+    return null;
+  }
+
+  const pointType = pt?.type || (handleIn || handleOut ? 'smooth' : 'corner');
+  return { x, y, handleIn, handleOut, type: pointType };
+}
+
+/**
+ * Universal Vector Points List Normalizer
+ * Converts any raw point collection (array of arrays, array of objects, JSON string)
+ * into a sanitized list of valid {x, y} coordinate objects.
+ */
+export function normalizeVectorPointsList(rawPoints) {
+  if (!rawPoints) return [];
+  let list = rawPoints;
+  if (typeof list === 'string') {
+    try {
+      list = JSON.parse(list);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(list)) return [];
+
+  const valid = [];
+  for (let i = 0; i < list.length; i++) {
+    const p = normalizeVectorPoint(list[i]);
+    if (p) valid.push(p);
+  }
+  return valid;
+}
+
+/**
+ * Validates that a Three.js BufferGeometry contains only finite, non-NaN vertex coordinates.
+ */
+export function hasNaNPositions(geometry) {
+  if (!geometry || !geometry.attributes || !geometry.attributes.position) return true;
+  const arr = geometry.attributes.position.array;
+  if (!arr || arr.length === 0) return true;
+  for (let i = 0; i < arr.length; i++) {
+    if (isNaN(arr[i]) || !isFinite(arr[i])) return true;
+  }
+  return false;
+}
+
+/**
  * Minimum Euclidean distance from point (px, py) to the polygon boundary edges
  */
 export function distanceToPolygonBoundary(px, py, polygon) {
@@ -118,38 +199,57 @@ export function distanceToPolygonBoundary(px, py, polygon) {
 /**
  * Samples a dense, uniform 2D boundary polygon from Photoshop-style anchor points & bezier handles
  */
-export function samplePolygonFromVectorPoints(rawPoints, scaleFactor = 0.005, curveSegments = 24, THREE_LIB = THREE) {
-  if (!Array.isArray(rawPoints) || rawPoints.length < 3) return [];
+export function samplePolygonFromVectorPoints(rawPoints, scaleFactor = null, curveSegments = 24, THREE_LIB = THREE, invertY = true) {
+  const normPoints = normalizeVectorPointsList(rawPoints);
 
+  // Fallback safe triangle if fewer than 3 valid points
+  if (normPoints.length < 3) {
+    return [
+      { x: -0.5, y: -0.5 },
+      { x: 0.5, y: -0.5 },
+      { x: 0.0, y: 0.5 }
+    ];
+  }
+
+  // Automatic coordinate scale detection
+  const maxCoord = Math.max(...normPoints.map((p) => Math.max(Math.abs(p.x), Math.abs(p.y))));
+  let scale = 0.005;
+  if (scaleFactor !== null && scaleFactor !== undefined && !isNaN(Number(scaleFactor))) {
+    scale = Number(scaleFactor);
+  } else if (maxCoord <= 10) {
+    // Coordinates are already in metric units (meters)
+    scale = 1.0;
+  }
+
+  const ySign = invertY ? -1 : 1;
   const shape = new THREE_LIB.Shape();
-  const scale = Number(scaleFactor ?? 0.005);
-  const p0 = rawPoints[0];
-  shape.moveTo(p0.x * scale, -p0.y * scale);
+  const p0 = normPoints[0];
+  shape.moveTo(p0.x * scale, p0.y * ySign * scale);
 
-  for (let i = 0; i < rawPoints.length; i++) {
-    const curr = rawPoints[i];
-    const next = rawPoints[(i + 1) % rawPoints.length];
+  for (let i = 0; i < normPoints.length; i++) {
+    const curr = normPoints[i];
+    const next = normPoints[(i + 1) % normPoints.length];
 
     const cp1 = curr.handleOut
-      ? { x: (curr.x + curr.handleOut.x) * scale, y: -(curr.y + curr.handleOut.y) * scale }
+      ? { x: (curr.x + curr.handleOut.x) * scale, y: (curr.y + curr.handleOut.y) * ySign * scale }
       : null;
     const cp2 = next.handleIn
-      ? { x: (next.x + next.handleIn.x) * scale, y: -(next.y + next.handleIn.y) * scale }
+      ? { x: (next.x + next.handleIn.x) * scale, y: (next.y + next.handleIn.y) * ySign * scale }
       : null;
 
     if (cp1 || cp2) {
-      const c1 = cp1 || { x: curr.x * scale, y: -curr.y * scale };
-      const c2 = cp2 || { x: next.x * scale, y: -next.y * scale };
-      shape.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, next.x * scale, -next.y * scale);
+      const c1 = cp1 || { x: curr.x * scale, y: curr.y * ySign * scale };
+      const c2 = cp2 || { x: next.x * scale, y: next.y * ySign * scale };
+      shape.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, next.x * scale, next.y * ySign * scale);
     } else {
-      shape.lineTo(next.x * scale, -next.y * scale);
+      shape.lineTo(next.x * scale, next.y * ySign * scale);
     }
   }
   shape.closePath();
 
   // Extract sampled contour
   const sampled = shape.getPoints(Math.max(8, Number(curveSegments ?? 24)));
-  
+
   // Clean duplicate end point if returned
   if (sampled.length > 2) {
     const first = sampled[0];
@@ -159,7 +259,20 @@ export function samplePolygonFromVectorPoints(rawPoints, scaleFactor = 0.005, cu
     }
   }
 
-  return sampled.map((pt) => ({ x: pt.x, y: pt.y }));
+  // Filter out any invalid NaN points
+  const validSampled = sampled
+    .filter((pt) => !isNaN(pt.x) && isFinite(pt.x) && !isNaN(pt.y) && isFinite(pt.y))
+    .map((pt) => ({ x: pt.x, y: pt.y }));
+
+  if (validSampled.length < 3) {
+    return [
+      { x: -0.5, y: -0.5 },
+      { x: 0.5, y: -0.5 },
+      { x: 0.0, y: 0.5 }
+    ];
+  }
+
+  return validSampled;
 }
 
 /**
@@ -553,7 +666,7 @@ export function applyDomeDeformation(geometry, options = {}) {
  * High-level creation helper: builds inflated 3D geometry directly from raw vector points
  */
 export function createInflatedGeometryFromPoints(rawPoints, options = {}, THREE_LIB = THREE) {
-  const scaleFactor = Number(options.scaleFactor ?? 0.005);
+  const scaleFactor = options.scaleFactor !== undefined ? Number(options.scaleFactor) : null;
   const curveSegments = Math.max(8, Number(options.curveSegments ?? 24));
   const boundary = samplePolygonFromVectorPoints(rawPoints, scaleFactor, curveSegments, THREE_LIB);
 
@@ -561,8 +674,19 @@ export function createInflatedGeometryFromPoints(rawPoints, options = {}, THREE_
     return new THREE_LIB.BoxGeometry(1, 1, 0.2);
   }
 
-  const geom = buildDistanceFieldInflatedGeometry(boundary, options, THREE_LIB);
-  if (geom && typeof geom.center === 'function') {
+  let geom = null;
+  try {
+    geom = buildDistanceFieldInflatedGeometry(boundary, options, THREE_LIB);
+  } catch (err) {
+    console.warn('[inflationEngine] Inflation build error, using fallback:', err);
+  }
+
+  if (!geom || hasNaNPositions(geom)) {
+    if (geom) geom.dispose();
+    return new THREE_LIB.BoxGeometry(1, 1, Number(options.depth ?? 0.35));
+  }
+
+  if (typeof geom.center === 'function') {
     geom.center();
   }
   return geom;

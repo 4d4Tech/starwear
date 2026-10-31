@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { hasNaNPositions } from './inflationEngine.js';
 
 export const AVAILABLE_FONTS = [
   { id: 'helvetiker_bold', name: 'Helvetiker Bold (Modern)', file: '/fonts/helvetiker_bold.typeface.json' },
@@ -54,40 +56,185 @@ export async function loadTypefaceFont(fontId = 'helvetiker_bold') {
 }
 
 /**
- * Creates an extruded 3D Text Geometry.
+ * Creates an extruded 3D Text Geometry, with native support for:
+ * 1. Straight text layouts (left/center/right alignment)
+ * 2. Curved & Arched path typography (curveRadius, startAngle, endAngle, letterSpacing)
  */
 export function create3DTextGeometry(text, options = {}, font, THREE_LIB = THREE) {
-  const size = Number(options.size) > 0 ? Number(options.size) : 0.35;
-  const depth = Number(options.depth) > 0 ? Number(options.depth) : 0.08;
-  const curveSegments = Number(options.curveSegments) || 12;
+  const size = Math.max(0.01, Number(options.size) || 0.35);
+  const depth = Math.max(0.005, Number(options.depth) || 0.08);
+  const curveSegments = Math.max(1, Number(options.curveSegments) || 12);
   const bevelEnabled = options.bevelEnabled !== false;
-  const bevelThickness = options.bevelThickness !== undefined ? Number(options.bevelThickness) : 0.015;
-  const bevelSize = options.bevelSize !== undefined ? Number(options.bevelSize) : 0.01;
-  const bevelSegments = Number(options.bevelSegments) || 4;
+  const bevelThickness = Math.max(0, Number(options.bevelThickness) || 0.015);
+  const bevelSize = Math.max(0, Math.min(Number(options.bevelSize) || 0.01, size * 0.25));
+  const bevelSegments = Math.max(1, Number(options.bevelSegments) || 4);
 
-  const geom = new TextGeometry(String(text || 'STAR weAR'), {
-    font: font,
-    size: size,
-    depth: depth,
-    curveSegments: curveSegments,
-    bevelEnabled: bevelEnabled,
-    bevelThickness: bevelThickness,
-    bevelSize: bevelSize,
-    bevelOffset: 0,
-    bevelSegments: bevelSegments
-  });
+  const curveRadius = options.curveRadius !== undefined && options.curveRadius !== null ? Number(options.curveRadius) : 0;
+  const str = String(text || 'STAR weAR');
+
+  // If curveRadius is specified and non-zero: Generate arched/curved path typography
+  if (curveRadius !== 0 && !isNaN(curveRadius) && str.length > 0) {
+    const chars = Array.from(str);
+    const n = chars.length;
+    const R = Math.abs(curveRadius);
+    const letterSpacing = Number(options.letterSpacing) || 0;
+
+    let startRad, endRad;
+    const hasAngleSpan = options.startAngle !== undefined && options.endAngle !== undefined &&
+      (Number(options.startAngle) !== 0 || Number(options.endAngle) !== 0);
+
+    if (hasAngleSpan) {
+      startRad = (Number(options.startAngle) * Math.PI) / 180;
+      endRad = (Number(options.endAngle) * Math.PI) / 180;
+    } else {
+      // Calculate angular span based on font size and character count
+      const approxCharWidth = size * 0.65 + letterSpacing;
+      const totalSpan = Math.min(Math.PI * 1.8, Math.max(0.1, (n - 1) * (approxCharWidth / R)));
+      startRad = -totalSpan / 2;
+      endRad = totalSpan / 2;
+    }
+
+    const charGeoms = [];
+    for (let i = 0; i < n; i++) {
+      const char = chars[i];
+      const theta = n === 1 ? (startRad + endRad) / 2 : startRad + (i / (n - 1)) * (endRad - startRad);
+
+      if (char.trim() === '') {
+        continue;
+      }
+
+      let charGeom = null;
+      try {
+        charGeom = new TextGeometry(char, {
+          font: font,
+          size: size,
+          depth: depth,
+          curveSegments: curveSegments,
+          bevelEnabled: bevelEnabled,
+          bevelThickness: bevelThickness,
+          bevelSize: bevelSize,
+          bevelOffset: 0,
+          bevelSegments: bevelSegments
+        });
+        if (hasNaNPositions(charGeom)) {
+          charGeom.dispose();
+          charGeom = new TextGeometry(char, {
+            font: font,
+            size: size,
+            depth: depth,
+            curveSegments: curveSegments,
+            bevelEnabled: false
+          });
+        }
+      } catch (err) {
+        console.warn(`[text3DHelper] Failed to generate character "${char}":`, err);
+      }
+
+      if (!charGeom || hasNaNPositions(charGeom)) {
+        if (charGeom) charGeom.dispose();
+        continue;
+      }
+
+      charGeom.center();
+
+      let x, y, rotZ;
+      if (curveRadius > 0) {
+        // Positive curveRadius: Header rainbow arch (apex at y = 0)
+        x = R * Math.sin(theta);
+        y = R * (Math.cos(theta) - 1);
+        rotZ = -theta;
+      } else {
+        // Negative curveRadius: Footer smile ribbon arch (trough at y = 0)
+        x = R * Math.sin(theta);
+        y = R * (1 - Math.cos(theta));
+        rotZ = theta;
+      }
+
+      charGeom.rotateZ(rotZ);
+      charGeom.translate(x, y, 0);
+      charGeoms.push(charGeom);
+    }
+
+    if (charGeoms.length > 0) {
+      try {
+        const merged = mergeGeometries(charGeoms, false);
+        charGeoms.forEach((g) => g.dispose());
+        if (merged && !hasNaNPositions(merged)) {
+          merged.computeBoundingBox();
+          merged.computeVertexNormals();
+          normalizeTextGeometryUVs(merged, THREE_LIB);
+          return merged;
+        }
+      } catch (mergeErr) {
+        console.warn('[text3DHelper] mergeGeometries fallback for curved text:', mergeErr);
+      }
+    }
+  }
+
+  // Standard straight line 3D TextGeometry
+  let geom = null;
+  try {
+    geom = new TextGeometry(str, {
+      font: font,
+      size: size,
+      depth: depth,
+      curveSegments: curveSegments,
+      bevelEnabled: bevelEnabled,
+      bevelThickness: bevelThickness,
+      bevelSize: bevelSize,
+      bevelOffset: 0,
+      bevelSegments: bevelSegments
+    });
+    if (hasNaNPositions(geom)) {
+      if (geom) geom.dispose();
+      geom = new TextGeometry(str, {
+        font: font,
+        size: size,
+        depth: depth,
+        curveSegments: curveSegments,
+        bevelEnabled: false
+      });
+    }
+  } catch (err) {
+    console.warn('[text3DHelper] TextGeometry generation warning:', err);
+  }
+
+  if (!geom || hasNaNPositions(geom)) {
+    if (geom) geom.dispose();
+    geom = new THREE_LIB.BoxGeometry(size * 2, size, depth);
+  }
 
   geom.computeBoundingBox();
 
   const align = options.align || 'center';
   if (align === 'center') {
     geom.center();
-  } else if (align === 'right' && geom.boundingBox) {
+  } else if (align === 'right' && geom.boundingBox && isFinite(geom.boundingBox.min.x) && isFinite(geom.boundingBox.max.x)) {
     const width = geom.boundingBox.max.x - geom.boundingBox.min.x;
     geom.translate(-width, 0, 0);
   }
 
+  normalizeTextGeometryUVs(geom, THREE_LIB);
   return geom;
+}
+
+function normalizeTextGeometryUVs(geom, THREE_LIB = THREE) {
+  if (!geom || !geom.attributes?.position) return;
+  try {
+    geom.computeBoundingBox();
+    const bb = geom.boundingBox;
+    if (bb && isFinite(bb.min.x) && isFinite(bb.max.x) && isFinite(bb.min.y) && isFinite(bb.max.y)) {
+      const rangeX = (bb.max.x - bb.min.x) || 1;
+      const rangeY = (bb.max.y - bb.min.y) || 1;
+      const pos = geom.attributes.position;
+      const uvs = new Float32Array(pos.count * 2);
+      for (let i = 0; i < pos.count; i++) {
+        uvs[i * 2] = (pos.getX(i) - bb.min.x) / rangeX;
+        uvs[i * 2 + 1] = (pos.getY(i) - bb.min.y) / rangeY;
+      }
+      geom.setAttribute('uv', new THREE_LIB.BufferAttribute(uvs, 2));
+    }
+  } catch { }
 }
 
 /**

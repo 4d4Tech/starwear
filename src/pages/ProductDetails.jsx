@@ -97,11 +97,14 @@ function ProductDetails() {
           if (Array.isArray(data.additionalGeometries)) res.additionalGeometries = data.additionalGeometries;
           if (Array.isArray(data.custom3DTexts)) res.custom3DTexts = data.custom3DTexts;
           if (Array.isArray(data.customLights)) res.customLights = data.customLights;
+          if (Array.isArray(data.scatterLayers)) res.scatterLayers = data.scatterLayers;
           if (Array.isArray(data.ar_config?.additionalGeometries)) res.additionalGeometries = data.ar_config.additionalGeometries;
           if (Array.isArray(data.ar_config?.custom3DTexts)) res.custom3DTexts = data.ar_config.custom3DTexts;
           if (Array.isArray(data.ar_config?.customLights)) res.customLights = data.ar_config.customLights;
+          if (Array.isArray(data.ar_config?.scatterLayers)) res.scatterLayers = data.ar_config.scatterLayers;
           if (Array.isArray(data.config?.custom3DTexts)) res.custom3DTexts = data.config.custom3DTexts;
           if (Array.isArray(data.config?.customLights)) res.customLights = data.config.customLights;
+          if (Array.isArray(data.config?.scatterLayers)) res.scatterLayers = data.config.scatterLayers;
           const keys = [
             'ambientColor', 'ambientIntensity',
             'dir1Color', 'dir1Intensity', 'dir1Position',
@@ -111,7 +114,7 @@ function ProductDetails() {
             'modelRotX', 'modelRotY', 'modelRotZ',
             'modelPosX', 'modelPosY', 'modelPosZ', 'modelRotSpeed',
             'matMetalness', 'matRoughness', 'matEmissive', 'matEmissiveIntensity',
-            'matWireframe', 'matOpacity', 'meshOverrides'
+            'matWireframe', 'matOpacity', 'meshOverrides', 'scatterLayers'
           ];
           keys.forEach((k) => {
             if (data[k] !== undefined && data[k] !== null) res[k] = data[k];
@@ -138,7 +141,10 @@ function ProductDetails() {
                 : (Array.isArray(mergedConfig.custom3DTexts) ? mergedConfig.custom3DTexts : []),
               additionalGeometries: (Array.isArray(bLighting.additionalGeometries) && bLighting.additionalGeometries.length > 0)
                 ? bLighting.additionalGeometries
-                : (Array.isArray(mergedConfig.additionalGeometries) ? mergedConfig.additionalGeometries : [])
+                : (Array.isArray(mergedConfig.additionalGeometries) ? mergedConfig.additionalGeometries : []),
+              scatterLayers: (Array.isArray(bLighting.scatterLayers) && bLighting.scatterLayers.length > 0)
+                ? bLighting.scatterLayers
+                : (Array.isArray(mergedConfig.scatterLayers) ? mergedConfig.scatterLayers : [])
             };
           }
         } catch (bErr) {
