@@ -5,6 +5,7 @@ import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, Html } from '@react-three/drei';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { computeGeometrySurfaceFrame } from '../utils/geometryHelper';
 import WebGLErrorBoundary from './WebGLErrorBoundary';
 import { createPortalObject3D, createParticleSystemObject3D } from '../utils/portalThreeHelper';
@@ -447,7 +448,7 @@ function SceneContent({
   iframeRef,
   isMuted
 }) {
-  const { camera } = useThree();
+  const { camera, gl, scene } = useThree();
 
   useEffect(() => {
     cameraRef.current = camera;
@@ -489,6 +490,88 @@ function SceneContent({
       ...(config || {})
     };
   }, [config]);
+
+  const effectiveExposure = normCfg.exposure !== undefined ? Number(normCfg.exposure) : 1.1;
+  const effectiveEnvPreset = String(normCfg.envPreset || 'none').trim().toLowerCase();
+  const effectiveEnvIntensity = normCfg.envIntensity !== undefined ? Number(normCfg.envIntensity) : 1.0;
+  const effectiveFogColor = normCfg.fogColor || '#000000';
+  const effectiveFogDensity = normCfg.fogDensity !== undefined ? Number(normCfg.fogDensity) : 0;
+
+  useEffect(() => {
+    if (!gl) return;
+    gl.toneMapping = THREE.ACESFilmicToneMapping;
+    gl.toneMappingExposure = Number.isFinite(effectiveExposure) ? effectiveExposure : 1.1;
+    if (THREE.SRGBColorSpace !== undefined) {
+      gl.outputColorSpace = THREE.SRGBColorSpace;
+    }
+  }, [gl, effectiveExposure]);
+
+  useEffect(() => {
+    if (!gl || !scene) return undefined;
+    const isEnabled =
+      effectiveEnvPreset !== '' &&
+      effectiveEnvPreset !== 'none' &&
+      Number.isFinite(effectiveEnvIntensity) &&
+      effectiveEnvIntensity > 0;
+
+    if (!isEnabled) {
+      scene.environment = null;
+      return undefined;
+    }
+
+    let pmremGenerator = null;
+    let envTexture = null;
+    let roomEnv = null;
+    try {
+      pmremGenerator = new THREE.PMREMGenerator(gl);
+      pmremGenerator.compileEquirectangularShader();
+      roomEnv = new RoomEnvironment();
+
+      if (effectiveEnvPreset === 'sunset') {
+        const sunLight = new THREE.DirectionalLight(0xff8844, 2.5);
+        sunLight.position.set(2, 1, 1);
+        roomEnv.add(sunLight);
+      } else if (effectiveEnvPreset === 'cyber' || effectiveEnvPreset === 'night') {
+        const neonCyan = new THREE.PointLight(0x06b6d4, 4.0, 10);
+        neonCyan.position.set(3, 2, 2);
+        roomEnv.add(neonCyan);
+        const neonPink = new THREE.PointLight(0xec4899, 4.0, 10);
+        neonPink.position.set(-3, -1, -2);
+        roomEnv.add(neonPink);
+      } else if (effectiveEnvPreset === 'city') {
+        const amberFill = new THREE.DirectionalLight(0xf59e0b, 1.8);
+        amberFill.position.set(3, 4, 2);
+        roomEnv.add(amberFill);
+        const blueSky = new THREE.DirectionalLight(0x38bdf8, 1.2);
+        blueSky.position.set(-2, 3, -2);
+        roomEnv.add(blueSky);
+      } else if (effectiveEnvPreset === 'forest') {
+        const canopyLight = new THREE.DirectionalLight(0x10b981, 2.0);
+        canopyLight.position.set(1, 4, 1);
+        roomEnv.add(canopyLight);
+        const earthBounce = new THREE.DirectionalLight(0xb45309, 0.9);
+        earthBounce.position.set(0, -3, 0);
+        roomEnv.add(earthBounce);
+      }
+
+      envTexture = pmremGenerator.fromScene(roomEnv, 0.04).texture;
+      scene.environment = envTexture;
+      if (scene.environmentIntensity !== undefined) {
+        scene.environmentIntensity = effectiveEnvIntensity;
+      }
+    } catch (err) {
+      console.warn('[ProductViewer] Could not initialize RoomEnvironment:', err);
+    }
+
+    return () => {
+      if (scene && scene.environment === envTexture) {
+        scene.environment = null;
+      }
+      if (envTexture) envTexture.dispose();
+      if (pmremGenerator) pmremGenerator.dispose();
+      if (roomEnv && typeof roomEnv.dispose === 'function') roomEnv.dispose();
+    };
+  }, [gl, scene, effectiveEnvPreset, effectiveEnvIntensity]);
 
   const dir1Pos = parsePos(normCfg.dir1Position, [2, 4, 3]);
   const dir2Pos = parsePos(normCfg.dir2Position, [-2, -1, -2]);
@@ -865,6 +948,9 @@ function SceneContent({
   return (
     <>
       <color attach="background" args={['#0d1117']} />
+      {effectiveFogDensity > 0 && (
+        <fogExp2 attach="fog" args={[effectiveFogColor, effectiveFogDensity]} />
+      )}
 
       {/* Lighting Setup */}
       <ambientLight
@@ -952,9 +1038,9 @@ function SceneContent({
       {!portalHideOutsideModel && (
         modelGroup ? (
           <primitive object={modelGroup} />
-        ) : (
+        ) : (!geometriesGroup && !texts3DGroup && !particleInstance && !scatterGroup && !portalInstance) ? (
           <StylizedPlaceholder isWireframe={isWireframe} />
-        )
+        ) : null
       )}
 
       {/* 3D YouTube Screen Overlay via Drei Html */}

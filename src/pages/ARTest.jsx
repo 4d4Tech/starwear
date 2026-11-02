@@ -47,12 +47,14 @@ import AddGeometryModal from '../components/AddGeometryModal';
 import AddModelModal from '../components/AddModelModal';
 import VectorPenModal from '../components/VectorPenModal';
 import Add3DTextModal from '../components/Add3DTextModal';
+import GoogleFontSelector from '../components/GoogleFontSelector';
 import ArSceneApiModal from '../components/ArSceneApiModal';
 import ARLightDiagnosticsDrawer from '../components/ARLightDiagnosticsDrawer';
 import FaceSketchExtrudeStudio from '../components/FaceSketchExtrudeStudio';
 import SaveAsInventoryModal, { MarkerLibrarySelector } from '../components/SaveAsInventoryModal';
+import ProductViewer from '../components/ProductViewer';
 import { exportCurrentSceneToArApi } from '../utils/arSceneApi';
-import { AVAILABLE_FONTS, TEXT_MATERIAL_PRESETS } from '../utils/text3DHelper';
+import { formatFontDisplayName, buildDeterministicFontsourceTTFUrl } from '../utils/text3DHelper';
 import { GEOMETRY_DEFINITIONS, MATERIAL_PRESETS, COLOR_SWATCHES, createPrimitiveMesh, INFLATION_PROFILES, sanitizeHierarchyForGLTFExport } from '../utils/geometryHelper';
 import {
   loadMarkerForBatch,
@@ -922,6 +924,41 @@ const ARTest = () => {
   const [envPreset, setEnvPreset] = useState('none');
   const [envIntensity, setEnvIntensity] = useState(1.0);
   const [exposure, setExposure] = useState(1.1);
+
+  // Live Render Preview State ('studio' | 'ar-experience' | 'product-preview')
+  const [previewRenderMode, setPreviewRenderMode] = useState('studio');
+  const [arPreviewBackdrop, setArPreviewBackdrop] = useState('dark'); // 'dark' | 'indoor' | 'outdoor'
+  const [previewFullscreen, setPreviewFullscreen] = useState(false);
+  const [isStorefrontEngineModalOpen, setIsStorefrontEngineModalOpen] = useState(false);
+  const isRenderPreviewActive = previewRenderMode !== 'studio';
+
+  // Exact Lighting Parity Calculations matching ARExperience.jsx & ProductViewer.jsx
+  const hasActiveCustomLights = useMemo(
+    () => Array.isArray(customLights) && customLights.some((l) => l && l.visible !== false),
+    [customLights]
+  );
+  const effectiveStudioAmbientIntensity = useMemo(() => {
+    const base = Number(ambientIntensity ?? 1.4);
+    if (previewRenderMode === 'product-preview' && hasActiveCustomLights) {
+      return Number((base * 0.5).toFixed(3));
+    }
+    return base;
+  }, [ambientIntensity, previewRenderMode, hasActiveCustomLights]);
+
+  const effectiveStudioDir1Intensity = useMemo(() => {
+    const base = Number(dir1Intensity ?? 2.2);
+    return hasActiveCustomLights ? Number((base * 0.45).toFixed(3)) : base;
+  }, [dir1Intensity, hasActiveCustomLights]);
+
+  const effectiveStudioDir2Intensity = useMemo(() => {
+    const base = Number(dir2Intensity ?? 1.2);
+    return hasActiveCustomLights ? Number((base * 0.45).toFixed(3)) : base;
+  }, [dir2Intensity, hasActiveCustomLights]);
+
+  const effectiveStudioRimIntensity = useMemo(() => {
+    const base = Number(rimIntensity ?? 1.0);
+    return hasActiveCustomLights ? Number((base * 0.45).toFixed(3)) : base;
+  }, [rimIntensity, hasActiveCustomLights]);
 
   // UI Elements
   const [showBuyButton, setShowBuyButton] = useState(true);
@@ -1952,12 +1989,19 @@ const ARTest = () => {
       name: payload.name || payload.text || `3D Text ${count + 1}`,
       text: payload.text || 'STAR weAR',
       fontFamily: payload.fontFamily || 'helvetiker_bold',
+      ...(payload.fontUrl ? { fontUrl: payload.fontUrl } : {}),
+      ...(payload.googleFontFamily ? { googleFontFamily: payload.googleFontFamily } : {}),
+      ...(payload.googleFontVariant ? { googleFontVariant: payload.googleFontVariant } : {}),
       size: payload.size !== undefined ? Number(payload.size) : 0.35,
       depth: payload.depth !== undefined ? Number(payload.depth) : 0.08,
       curveSegments: payload.curveSegments || 12,
       bevelEnabled: payload.bevelEnabled !== false,
       bevelThickness: payload.bevelThickness !== undefined ? Number(payload.bevelThickness) : 0.015,
       bevelSize: payload.bevelSize !== undefined ? Number(payload.bevelSize) : 0.01,
+      ...(payload.curveRadius !== undefined ? { curveRadius: Number(payload.curveRadius) } : {}),
+      ...(payload.startAngle !== undefined ? { startAngle: Number(payload.startAngle) } : {}),
+      ...(payload.endAngle !== undefined ? { endAngle: Number(payload.endAngle) } : {}),
+      ...(payload.letterSpacing !== undefined ? { letterSpacing: Number(payload.letterSpacing) } : {}),
       align: payload.align || 'center',
       color: payload.color || '#38bdf8',
       emissive: payload.emissive || '#0284c7',
@@ -4660,6 +4704,7 @@ const ARTest = () => {
       if (dist > 8) return; // Orbit/drag gesture: do not raycast or deselect
       if (e.target && e.target.tagName !== 'CANVAS') return; // Ignore releases on HTML toolbars/buttons
       if (isGizmoDragging || window.__isGizmoDragging) return;
+      if (isRenderPreviewActive) return; // Clean customer-style orbit interaction in Preview Mode
 
       const sceneEl = document.querySelector('a-scene');
       const camera = sceneEl?.camera || (typeof window !== 'undefined' && window.__arOrbitCamera);
@@ -4906,7 +4951,7 @@ const ARTest = () => {
       }
       window.removeEventListener('pointerup', handleGlobalPointerUp);
     };
-  }, [meshList, isGizmoDragging, clearSelectionAndDetachGizmo, selectSceneObject, toggleObjectSelection, isMultiSelectMode, groupSelectionMode]);
+  }, [meshList, isGizmoDragging, isRenderPreviewActive, clearSelectionAndDetachGizmo, selectSceneObject, toggleObjectSelection, isMultiSelectMode, groupSelectionMode]);
 
   // =========================================================================
   // TRANSFORM CONTROLS GIZMO LIFECYCLE IN AFRAME/THREE.JS
@@ -5340,15 +5385,186 @@ const ARTest = () => {
     };
   }, [gizmoReady, selectedTargetType, selectedGroupId, selectedObjects, sceneGroups, selectedCustomModelId, selectedText3DId, selectedLightId, selectedGeometryId, selectedMeshUuid, selectedScatterLayerId, scatterLayers, customModels, custom3DTexts, customLights, additionalGeometries, computeObjectsCentroid]);
 
-  // Temporarily hide TransformControls while Face Sketch & Extrude Studio is open
+  // Temporarily hide TransformControls while Face Sketch & Extrude Studio or Render Preview is open
   useEffect(() => {
     const tc = transformControlsRef.current;
     if (!tc) return;
     const helper = tc.getHelper ? tc.getHelper() : tc;
     if (helper) {
-      helper.visible = !faceSketchStudioOpen;
+      helper.visible = !faceSketchStudioOpen && !isRenderPreviewActive && Boolean(tc.object);
     }
-  }, [faceSketchStudioOpen]);
+  }, [faceSketchStudioOpen, isRenderPreviewActive]);
+
+  // Synchronize Three.js Scene Background, ProductViewer Floor Grid & Resize across Studio / ARExperience / Product Preview Modes
+  useEffect(() => {
+    const applyRenderModeVisuals = () => {
+      const sceneEl = sceneRef.current || document.querySelector('a-scene');
+      const threeScene = sceneEl?.object3D;
+      const renderer = sceneEl?.renderer;
+      if (!threeScene) return false;
+
+      // 1. Background Color Parity:
+      // - ARExperience 3D mode: #0b0f19 (or transparent null when simulating live AR camera environment backdrop)
+      // - ProductViewer storefront mode: #0d1117
+      // - Studio edit mode: #0f131d (calibrated dark slate matching render contrast)
+      if (previewRenderMode === 'ar-experience') {
+        if (arPreviewBackdrop !== 'dark') {
+          threeScene.background = null;
+          if (renderer && typeof renderer.setClearAlpha === 'function') {
+            renderer.setClearAlpha(0);
+          }
+        } else {
+          threeScene.background = new THREE.Color('#0b0f19');
+          if (renderer && typeof renderer.setClearAlpha === 'function') {
+            renderer.setClearAlpha(1);
+          }
+        }
+      } else if (previewRenderMode === 'product-preview') {
+        threeScene.background = new THREE.Color('#0d1117');
+        if (renderer && typeof renderer.setClearAlpha === 'function') {
+          renderer.setClearAlpha(1);
+        }
+      } else {
+        threeScene.background = new THREE.Color('#0f131d');
+        if (renderer && typeof renderer.setClearAlpha === 'function') {
+          renderer.setClearAlpha(1);
+        }
+      }
+
+      // 2. ProductViewer Showroom Floor Grid (matches <gridHelper args={[4, 16, 0x312e81, 0x1e293b]} />)
+      const existingGrid = threeScene.getObjectByName('starwear-product-preview-grid');
+      if (existingGrid) {
+        threeScene.remove(existingGrid);
+        if (existingGrid.geometry) existingGrid.geometry.dispose();
+        if (existingGrid.material) {
+          if (Array.isArray(existingGrid.material)) existingGrid.material.forEach((m) => m.dispose());
+          else existingGrid.material.dispose();
+        }
+      }
+
+      if (previewRenderMode === 'product-preview') {
+        let gridY = -0.5;
+        try {
+          const bounds = new THREE.Box3();
+          let hasGeometryBounds = false;
+          const modelObj = document.getElementById('ar-model')?.getObject3D('mesh');
+          if (modelObj) {
+            bounds.expandByObject(modelObj);
+            hasGeometryBounds = !bounds.isEmpty();
+          }
+          const geomRoot = document.getElementById('ar-additional-geometries-anchor')?.getObject3D('additionalGeometriesRoot');
+          if (geomRoot) {
+            bounds.expandByObject(geomRoot);
+            hasGeometryBounds = !bounds.isEmpty();
+          }
+          const textRoot = document.getElementById('ar-3d-texts-anchor')?.getObject3D('texts3DRoot');
+          if (textRoot) {
+            bounds.expandByObject(textRoot);
+            hasGeometryBounds = !bounds.isEmpty();
+          }
+          const customModRoot = document.getElementById('ar-custom-models-anchor')?.getObject3D('customModelsRoot');
+          if (customModRoot) {
+            bounds.expandByObject(customModRoot);
+            hasGeometryBounds = !bounds.isEmpty();
+          }
+          if (hasGeometryBounds && Number.isFinite(bounds.min.y)) {
+            gridY = bounds.min.y - 0.05;
+          }
+        } catch { }
+
+        const gridHelper = new THREE.GridHelper(4, 16, 0x312e81, 0x1e293b);
+        gridHelper.name = 'starwear-product-preview-grid';
+        gridHelper.position.set(0, gridY, 0);
+        threeScene.add(gridHelper);
+      }
+
+      return true;
+    };
+
+    let pollId = null;
+    if (!applyRenderModeVisuals()) {
+      pollId = setInterval(() => {
+        if (applyRenderModeVisuals()) {
+          clearInterval(pollId);
+          pollId = null;
+        }
+      }, 150);
+    }
+
+    return () => {
+      if (pollId) clearInterval(pollId);
+      const sceneEl = document.querySelector('a-scene');
+      const threeScene = sceneEl?.object3D;
+      const existingGrid = threeScene?.getObjectByName('starwear-product-preview-grid');
+      if (existingGrid && threeScene) {
+        threeScene.remove(existingGrid);
+        if (existingGrid.geometry) existingGrid.geometry.dispose();
+        if (existingGrid.material) {
+          if (Array.isArray(existingGrid.material)) existingGrid.material.forEach((m) => m.dispose());
+          else existingGrid.material.dispose();
+        }
+      }
+    };
+  }, [
+    previewRenderMode,
+    arPreviewBackdrop,
+    localGlbUrl,
+    arData,
+    modelScale,
+    modelPosY,
+    additionalGeometries.length,
+    custom3DTexts.length,
+    customModels.length
+  ]);
+
+  // Trigger A-Frame canvas & camera aspect ratio resize when toggling Fullscreen Preview
+  useEffect(() => {
+    if (!isRenderPreviewActive && previewFullscreen) {
+      setPreviewFullscreen(false);
+      return undefined;
+    }
+    const raf1 = requestAnimationFrame(() => {
+      const raf2 = requestAnimationFrame(() => {
+        try {
+          window.dispatchEvent(new Event('resize'));
+          const sceneEl = sceneRef.current || document.querySelector('a-scene');
+          if (sceneEl && typeof sceneEl.resize === 'function') {
+            sceneEl.resize();
+          }
+        } catch { }
+      });
+      return () => cancelAnimationFrame(raf2);
+    });
+    return () => cancelAnimationFrame(raf1);
+  }, [previewFullscreen, isRenderPreviewActive]);
+
+  // Keyboard Shortcut 'P' to Toggle Render Preview & 'Escape' to Exit Preview Fullscreen / Modal
+  useEffect(() => {
+    const onPreviewKeyDown = (e) => {
+      const tag = e.target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        setPreviewRenderMode((prev) =>
+          prev === 'studio'
+            ? 'ar-experience'
+            : prev === 'ar-experience'
+              ? 'product-preview'
+              : 'studio'
+        );
+      } else if (e.key === 'Escape') {
+        if (isStorefrontEngineModalOpen) {
+          setIsStorefrontEngineModalOpen(false);
+        } else if (previewFullscreen) {
+          setPreviewFullscreen(false);
+        }
+      }
+    };
+    window.addEventListener('keydown', onPreviewKeyDown);
+    return () => window.removeEventListener('keydown', onPreviewKeyDown);
+  }, [isStorefrontEngineModalOpen, previewFullscreen]);
 
   // Visual 3D Selection Box Helper on the selected object(s) or group
   useEffect(() => {
@@ -5407,7 +5623,7 @@ const ARTest = () => {
       helperColor = 0x10b981;
     }
 
-    if (itemsToHighlight.length === 0) return;
+    if (itemsToHighlight.length === 0 || isRenderPreviewActive) return;
 
     const helperGroup = new THREE.Group();
     helperGroup.name = 'starwear-selection-box-helpers';
@@ -5441,7 +5657,7 @@ const ARTest = () => {
         });
       }
     };
-  }, [selectedTargetType, selectedGroupId, selectedObjects, selectedMeshUuid, selectedGeometryId, selectedCustomModelId, selectedText3DId, selectedLightId, selectedScatterLayerId, scatterLayers, sceneGroups, findThreeObject]);
+  }, [selectedTargetType, selectedGroupId, selectedObjects, selectedMeshUuid, selectedGeometryId, selectedCustomModelId, selectedText3DId, selectedLightId, selectedScatterLayerId, scatterLayers, sceneGroups, findThreeObject, isRenderPreviewActive]);
 
   // Helper: Find selected mesh object metadata from state
   const selectedMesh = meshList.find((m) => m.uuid === selectedMeshUuid) || null;
@@ -7336,6 +7552,9 @@ const ARTest = () => {
       if (cfg.matOpacity !== undefined) setMatOpacity(cfg.matOpacity);
       if (cfg.fogColor !== undefined) setFogColor(cfg.fogColor);
       if (cfg.fogDensity !== undefined) setFogDensity(cfg.fogDensity);
+      if (cfg.exposure !== undefined) setExposure(Number(cfg.exposure));
+      if (cfg.envPreset !== undefined) setEnvPreset(cfg.envPreset || 'none');
+      if (cfg.envIntensity !== undefined) setEnvIntensity(Number(cfg.envIntensity));
       if (cfg.showBuyButton !== undefined) setShowBuyButton(cfg.showBuyButton);
       if (cfg.buyButtonColor !== undefined) setBuyButtonColor(cfg.buyButtonColor);
       if (cfg.mediaPlaying !== undefined) setMediaPlaying(cfg.mediaPlaying);
@@ -8156,6 +8375,9 @@ const ARTest = () => {
         useNativePBR,
         fogColor,
         fogDensity,
+        exposure: Number(exposure),
+        envPreset: envPreset || 'none',
+        envIntensity: Number(envIntensity),
         showBuyButton,
         buyButtonColor,
         mediaPlaying,
@@ -9161,6 +9383,9 @@ const ARTest = () => {
         useNativePBR,
         fogColor,
         fogDensity,
+        exposure: Number(exposure),
+        envPreset: envPreset || 'none',
+        envIntensity: Number(envIntensity),
         showBuyButton,
         buyButtonColor,
         mediaPlaying,
@@ -9810,12 +10035,315 @@ const ARTest = () => {
 
   const currentScale = selectedMesh ? selectedMesh.scale.x : modelScale;
 
+  // Live in-memory AR config payload for the Storefront <ProductViewer /> Engine verification modal
+  const livePreviewArConfig = useMemo(() => {
+    const liveMeshOverrides = {};
+    meshList.forEach((m) => {
+      liveMeshOverrides[m.name] = {
+        position: m.position,
+        rotation: m.rotation,
+        scale: m.scale,
+        visible: m.visible,
+        material: m.material
+      };
+    });
+    deletedMeshNames.forEach((name) => {
+      liveMeshOverrides[name] = { deleted: true, visible: false };
+    });
+
+    const liveVideoUrl = activeVideoUrl || customVideoUrl || arData?.videoUrl || '';
+    return {
+      videoUrl: liveVideoUrl,
+      video_url: liveVideoUrl,
+      videoTargetMesh,
+      videoFlipX,
+      videoScale,
+      videoOffsetX,
+      videoOffsetY,
+      videoOffsetZ,
+      videoRotation,
+      videoTextureRepeatX,
+      videoTextureRepeatY,
+      videoTextureOffsetX,
+      videoTextureOffsetY,
+      aspectRatio: videoAspectRatio,
+      videoAspectRatio,
+      ambientColor,
+      ambientIntensity,
+      dir1Color,
+      dir1Intensity,
+      dir1Position,
+      dir2Color,
+      dir2Intensity,
+      dir2Position,
+      rimColor,
+      rimIntensity,
+      rimPosition,
+      exposure: Number(exposure),
+      envPreset: envPreset || 'none',
+      envIntensity: Number(envIntensity),
+      fogColor,
+      fogDensity,
+      modelScale,
+      modelRotSpeed,
+      modelRotX,
+      modelRotY,
+      modelRotZ,
+      modelRotation: `${modelRotX} ${modelRotY} ${modelRotZ}`,
+      modelPosX,
+      modelPosY,
+      modelPosZ,
+      modelPosition: `${modelPosX} ${modelPosY} ${modelPosZ}`,
+      matMetalness: useNativePBR ? -1 : (matMetalness < 0 ? 0.0 : matMetalness),
+      matRoughness: useNativePBR ? -1 : (matRoughness < 0 ? 1.0 : matRoughness),
+      matEmissive,
+      matEmissiveIntensity,
+      matWireframe,
+      matOpacity,
+      useNativePBR,
+      showBuyButton,
+      buyButtonColor,
+      mediaPlaying,
+      meshOverrides: liveMeshOverrides,
+      portalConfig: {
+        enabled: Boolean(portalEnabled),
+        preset: portalPreset,
+        shape: portalShape,
+        width: Number(portalWidth),
+        height: Number(portalHeight),
+        radius: Number(portalRadius),
+        depth: Number(portalDepth),
+        frameColor: portalFrameColor,
+        frameWidth: Number(portalFrameWidth),
+        frameEmissive: portalFrameEmissive,
+        frameEmissiveIntensity: Number(portalFrameEmissiveIntensity),
+        frameGlow: Boolean(portalFrameGlow),
+        glassTint: portalGlassTint,
+        glassOpacity: Number(portalGlassOpacity),
+        posX: Number(portalPosX),
+        posY: Number(portalPosY),
+        posZ: Number(portalPosZ),
+        rotX: Number(portalRotX),
+        rotY: Number(portalRotY),
+        rotZ: Number(portalRotZ),
+        interiorType: portalInteriorType,
+        skyboxUrl: portalSkyboxUrl || '',
+        skyboxScale: Number(portalSkyboxScale),
+        skyboxPosX: Number(portalSkyboxPosX),
+        skyboxPosY: Number(portalSkyboxPosY),
+        skyboxPosZ: Number(portalSkyboxPosZ),
+        skyboxRotX: Number(portalSkyboxRotX),
+        skyboxRotY: Number(portalSkyboxRotY),
+        skyboxRotZ: Number(portalSkyboxRotZ),
+        skyboxBlur: Number(portalSkyboxBlur),
+        interiorColor: portalInteriorColor,
+        wallColor: portalWallColor,
+        floorColor: portalFloorColor,
+        gridColor: portalGridColor,
+        interiorLightColor: portalLightColor,
+        interiorLightIntensity: Number(portalLightIntensity),
+        interiorModelType: portalModelType,
+        artifactType: portalArtifactType,
+        customModelUrl: portalCustomModelUrl || '',
+        modelScale: Number(portalModelScale),
+        modelPosX: Number(portalModelPosX),
+        modelPosY: Number(portalModelPosY),
+        modelPosZ: Number(portalModelPosZ),
+        modelRotSpeed: Number(portalModelRotSpeed),
+        modelRotX: Number(portalModelRotX),
+        modelRotY: Number(portalModelRotY),
+        modelRotZ: Number(portalModelRotZ),
+        showVideo: Boolean(portalShowVideo),
+        videoUrl: portalVideoUrl || liveVideoUrl,
+        videoScale: Number(portalVideoScale),
+        videoPosY: Number(portalVideoPosY),
+        videoPosZ: Number(portalVideoPosZ),
+        particles: portalParticles,
+        particleCount: Number(portalParticleCount),
+        particleColor: portalParticleColor,
+        particleSpeed: Number(portalParticleSpeed),
+        floatingText: portalFloatingText,
+        textColor: portalTextColor,
+        textScale: Number(portalTextScale),
+        textPosY: Number(portalTextPosY),
+        textPosZ: Number(portalTextPosZ),
+        hideOutsideModel: Boolean(portalHideOutsideModel)
+      },
+      particleConfig: {
+        enabled: Boolean(particleSystemEnabled),
+        preset: particlePreset,
+        count: Number(particleCount),
+        size: Number(particleSize),
+        color: particleColor,
+        colorSecondary: particleColorSecondary,
+        opacity: Number(particleOpacity),
+        blending: particleBlending,
+        speed: Number(particleSpeed),
+        spreadX: Number(particleSpreadX),
+        spreadY: Number(particleSpreadY),
+        spreadZ: Number(particleSpreadZ),
+        direction: particleDirection,
+        shape: particleShape,
+        posX: Number(particlePosX),
+        posY: Number(particlePosY),
+        posZ: Number(particlePosZ),
+        rotationSpeed: Number(particleRotationSpeed),
+        twinkle: Boolean(particleTwinkle)
+      },
+      additionalGeometries: additionalGeometries || [],
+      customModels: customModels || [],
+      custom3DTexts: custom3DTexts || [],
+      customLights: customLights || [],
+      scatterLayers: scatterLayers || []
+    };
+  }, [
+    meshList,
+    deletedMeshNames,
+    activeVideoUrl,
+    customVideoUrl,
+    arData,
+    videoTargetMesh,
+    videoFlipX,
+    videoScale,
+    videoOffsetX,
+    videoOffsetY,
+    videoOffsetZ,
+    videoRotation,
+    videoTextureRepeatX,
+    videoTextureRepeatY,
+    videoTextureOffsetX,
+    videoTextureOffsetY,
+    videoAspectRatio,
+    ambientColor,
+    ambientIntensity,
+    dir1Color,
+    dir1Intensity,
+    dir1Position,
+    dir2Color,
+    dir2Intensity,
+    dir2Position,
+    rimColor,
+    rimIntensity,
+    rimPosition,
+    exposure,
+    envPreset,
+    envIntensity,
+    fogColor,
+    fogDensity,
+    modelScale,
+    modelRotSpeed,
+    modelRotX,
+    modelRotY,
+    modelRotZ,
+    modelPosX,
+    modelPosY,
+    modelPosZ,
+    matMetalness,
+    matRoughness,
+    matEmissive,
+    matEmissiveIntensity,
+    matWireframe,
+    matOpacity,
+    useNativePBR,
+    showBuyButton,
+    buyButtonColor,
+    mediaPlaying,
+    portalEnabled,
+    portalPreset,
+    portalShape,
+    portalWidth,
+    portalHeight,
+    portalRadius,
+    portalDepth,
+    portalFrameColor,
+    portalFrameWidth,
+    portalFrameEmissive,
+    portalFrameEmissiveIntensity,
+    portalFrameGlow,
+    portalGlassTint,
+    portalGlassOpacity,
+    portalPosX,
+    portalPosY,
+    portalPosZ,
+    portalRotX,
+    portalRotY,
+    portalRotZ,
+    portalInteriorType,
+    portalSkyboxUrl,
+    portalSkyboxScale,
+    portalSkyboxPosX,
+    portalSkyboxPosY,
+    portalSkyboxPosZ,
+    portalSkyboxRotX,
+    portalSkyboxRotY,
+    portalSkyboxRotZ,
+    portalSkyboxBlur,
+    portalInteriorColor,
+    portalWallColor,
+    portalFloorColor,
+    portalGridColor,
+    portalLightColor,
+    portalLightIntensity,
+    portalModelType,
+    portalArtifactType,
+    portalCustomModelUrl,
+    portalModelScale,
+    portalModelPosX,
+    portalModelPosY,
+    portalModelPosZ,
+    portalModelRotSpeed,
+    portalModelRotX,
+    portalModelRotY,
+    portalModelRotZ,
+    portalShowVideo,
+    portalVideoUrl,
+    portalVideoScale,
+    portalVideoPosY,
+    portalVideoPosZ,
+    portalParticles,
+    portalParticleCount,
+    portalParticleColor,
+    portalParticleSpeed,
+    portalFloatingText,
+    portalTextColor,
+    portalTextScale,
+    portalTextPosY,
+    portalTextPosZ,
+    portalHideOutsideModel,
+    particleSystemEnabled,
+    particlePreset,
+    particleCount,
+    particleSize,
+    particleColor,
+    particleColorSecondary,
+    particleOpacity,
+    particleBlending,
+    particleSpeed,
+    particleSpreadX,
+    particleSpreadY,
+    particleSpreadZ,
+    particleDirection,
+    particleShape,
+    particlePosX,
+    particlePosY,
+    particlePosZ,
+    particleRotationSpeed,
+    particleTwinkle,
+    additionalGeometries,
+    customModels,
+    custom3DTexts,
+    customLights,
+    scatterLayers
+  ]);
+
   return (
     <div className="w-screen h-screen h-[100dvh] max-h-[100dvh] bg-neutral-950 text-white font-sans flex flex-col md:flex-row overflow-hidden">
       {/* ========================================================================= */}
       {/* SIDEBAR CONTROL DOCK                                                      */}
       {/* ========================================================================= */}
-      <div className="w-full md:w-96 lg:w-[420px] bg-black border-r border-neutral-800 z-50 flex flex-col shadow-2xl flex-shrink-0 h-full max-h-[100dvh]">
+      <div
+        className={`w-full md:w-96 lg:w-[420px] bg-black border-r border-neutral-800 z-50 flex flex-col shadow-2xl flex-shrink-0 h-full max-h-[100dvh] transition-all duration-200 ${previewFullscreen ? 'hidden' : ''}`}
+      >
         {/* Top Header & Batch Form */}
         <div className="p-4 border-b border-neutral-800 bg-neutral-950/80">
           <div className="flex items-center justify-between mb-2">
@@ -9911,19 +10439,41 @@ const ARTest = () => {
               </button>
             </div>
 
-            {/* Row 2: Local File Testing, Snapshot & Save */}
-            <div className="flex items-center gap-2">
-              <label className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 hover:border-neutral-500 rounded-lg text-xs font-medium cursor-pointer transition-colors text-neutral-200 truncate min-w-0">
+            {/* Row 2: Local File Testing, Render Preview, Snapshot & Save */}
+            <div className="flex items-center gap-1.5">
+              <label className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 hover:border-neutral-500 rounded-lg text-xs font-medium cursor-pointer transition-colors text-neutral-200 truncate min-w-0">
                 <span className="material-symbols-outlined text-[15px] text-indigo-400 shrink-0">folder_open</span>
-                <span className="truncate">{localGlbName ? `3D: ${localGlbName}` : 'Test Local GLB'}</span>
+                <span className="truncate">{localGlbName ? `3D: ${localGlbName}` : 'Local GLB'}</span>
                 <input type="file" accept=".glb,.gltf" onChange={pickLocalModel} className="hidden" />
               </label>
 
               <button
                 type="button"
+                onClick={() =>
+                  setPreviewRenderMode((prev) => (prev === 'studio' ? 'ar-experience' : 'studio'))
+                }
+                className={`px-2.5 py-1.5 font-bold uppercase tracking-wider transition-all rounded-lg text-xs flex items-center gap-1 shadow-md cursor-pointer shrink-0 ${
+                  isRenderPreviewActive
+                    ? 'bg-gradient-to-r from-amber-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-white ring-1 ring-amber-300/60 shadow-amber-950/50'
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-950/40'
+                }`}
+                title={
+                  isRenderPreviewActive
+                    ? 'Exit Render Preview and return to Studio Edit Mode (Shortcut: P)'
+                    : 'Preview Exact Rendered Lighting & View for ARExperience & Product Preview (Shortcut: P)'
+                }
+              >
+                <span className="material-symbols-outlined text-[15px]">
+                  {isRenderPreviewActive ? 'visibility_off' : 'visibility'}
+                </span>
+                <span>{isRenderPreviewActive ? 'Exit Preview' : 'Preview'}</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={handleCaptureThumbnail}
                 disabled={savingConfig || (!editingTemplate && !batchId.trim())}
-                className="px-2.5 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded-lg text-xs flex items-center gap-1 shadow-md shadow-cyan-950/40 cursor-pointer shrink-0"
+                className="px-2 py-1.5 bg-cyan-700 hover:bg-cyan-600 text-white font-bold uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed transition-all rounded-lg text-xs flex items-center gap-1 shadow-md shadow-cyan-950/40 cursor-pointer shrink-0"
                 title={editingTemplate ? `Capture & Update Template Thumbnail Preview` : "Capture & Save 3D Thumbnail from Current View"}
               >
                 <span className="material-symbols-outlined text-[15px]">photo_camera</span>
@@ -13931,7 +14481,10 @@ const ARTest = () => {
                   onClick={() =>
                     handleAdd3DText({
                       text: 'STAR weAR',
-                      fontFamily: 'helvetiker_bold',
+                      fontFamily: 'gf:Orbitron:700',
+                      googleFontFamily: 'Orbitron',
+                      googleFontVariant: '700',
+                      fontUrl: buildDeterministicFontsourceTTFUrl('Orbitron', '700'),
                       color: '#38bdf8',
                       emissive: '#0284c7',
                       emissiveIntensity: 0.6,
@@ -13941,14 +14494,17 @@ const ARTest = () => {
                   }
                   className="p-1.5 rounded bg-neutral-900 hover:bg-pink-950/50 border border-neutral-800 hover:border-pink-500/50 text-[11px] font-semibold text-neutral-300 hover:text-pink-300 text-center transition-all truncate"
                 >
-                  + Cyber Neon
+                  + Cyber Orbitron
                 </button>
                 <button
                   type="button"
                   onClick={() =>
                     handleAdd3DText({
                       text: '24K GOLD',
-                      fontFamily: 'optimer_bold',
+                      fontFamily: 'gf:Cinzel:700',
+                      googleFontFamily: 'Cinzel',
+                      googleFontVariant: '700',
+                      fontUrl: buildDeterministicFontsourceTTFUrl('Cinzel', '700'),
                       color: '#f59e0b',
                       emissive: '#78350f',
                       emissiveIntensity: 0.3,
@@ -13958,26 +14514,29 @@ const ARTest = () => {
                   }
                   className="p-1.5 rounded bg-neutral-900 hover:bg-amber-950/50 border border-neutral-800 hover:border-amber-500/50 text-[11px] font-semibold text-neutral-300 hover:text-amber-300 text-center transition-all truncate"
                 >
-                  + 24K Gold Title
+                  + 24K Cinzel Gold
                 </button>
                 <button
                   type="button"
                   onClick={() =>
                     handleAdd3DText({
                       text: 'LIMITED EDITION',
-                      fontFamily: 'gentilis_bold',
+                      fontFamily: 'gf:Bebas Neue:400',
+                      googleFontFamily: 'Bebas Neue',
+                      googleFontVariant: '400',
+                      fontUrl: buildDeterministicFontsourceTTFUrl('Bebas Neue', '400'),
                       color: '#f8fafc',
                       emissive: '#000000',
                       emissiveIntensity: 0.0,
                       metalness: 0.3,
                       roughness: 0.3,
-                      size: 0.25,
+                      size: 0.28,
                       depth: 0.05
                     })
                   }
                   className="p-1.5 rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-600 text-[11px] font-semibold text-neutral-300 hover:text-white text-center transition-all truncate"
                 >
-                  + Clean Label
+                  + Bebas Label
                 </button>
               </div>
 
@@ -14055,8 +14614,8 @@ const ARTest = () => {
                                 {textGroup.name}
                               </button>
                             )}
-                            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-black/50 text-neutral-400 border border-neutral-800 shrink-0">
-                              {(textItem.fontFamily || 'helvetiker').split('_')[0]}
+                            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-black/50 text-neutral-400 border border-neutral-800 shrink-0 max-w-[110px] truncate" title={formatFontDisplayName(textItem.fontFamily, textItem)}>
+                              {formatFontDisplayName(textItem.fontFamily, textItem)}
                             </span>
                           </div>
                           <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
@@ -14139,30 +14698,16 @@ const ARTest = () => {
                       </div>
                     </div>
 
-                    {/* Text String Input */}
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-neutral-300">Text String</label>
-                      <input
-                        type="text"
-                        value={selectedText.text || ''}
-                        onChange={(e) => handleUpdate3DText(selectedText.id, { text: e.target.value })}
-                        className="w-full px-2.5 py-1.5 bg-black border border-neutral-700 rounded text-xs font-semibold text-white focus:outline-none focus:border-pink-500"
-                      />
-                    </div>
-
-                    {/* Typography Font & Alignment */}
-                    <div className="grid grid-cols-2 gap-2">
+                    {/* Text String & Alignment */}
+                    <div className="space-y-2.5">
                       <div className="space-y-1">
-                        <label className="text-xs font-semibold text-neutral-300">Font</label>
-                        <select
-                          value={selectedText.fontFamily || 'helvetiker_bold'}
-                          onChange={(e) => handleUpdate3DText(selectedText.id, { fontFamily: e.target.value })}
-                          className="w-full px-2 py-1.5 bg-neutral-900 border border-neutral-700 rounded text-xs text-neutral-200 focus:outline-none focus:border-pink-500"
-                        >
-                          {AVAILABLE_FONTS.map((f) => (
-                            <option key={f.id} value={f.id}>{f.name}</option>
-                          ))}
-                        </select>
+                        <label className="text-xs font-semibold text-neutral-300">Text String</label>
+                        <input
+                          type="text"
+                          value={selectedText.text || ''}
+                          onChange={(e) => handleUpdate3DText(selectedText.id, { text: e.target.value })}
+                          className="w-full px-2.5 py-1.5 bg-black border border-neutral-700 rounded text-xs font-semibold text-white focus:outline-none focus:border-pink-500"
+                        />
                       </div>
 
                       <div className="space-y-1">
@@ -14182,6 +14727,21 @@ const ARTest = () => {
                             </button>
                           ))}
                         </div>
+                      </div>
+
+                      {/* Google Fonts & Built-in 3D Typeface Picker */}
+                      <div className="space-y-1">
+                        <label className="text-xs font-semibold text-neutral-300 flex items-center gap-1">
+                          <span className="material-symbols-outlined text-xs text-sky-400">font_download</span>
+                          3D Typeface (Google Fonts & Built-in)
+                        </label>
+                        <GoogleFontSelector
+                          compact
+                          value={selectedText.fontFamily || 'helvetiker_bold'}
+                          textConfig={selectedText}
+                          previewText={selectedText.text}
+                          onChange={(next) => handleUpdate3DText(selectedText.id, next)}
+                        />
                       </div>
                     </div>
 
@@ -14551,6 +15111,123 @@ const ARTest = () => {
           {/* ========================================================================= */}
           {activeTab === 'lighting' && (
             <div className="space-y-5">
+              {/* Live Render Lighting Parity Switcher & Exposure Calibration Card */}
+              <div className="p-3 rounded-xl bg-gradient-to-br from-neutral-900 via-indigo-950/30 to-amber-950/20 border border-indigo-500/40 space-y-3 shadow-lg">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-amber-400">visibility</span>
+                    <span className="text-xs font-bold uppercase tracking-wider text-white">
+                      Render Lighting Preview
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/60 border border-neutral-700 text-neutral-300">
+                    ACES Filmic • {Number(exposure).toFixed(2)}x
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-1 bg-black/70 p-1 rounded-lg border border-neutral-800">
+                  {[
+                    { id: 'studio', label: 'Studio Edit', icon: 'tune' },
+                    { id: 'ar-experience', label: 'ARExperience', icon: 'view_in_ar' },
+                    { id: 'product-preview', label: 'Product View', icon: 'storefront' }
+                  ].map((modeOpt) => {
+                    const active = previewRenderMode === modeOpt.id;
+                    return (
+                      <button
+                        key={modeOpt.id}
+                        type="button"
+                        onClick={() => setPreviewRenderMode(modeOpt.id)}
+                        className={`py-1.5 px-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-1 transition-all cursor-pointer ${
+                          active
+                            ? modeOpt.id === 'ar-experience'
+                              ? 'bg-emerald-600 text-white shadow-sm'
+                              : modeOpt.id === 'product-preview'
+                                ? 'bg-cyan-600 text-white shadow-sm'
+                                : 'bg-indigo-600 text-white shadow-sm'
+                            : 'text-neutral-400 hover:text-white hover:bg-neutral-800/80'
+                        }`}
+                      >
+                        <span className="material-symbols-outlined text-[13px]">{modeOpt.icon}</span>
+                        <span className="truncate">{modeOpt.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <p className="text-[10px] text-neutral-400 leading-relaxed">
+                  {previewRenderMode === 'ar-experience' ? (
+                    <>
+                      <strong className="text-emerald-300">1:1 ARExperience Mode:</strong> Hides studio gizmos, markers & light bulbs; matches <code className="text-emerald-200">/ar</code> exact lighting ({hasActiveCustomLights ? '1.0× ambient + 0.45× directional fill' : '1.0× studio rig'}).
+                    </>
+                  ) : previewRenderMode === 'product-preview' ? (
+                    <>
+                      <strong className="text-cyan-300">1:1 Product Preview Mode:</strong> Matches storefront <code className="text-cyan-200">ProductViewer</code> lighting ({hasActiveCustomLights ? '0.5× ambient + 0.45× directional fill' : '1.0× studio rig'}), <code className="text-cyan-200">#0d1117</code> backdrop & showroom grid.
+                    </>
+                  ) : (
+                    <>
+                      <strong className="text-indigo-300">Calibrated Studio Mode:</strong> Matches <code className="text-indigo-200">ARExperience</code> light intensities while keeping gizmos, marker anchor & light bulb helpers visible.
+                    </>
+                  )}
+                </p>
+
+                <NumberSliderInput
+                  label="Tone Mapping Exposure (Global Brightness)"
+                  value={exposure}
+                  onChange={setExposure}
+                  min={0.4}
+                  max={2.5}
+                  step={0.05}
+                  color="amber"
+                  precision={2}
+                  resetValue={1.1}
+                />
+
+                <div className="flex items-center justify-between p-2 rounded-lg bg-black/50 border border-neutral-800">
+                  <span className="text-[11px] font-semibold text-neutral-300 flex items-center gap-1">
+                    <span className="material-symbols-outlined text-xs text-cyan-400">hdr_on</span>
+                    HDR Reflection Map
+                  </span>
+                  <select
+                    value={envPreset}
+                    onChange={(e) => setEnvPreset(e.target.value)}
+                    className="text-[11px] bg-neutral-950 border border-neutral-700 text-neutral-200 rounded px-2 py-1 outline-none focus:border-cyan-500"
+                  >
+                    <option value="none">None (Pure Direct Lights)</option>
+                    <option value="studio-chrome">Studio Chrome (Mirror)</option>
+                    <option value="city">City Skyline (Warm/Cyan)</option>
+                    <option value="sunset">Golden Sunset (Amber/Violet)</option>
+                    <option value="forest">Forest Canopy (Emerald/Earth)</option>
+                    <option value="cyber">Cyberpunk (Neon Magenta/Cyan)</option>
+                    <option value="night">Night City (Deep Glow)</option>
+                    <option value="neutral">Neutral Daylight</option>
+                  </select>
+                </div>
+
+                {envPreset !== 'none' && (
+                  <NumberSliderInput
+                    label="HDR Reflection Intensity"
+                    value={envIntensity}
+                    onChange={setEnvIntensity}
+                    min={0.0}
+                    max={3.0}
+                    step={0.05}
+                    color="cyan"
+                    precision={2}
+                    resetValue={1.0}
+                  />
+                )}
+
+                {hasActiveCustomLights && (
+                  <div className="px-2.5 py-1.5 rounded-lg bg-amber-950/40 border border-amber-500/30 text-[10px] text-amber-200 flex items-start gap-1.5">
+                    <span className="material-symbols-outlined text-xs text-amber-400 shrink-0 mt-0.5">info</span>
+                    <span>
+                      Active custom lights auto-attenuate base directional fill to <strong>45%</strong>
+                      {previewRenderMode === 'product-preview' ? <> and ambient to <strong>50%</strong></> : null} (effective Key: <strong>{effectiveStudioDir1Intensity}x</strong>, Fill: <strong>{effectiveStudioDir2Intensity}x</strong>, Rim: <strong>{effectiveStudioRimIntensity}x</strong>, Ambient: <strong>{effectiveStudioAmbientIntensity}x</strong>).
+                    </span>
+                  </div>
+                )}
+              </div>
+
               {/* Custom Multi-Source Lighting Section */}
               <div className="space-y-3 pb-4 border-b border-neutral-800">
                 <div className="flex items-center justify-between pb-1 border-b border-neutral-800">
@@ -16303,31 +16980,29 @@ const ARTest = () => {
                   </select>
                 </div>
                 {envPreset !== 'none' && (
-                  <>
-                    <NumberSliderInput
-                      label="Environment Reflection Intensity"
-                      value={envIntensity}
-                      onChange={setEnvIntensity}
-                      min={0.0}
-                      max={3.0}
-                      step={0.05}
-                      color="cyan"
-                      precision={2}
-                      resetValue={1.0}
-                    />
-                    <NumberSliderInput
-                      label="Tone Mapping Exposure"
-                      value={exposure}
-                      onChange={setExposure}
-                      min={0.5}
-                      max={2.5}
-                      step={0.05}
-                      color="amber"
-                      precision={2}
-                      resetValue={1.1}
-                    />
-                  </>
+                  <NumberSliderInput
+                    label="Environment Reflection Intensity"
+                    value={envIntensity}
+                    onChange={setEnvIntensity}
+                    min={0.0}
+                    max={3.0}
+                    step={0.05}
+                    color="cyan"
+                    precision={2}
+                    resetValue={1.0}
+                  />
                 )}
+                <NumberSliderInput
+                  label="Tone Mapping Exposure"
+                  value={exposure}
+                  onChange={setExposure}
+                  min={0.4}
+                  max={2.5}
+                  step={0.05}
+                  color="amber"
+                  precision={2}
+                  resetValue={1.1}
+                />
               </div>
 
               <div className="space-y-3 pt-2">
@@ -20034,26 +20709,200 @@ const ARTest = () => {
       {/* ========================================================================= */}
       <div
         id="ar-scene-container"
-        className={`flex-1 relative bg-neutral-900 overflow-hidden w-full h-full min-w-0 ${isModifierHeld ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
+        className={`flex-1 relative bg-neutral-900 overflow-hidden w-full h-full min-w-0 ${isModifierHeld && !isRenderPreviewActive ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
           }`}
-        style={{ touchAction: 'none', height: '100%', minHeight: '100%' }}
+        style={{
+          touchAction: 'none',
+          height: '100%',
+          minHeight: '100%',
+          background:
+            previewRenderMode === 'ar-experience' && arPreviewBackdrop === 'indoor'
+              ? 'radial-gradient(circle at 50% 35%, #3f3b36 0%, #262422 48%, #151413 100%)'
+              : previewRenderMode === 'ar-experience' && arPreviewBackdrop === 'outdoor'
+                ? 'linear-gradient(180deg, #38bdf8 0%, #94a3b8 52%, #334155 56%, #1e293b 100%)'
+                : previewRenderMode === 'product-preview'
+                  ? '#0d1117'
+                  : '#0b0f19'
+        }}
         onContextMenu={(e) => {
           if (e.ctrlKey || e.metaKey) e.preventDefault();
         }}
       >
         {/* Control / Command Held Selection Guide Banner */}
-        {isModifierHeld && (
-          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-30 pointer-events-none animate-fade-in flex items-center gap-2 px-3 py-1.5 bg-neutral-900/95 backdrop-blur-md border border-indigo-500/60 rounded-xl shadow-2xl text-xs text-white">
+        {isModifierHeld && !isRenderPreviewActive && (
+          <div className="absolute top-24 left-1/2 -translate-x-1/2 z-30 pointer-events-none animate-fade-in flex items-center gap-2 px-3 py-1.5 bg-neutral-900/95 backdrop-blur-md border border-indigo-500/60 rounded-xl shadow-2xl text-xs text-white">
             <span className="material-symbols-outlined text-sm text-indigo-400 animate-pulse">ads_click</span>
             <span className="font-bold text-indigo-300">Ctrl / ⌘ Held:</span>
             <span className="text-neutral-300">Click any object, light, or shape to select it</span>
           </div>
         )}
 
-        {/* Floating Viewport Controls: Camera View Angles on Top, 3D Transform Gizmo Toolbar Directly Beneath */}
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 pointer-events-none select-none max-w-[calc(100vw-480px)] px-2">
-          {/* Floating Multi-Select & Active Group Viewport Pill Banner */}
-          {(selectedObjects.length > 1 || (selectedTargetType === 'group' && selectedGroupId)) && (
+        {/* Floating Viewport Controls: Always-Visible Render Preview Switcher + Camera Views + Studio Gizmos */}
+        <div
+          className={`absolute top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 pointer-events-none select-none px-2 ${
+            previewFullscreen ? 'max-w-[calc(100vw-240px)]' : 'max-w-[calc(100vw-480px)]'
+          }`}
+        >
+          {/* Always-Visible Render Preview Mode Switcher Pill */}
+          <div className="pointer-events-auto flex items-center gap-1 p-1 bg-slate-950/95 backdrop-blur-md border border-slate-700/80 rounded-xl shadow-2xl max-w-full overflow-x-auto scrollbar-none">
+            <span className="text-[10px] uppercase font-bold text-slate-400 px-2 flex items-center gap-1 font-mono shrink-0">
+              <span className="material-symbols-outlined text-sm text-amber-400">visibility</span>
+              <span className="hidden sm:inline">View Mode</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setPreviewRenderMode('studio')}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
+                previewRenderMode === 'studio'
+                  ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-950/50'
+                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white'
+              }`}
+              title="Studio Edit Mode — Transform gizmos, marker calibration plane & light bulb helpers enabled (Shortcut: P)"
+            >
+              <span className="material-symbols-outlined text-xs">tune</span>
+              <span>Studio Edit</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPreviewRenderMode('ar-experience')}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
+                previewRenderMode === 'ar-experience'
+                  ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-950/50 ring-1 ring-emerald-400/50'
+                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white'
+              }`}
+              title="ARExperience Render Preview — 1:1 /ar lighting, tone mapping & clean AR presentation without studio helpers (Shortcut: P)"
+            >
+              <span className="material-symbols-outlined text-xs">view_in_ar</span>
+              <span>ARExperience Preview</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPreviewRenderMode('product-preview')}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
+                previewRenderMode === 'product-preview'
+                  ? 'bg-cyan-600 text-white shadow-sm shadow-cyan-950/50 ring-1 ring-cyan-400/50'
+                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white'
+              }`}
+              title="Product Preview Render — 1:1 Storefront ProductViewer lighting, #0d1117 backdrop & showroom grid (Shortcut: P)"
+            >
+              <span className="material-symbols-outlined text-xs">storefront</span>
+              <span>Product Preview</span>
+            </button>
+
+            {isRenderPreviewActive && (
+              <>
+                <div className="w-[1px] h-4 bg-slate-700 mx-0.5 shrink-0" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (previewFullscreen) setPreviewFullscreen(false);
+                    setActiveTab('lighting');
+                  }}
+                  className="px-2 py-1 text-xs font-semibold rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 hover:text-white flex items-center gap-1 transition-all cursor-pointer shrink-0"
+                  title="Open Lighting Tab to adjust lights live while watching rendered preview"
+                >
+                  <span className="material-symbols-outlined text-xs text-amber-400">wb_incandescent</span>
+                  <span className="hidden lg:inline">Tune Lights</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewFullscreen((v) => !v)}
+                  className={`px-2 py-1 text-xs font-semibold rounded-lg border flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
+                    previewFullscreen
+                      ? 'bg-indigo-600 border-indigo-400 text-white'
+                      : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+                  }`}
+                  title={previewFullscreen ? 'Show Editor Sidebar' : 'Expand Fullscreen Render Preview'}
+                >
+                  <span className="material-symbols-outlined text-xs">
+                    {previewFullscreen ? 'dock_to_right' : 'fullscreen'}
+                  </span>
+                  <span className="hidden xl:inline">{previewFullscreen ? 'Show Sidebar' : 'Full Canvas'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPreviewFullscreen(false);
+                    setPreviewRenderMode('studio');
+                  }}
+                  className="px-2 py-1 text-xs font-semibold rounded-lg bg-rose-950/70 hover:bg-rose-800 border border-rose-500/40 text-rose-200 hover:text-white flex items-center gap-1 transition-all cursor-pointer shrink-0"
+                  title="Exit Render Preview and return to Studio Edit Mode"
+                >
+                  <span className="material-symbols-outlined text-xs">close</span>
+                  <span>Exit</span>
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* Active Render Preview Context Sub-Bar */}
+          {isRenderPreviewActive && (
+            <div className="pointer-events-auto flex items-center gap-2 px-3 py-1.5 bg-black/85 backdrop-blur-md border border-white/15 rounded-xl shadow-2xl text-[11px] max-w-full overflow-x-auto scrollbar-none">
+              <span
+                className={`w-2 h-2 rounded-full shrink-0 animate-pulse ${
+                  previewRenderMode === 'ar-experience' ? 'bg-emerald-400' : 'bg-cyan-400'
+                }`}
+              />
+              <span className="font-mono font-bold text-white shrink-0">
+                {previewRenderMode === 'ar-experience'
+                  ? '1:1 ARExperience Lighting'
+                  : '1:1 Storefront ProductViewer Lighting'}
+              </span>
+              <span className="text-neutral-400 font-mono shrink-0">
+                • ACES {Number(exposure).toFixed(2)}x
+                {envPreset !== 'none' ? ` • HDR:${envPreset}` : ' • No IBL'}
+                {hasActiveCustomLights
+                  ? previewRenderMode === 'product-preview'
+                    ? ' • Custom Lights (0.5x Amb / 0.45x Dir)'
+                    : ' • Custom Lights (1.0x Amb / 0.45x Dir)'
+                  : ''}
+              </span>
+
+              {previewRenderMode === 'ar-experience' && (
+                <>
+                  <div className="w-[1px] h-3.5 bg-neutral-700 mx-0.5 shrink-0" />
+                  <div className="flex items-center gap-1 shrink-0">
+                    {[
+                      { id: 'dark', label: '3D Dark (#0b0f19)' },
+                      { id: 'indoor', label: 'AR Room Sim' },
+                      { id: 'outdoor', label: 'AR Daylight Sim' }
+                    ].map((bg) => (
+                      <button
+                        key={bg.id}
+                        type="button"
+                        onClick={() => setArPreviewBackdrop(bg.id)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold transition-all cursor-pointer ${
+                          arPreviewBackdrop === bg.id
+                            ? 'bg-emerald-600/30 border border-emerald-400/60 text-emerald-200'
+                            : 'bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-white'
+                        }`}
+                      >
+                        {bg.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {previewRenderMode === 'product-preview' && (
+                <>
+                  <div className="w-[1px] h-3.5 bg-neutral-700 mx-0.5 shrink-0" />
+                  <button
+                    type="button"
+                    onClick={() => setIsStorefrontEngineModalOpen(true)}
+                    className="px-2.5 py-0.5 rounded bg-cyan-600/25 hover:bg-cyan-600/40 border border-cyan-400/50 text-cyan-200 hover:text-white text-[10px] font-mono font-bold flex items-center gap-1 transition-all cursor-pointer shrink-0"
+                    title="Open the actual storefront React Three Fiber <ProductViewer /> component in an interactive verification window"
+                  >
+                    <span className="material-symbols-outlined text-xs">open_in_new</span>
+                    <span>Verify in Storefront Engine</span>
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Floating Multi-Select & Active Group Viewport Pill Banner (Studio Mode Only) */}
+          {!isRenderPreviewActive && (selectedObjects.length > 1 || (selectedTargetType === 'group' && selectedGroupId)) && (
             <div className="pointer-events-auto flex items-center gap-2 px-3 py-1.5 bg-neutral-900/95 backdrop-blur-md border border-neutral-700/80 rounded-xl shadow-2xl animate-fade-in text-xs">
               {selectedTargetType === 'group' && selectedGroupId ? (
                 <>
@@ -20156,8 +21005,8 @@ const ARTest = () => {
             </div>
           )}
 
-          {/* Top: Interactive Camera View Angle Presets Toolbar (Studio4D4 Style) */}
-          {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
+          {/* Top: Interactive Camera View Angle Presets Toolbar (Studio Mode Only) */}
+          {!isRenderPreviewActive && (localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
             <div className="pointer-events-auto bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-xl p-1 flex items-center gap-1 shadow-2xl overflow-x-auto max-w-full">
               <span className="text-[10px] uppercase font-bold text-slate-400 px-2 flex items-center gap-1 font-mono shrink-0">
                 <span className="material-symbols-outlined text-sm text-indigo-400">videocam</span> Views
@@ -20262,7 +21111,8 @@ const ARTest = () => {
             </div>
           )}
 
-          {/* Beneath: 3D Transform Controls Gizmo Toolbar (Move, Rotate, Scale) */}
+          {/* Beneath: 3D Transform Controls Gizmo Toolbar (Studio Mode Only) */}
+          {!isRenderPreviewActive && (
           <div className="pointer-events-auto flex items-center gap-1.5 p-1.5 bg-neutral-900/90 backdrop-blur-md border border-neutral-700/80 rounded-xl shadow-2xl max-w-full overflow-x-auto scrollbar-none">
             {/* Gizmo Mode Toggle Buttons */}
             <div className="flex items-center gap-0.5 bg-black/60 p-0.5 rounded-lg border border-neutral-800 shrink-0">
@@ -20441,6 +21291,7 @@ const ARTest = () => {
               </div>
             )}
           </div>
+          )}
         </div>
 
         <a-scene
@@ -20448,11 +21299,11 @@ const ARTest = () => {
           key="ar-portal-scene"
           embedded
           color-space="sRGB"
-          renderer="colorManagement: true; antialias: true; stencil: true; preserveDrawingBuffer: true;"
+          renderer="colorManagement: true; alpha: true; antialias: true; stencil: true; preserveDrawingBuffer: true;"
           light="defaultLightsEnabled: false"
           vr-mode-ui="enabled: false"
           device-orientation-permission-ui="enabled: false"
-          scene-environment={`exposure: ${exposure}; hdrIntensity: ${envIntensity}; enabled: ${envPreset !== 'none' || envIntensity > 0}; preset: ${envPreset}`}
+          scene-environment={`exposure: ${exposure}; hdrIntensity: ${envIntensity}; enabled: ${envPreset !== 'none' && envIntensity > 0}; preset: ${envPreset}`}
           fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
           style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
         >
@@ -20464,45 +21315,26 @@ const ARTest = () => {
           >
           </a-entity>
 
-          {/* Dynamic Multi-Source Studio Lighting Rig */}
+          {/* Single Unified Studio Lighting Rig (1:1 Parity with ARExperience & ProductViewer — No Duplicate Lights) */}
           <a-entity
             id="test-lighting-rig"
-            ar-studio-lighting={`enabled: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${rimIntensity}; rimPosition: ${rimPosition};`}
-          ></a-entity>
-          <a-entity
-            id="test-ambient-light"
-            light={`type: ambient; color: ${ambientColor}; intensity: ${ambientIntensity};`}
-          ></a-entity>
-          <a-entity
-            id="test-dir1-light"
-            light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false;`}
-            position={dir1Position}
-          ></a-entity>
-          <a-entity
-            id="test-dir2-light"
-            light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false;`}
-            position={dir2Position}
-          ></a-entity>
-          <a-entity
-            id="test-rim-light"
-            light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false;`}
-            position={rimPosition}
+            ar-studio-lighting={`enabled: true; ambientColor: ${ambientColor}; ambientIntensity: ${effectiveStudioAmbientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${effectiveStudioDir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${effectiveStudioDir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${effectiveStudioRimIntensity}; rimPosition: ${rimPosition};`}
           ></a-entity>
 
-          {/* Custom Multi-Source Lighting Rig Anchor */}
+          {/* Custom Multi-Source Lighting Rig Anchor (hides bulbs/helpers in Render Preview modes) */}
           {customLights.length > 0 && (
             <a-entity
               id="ar-custom-lights-anchor"
-              ar-custom-lights={`lights: ${encodeURIComponent(JSON.stringify(customLights))}; showHelpers: ${showLightHelpers}; showBulbs: ${showLightHelpers};`}
+              ar-custom-lights={`lights: ${encodeURIComponent(JSON.stringify(customLights))}; showHelpers: ${showLightHelpers && !isRenderPreviewActive}; showBulbs: ${showLightHelpers && !isRenderPreviewActive};`}
             ></a-entity>
           )}
 
-          {/* MindAR Target Marker Reference Plane Anchor (XY plane at 0, 0, 0) */}
-          {markerVisible && (
+          {/* MindAR Target Marker Reference Plane Anchor (Hidden during Render Preview) */}
+          {markerVisible && !isRenderPreviewActive && (
             <a-entity
               id="ar-marker-reference-anchor"
               position="0 0 0"
-              ar-marker-reference={`enabled: ${markerVisible}; width: ${markerWidth}; height: ${Number((markerWidth * (markerAspectRatio || 1.0)).toFixed(4))}; aspectRatio: ${markerAspectRatio || 1.0}; opacity: ${markerOpacity}; showAxes: true; showFrame: true;`}
+              ar-marker-reference={`enabled: ${markerVisible && !isRenderPreviewActive}; width: ${markerWidth}; height: ${Number((markerWidth * (markerAspectRatio || 1.0)).toFixed(4))}; aspectRatio: ${markerAspectRatio || 1.0}; opacity: ${markerOpacity}; showAxes: true; showFrame: true;`}
             ></a-entity>
           )}
 
@@ -20673,30 +21505,43 @@ const ARTest = () => {
             </button>
           </div>
 
-          {/* Floating Active Target HUD Indicator */}
-          {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
-            <div className="px-3 py-1.5 rounded-full bg-black/85 backdrop-blur-md border border-neutral-700/80 text-xs font-medium text-neutral-200 shadow-xl flex items-center gap-2 max-w-[280px]">
-              <span className={`w-2 h-2 rounded-full shrink-0 ${editingTemplate ? 'bg-amber-400 animate-pulse' : selectedMesh ? 'bg-indigo-400 animate-ping' : 'bg-emerald-400 animate-pulse'}`}></span>
-              <span className="truncate">
-                {editingTemplate ? (
-                  <>Template: <strong className="text-amber-300">{editingTemplate.cleanName || editingTemplate.name}</strong></>
-                ) : selectedMesh ? (
-                  <>Mesh: <strong className="text-indigo-300">{selectedMesh.name}</strong></>
-                ) : (
-                  <>Target: <strong className="text-emerald-300">Entire 3D Model</strong></>
-                )}
+          {/* Floating Active Target HUD Indicator (Studio Mode) or Authentic Render Badge (Preview Mode) */}
+          {isRenderPreviewActive ? (
+            <div className="px-3 py-1.5 rounded-full bg-black/80 backdrop-blur-md border border-white/10 text-xs font-mono font-bold tracking-wider uppercase shadow-xl flex items-center gap-2">
+              <span
+                className={`w-2 h-2 rounded-full animate-pulse ${
+                  previewRenderMode === 'ar-experience' ? 'bg-emerald-400' : 'bg-cyan-400'
+                }`}
+              />
+              <span className={previewRenderMode === 'ar-experience' ? 'text-emerald-300' : 'text-cyan-300'}>
+                {previewRenderMode === 'ar-experience' ? 'STAR WEAR • AR RENDER' : '3D INTERACTIVE PREVIEW'}
               </span>
-              {selectedMesh && (
-                <span className="text-[10px] text-neutral-400 font-mono pl-1 border-l border-neutral-700 shrink-0">
-                  Esc
-                </span>
-              )}
             </div>
+          ) : (
+            (localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
+              <div className="px-3 py-1.5 rounded-full bg-black/85 backdrop-blur-md border border-neutral-700/80 text-xs font-medium text-neutral-200 shadow-xl flex items-center gap-2 max-w-[280px]">
+                <span className={`w-2 h-2 rounded-full shrink-0 ${editingTemplate ? 'bg-amber-400 animate-pulse' : selectedMesh ? 'bg-indigo-400 animate-ping' : 'bg-emerald-400 animate-pulse'}`}></span>
+                <span className="truncate">
+                  {editingTemplate ? (
+                    <>Template: <strong className="text-amber-300">{editingTemplate.cleanName || editingTemplate.name}</strong></>
+                  ) : selectedMesh ? (
+                    <>Mesh: <strong className="text-indigo-300">{selectedMesh.name}</strong></>
+                  ) : (
+                    <>Target: <strong className="text-emerald-300">Entire 3D Model</strong></>
+                  )}
+                </span>
+                {selectedMesh && (
+                  <span className="text-[10px] text-neutral-400 font-mono pl-1 border-l border-neutral-700 shrink-0">
+                    Esc
+                  </span>
+                )}
+              </div>
+            )
           )}
         </div>
 
-        {/* Live Coordinate Overlay HUD */}
-        {(localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
+        {/* Live Coordinate Overlay HUD (Studio Mode Only) */}
+        {!isRenderPreviewActive && (localGlbUrl || arData?.arExperience?.modelUrl || arData?.gltfPath) && (
           <div className="absolute top-3 right-3 z-40 pointer-events-none hidden sm:flex flex-col gap-1 items-end">
             <div className="px-3 py-1.5 rounded-lg bg-black/80 backdrop-blur-md border border-neutral-800 text-[10px] font-mono text-neutral-300 shadow-xl space-y-0.5">
               <div className="flex items-center gap-2">
@@ -20796,8 +21641,8 @@ const ARTest = () => {
           </div>
         )}
 
-        {/* Extracted BuyNowButton component */}
-        {showBuyButton && (
+        {/* Extracted BuyNowButton component (hidden in Product Preview mode to match storefront card) */}
+        {showBuyButton && previewRenderMode !== 'product-preview' && (
           <BuyNowButton
             color={buyButtonColor}
             onClick={handleCheckout}
@@ -20806,6 +21651,48 @@ const ARTest = () => {
           />
         )}
       </div>
+
+      {/* Live Storefront <ProductViewer /> Engine Verification Modal */}
+      {isStorefrontEngineModalOpen && (
+        <div className="fixed inset-0 z-[120] bg-black/85 backdrop-blur-md flex items-center justify-center p-4 sm:p-8">
+          <div className="w-full max-w-5xl h-[82vh] bg-slate-950 border border-cyan-500/40 rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+            <div className="px-4 py-3 bg-neutral-950 border-b border-neutral-800 flex items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="material-symbols-outlined text-cyan-400 text-lg">storefront</span>
+                <div className="min-w-0">
+                  <h2 className="text-sm font-bold text-white truncate">
+                    Storefront ProductViewer Engine (React Three Fiber)
+                  </h2>
+                  <p className="text-[11px] text-neutral-400 truncate">
+                    Exact storefront <code className="text-cyan-300">&lt;ProductViewer /&gt;</code> component rendered with your live studio lighting &amp; scene configuration
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsStorefrontEngineModalOpen(false)}
+                className="px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-700 text-neutral-300 hover:text-white text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer shrink-0"
+              >
+                <span className="material-symbols-outlined text-sm">close</span>
+                <span>Close</span>
+              </button>
+            </div>
+            <div className="flex-1 relative min-h-0">
+              <ProductViewer
+                modelUrl={
+                  localGlbUrl ||
+                  arData?.arExperience?.modelUrl ||
+                  arData?.gltfPath ||
+                  arData?.modelUrl ||
+                  ''
+                }
+                videoUrl={activeVideoUrl || customVideoUrl || arData?.videoUrl || ''}
+                config={livePreviewArConfig}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 3D Primitive Geometries Modal */}
       {geometryModalOpen && (

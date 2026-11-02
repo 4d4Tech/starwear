@@ -1465,6 +1465,13 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
   const studioLightingAttr = `enabled: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${rimIntensity}; rimPosition: ${rimPosition};`;
 
+  const exposure = cfg.exposure !== undefined ? Number(cfg.exposure) : 1.1;
+  const envPreset = cfg.envPreset || 'none';
+  const envIntensity = cfg.envIntensity !== undefined ? Number(cfg.envIntensity) : 1.0;
+  const envEnabled = Boolean(envPreset && envPreset !== 'none' && envIntensity > 0);
+  const fogColor = cfg.fogColor || '#000000';
+  const fogDensity = cfg.fogDensity !== undefined ? Number(cfg.fogDensity) : 0;
+
   const modelScale = cfg.modelScale ?? 0.4;
   const modelRotSpeed = cfg.modelRotSpeed ?? 10000;
   const modelRotX = cfg.modelRotX !== undefined ? cfg.modelRotX : (cfg.modelRotation ? Number(cfg.modelRotation.split(' ')[0]) || 0 : 90);
@@ -1752,7 +1759,8 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         vr-mode-ui="enabled: false"
         device-orientation-permission-ui="enabled: false"
         loading-screen="enabled: false"
-        scene-environment="exposure: 1.1; hdrIntensity: 0.0; enabled: false"
+        scene-environment={`exposure: ${exposure}; hdrIntensity: ${envIntensity}; enabled: ${envEnabled}; preset: ${envPreset}`}
+        fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
         style={{
           position: 'absolute',
           top: 0,

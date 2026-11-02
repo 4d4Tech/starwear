@@ -326,7 +326,6 @@ export function validateArSceneInput(data) {
         bevelColor: s.bevelColor || s.params?.bevelColor,
         bevelMetalness: typeof (s.bevelMetalness ?? s.params?.bevelMetalness) === 'number' ? (s.bevelMetalness ?? s.params?.bevelMetalness) : undefined,
         bevelRoughness: typeof (s.bevelRoughness ?? s.params?.bevelRoughness) === 'number' ? (s.bevelRoughness ?? s.params?.bevelRoughness) : undefined,
-        curveSegments: typeof (s.curveSegments ?? s.params?.curveSegments) === 'number' ? (s.curveSegments ?? s.params?.curveSegments) : 24,
 
         // Procedural Patterns
         pattern: s.pattern || s.params?.pattern || 'none',
@@ -451,12 +450,24 @@ export function validateArSceneInput(data) {
     incomingTexts.forEach((txt, idx) => {
       if (!txt || typeof txt !== 'object') return;
       const textId = txt.id || `text_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
-      const font = txt.fontFamily || 'helvetiker_bold';
+      const rawFont = String(txt.fontFamily || '').trim();
+      const isGoogleFontSpec =
+        rawFont.startsWith('gf:') ||
+        rawFont.startsWith('google:') ||
+        rawFont.startsWith('gfont:') ||
+        Boolean(txt.googleFontFamily) ||
+        (rawFont.length > 0 && !rawFont.includes('_'));
+      const resolvedFontFamily = VALID_FONT_FAMILIES.includes(rawFont)
+        ? rawFont
+        : (isGoogleFontSpec ? (rawFont || `gf:${txt.googleFontFamily}:700`) : 'helvetiker_bold');
       normalized.text3d.push({
         id: textId,
         name: txt.name || txt.text || `3D Text ${idx + 1}`,
         text: String(txt.text || 'STAR weAR'),
-        fontFamily: VALID_FONT_FAMILIES.includes(font) ? font : 'helvetiker_bold',
+        fontFamily: resolvedFontFamily,
+        ...(txt.fontUrl ? { fontUrl: txt.fontUrl } : {}),
+        ...(txt.googleFontFamily ? { googleFontFamily: txt.googleFontFamily } : {}),
+        ...(txt.googleFontVariant ? { googleFontVariant: txt.googleFontVariant } : {}),
         size: typeof txt.size === 'number' ? txt.size : 0.35,
         depth: typeof txt.depth === 'number' ? txt.depth : 0.08,
         curveSegments: typeof txt.curveSegments === 'number' ? txt.curveSegments : 12,
@@ -817,6 +828,9 @@ export function exportCurrentSceneToArApi(state) {
         name: t.name,
         text: t.text,
         fontFamily: t.fontFamily,
+        ...(t.fontUrl ? { fontUrl: t.fontUrl } : {}),
+        ...(t.googleFontFamily ? { googleFontFamily: t.googleFontFamily } : {}),
+        ...(t.googleFontVariant ? { googleFontVariant: t.googleFontVariant } : {}),
         size: t.size ?? 0.35,
         depth: t.depth ?? 0.08,
         bevelEnabled: t.bevelEnabled !== false,

@@ -899,18 +899,39 @@ if (typeof AFRAME !== 'undefined') {
       },
       update: function (oldData) {
         const renderer = this.el.renderer;
+        const THREE_LIB = (AFRAME && AFRAME.THREE) ? AFRAME.THREE : THREE;
         if (renderer) {
-          renderer.toneMappingExposure = this.data.exposure !== undefined ? this.data.exposure : 1.1;
+          if (THREE_LIB.ACESFilmicToneMapping !== undefined) {
+            renderer.toneMapping = THREE_LIB.ACESFilmicToneMapping;
+          }
+          renderer.toneMappingExposure = this.data.exposure !== undefined ? Number(this.data.exposure) : 1.1;
+          if (renderer.outputColorSpace !== undefined && THREE_LIB.SRGBColorSpace !== undefined) {
+            renderer.outputColorSpace = THREE_LIB.SRGBColorSpace;
+          }
         }
 
-        const isEnabled = (this.data.enabled || (this.data.preset && this.data.preset !== 'none')) && this.data.hdrIntensity > 0;
+        const normalizedPreset = String(this.data.preset || 'none').trim().toLowerCase();
+        const isEnabled =
+          Boolean(this.data.enabled) &&
+          normalizedPreset !== '' &&
+          normalizedPreset !== 'none' &&
+          Number(this.data.hdrIntensity) > 0;
+
         if (!isEnabled) {
           if (this.el.object3D) {
             this.el.object3D.environment = null;
           }
         } else {
-          if (!oldData || oldData.preset !== this.data.preset || oldData.hdrIntensity !== this.data.hdrIntensity || oldData.enabled !== this.data.enabled) {
+          if (
+            !oldData ||
+            oldData.preset !== this.data.preset ||
+            oldData.hdrIntensity !== this.data.hdrIntensity ||
+            oldData.enabled !== this.data.enabled ||
+            !this.el.object3D?.environment
+          ) {
             this.setupEnvironment();
+          } else if (this.el.object3D && this.el.object3D.environmentIntensity !== undefined) {
+            this.el.object3D.environmentIntensity = Number(this.data.hdrIntensity || 1.0);
           }
         }
       },
@@ -925,13 +946,18 @@ if (typeof AFRAME !== 'undefined') {
         if (THREE_LIB.ACESFilmicToneMapping !== undefined) {
           renderer.toneMapping = THREE_LIB.ACESFilmicToneMapping;
         }
-        renderer.toneMappingExposure = this.data.exposure !== undefined ? this.data.exposure : 1.1;
+        renderer.toneMappingExposure = this.data.exposure !== undefined ? Number(this.data.exposure) : 1.1;
 
         if (renderer.outputColorSpace !== undefined && THREE_LIB.SRGBColorSpace !== undefined) {
           renderer.outputColorSpace = THREE_LIB.SRGBColorSpace;
         }
 
-        const isEnabled = (this.data.enabled || (this.data.preset && this.data.preset !== 'none')) && this.data.hdrIntensity > 0;
+        const normalizedPreset = String(this.data.preset || 'none').trim().toLowerCase();
+        const isEnabled =
+          Boolean(this.data.enabled) &&
+          normalizedPreset !== '' &&
+          normalizedPreset !== 'none' &&
+          Number(this.data.hdrIntensity) > 0;
         if (isEnabled) {
           try {
             const pmremGenerator = this.pmremGenerator || new THREE_LIB.PMREMGenerator(renderer);
@@ -6119,16 +6145,7 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
 
         if (!this.rootGroup) return;
 
-        // Clean up previous meshes
-        while (this.rootGroup.children.length > 0) {
-          const child = this.rootGroup.children[0];
-          this.rootGroup.remove(child);
-          if (child.geometry) child.geometry.dispose();
-          if (child.material) {
-            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
-            else child.material.dispose();
-          }
-        }
+        const currentGen = (this._rebuildGen = (this._rebuildGen || 0) + 1);
 
         let items = [];
         try {
@@ -6148,19 +6165,45 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
 
         if (!Array.isArray(items)) items = [];
 
+        const builtMeshes = [];
         for (const item of items) {
           if (!item) continue;
           try {
-            const font = await loadTypefaceFont(item.fontFamily || 'helvetiker_bold');
+            const font = await loadTypefaceFont(item.fontFamily || 'helvetiker_bold', item);
+            if (currentGen !== this._rebuildGen || !this.rootGroup) {
+              builtMeshes.forEach((m) => {
+                if (m.geometry) m.geometry.dispose();
+                if (m.material) {
+                  if (Array.isArray(m.material)) m.material.forEach((mat) => mat.dispose());
+                  else m.material.dispose();
+                }
+              });
+              return;
+            }
             const mesh = create3DTextMesh(item, THREE_LIB, font);
             if (mesh) {
               mesh.visible = item.visible !== false;
-              this.rootGroup.add(mesh);
+              builtMeshes.push(mesh);
             }
           } catch (err) {
             console.warn('[ar-3d-texts] Could not load font or build mesh for text item:', item, err);
           }
         }
+
+        if (currentGen !== this._rebuildGen || !this.rootGroup) return;
+
+        // Clean up previous meshes atomically right before swapping in newly built meshes
+        while (this.rootGroup.children.length > 0) {
+          const child = this.rootGroup.children[0];
+          this.rootGroup.remove(child);
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+        }
+
+        builtMeshes.forEach((mesh) => this.rootGroup.add(mesh));
 
         this.rootGroup.updateMatrixWorld(true);
 

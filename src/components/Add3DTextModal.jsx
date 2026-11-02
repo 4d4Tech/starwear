@@ -1,12 +1,19 @@
 /* eslint-disable react/prop-types */
 import { useState } from 'react';
-import { AVAILABLE_FONTS, TEXT_MATERIAL_PRESETS } from '../utils/text3DHelper';
+import {
+  formatFontDisplayName,
+  buildDeterministicFontsourceTTFUrl
+} from '../utils/text3DHelper';
+import GoogleFontSelector from './GoogleFontSelector';
 
 const QUICK_TEXT_PRESETS = [
   {
-    name: 'Cyberpunk Neon',
+    name: 'Cyberpunk Orbitron',
     text: 'STAR weAR',
-    fontFamily: 'helvetiker_bold',
+    fontFamily: 'gf:Orbitron:700',
+    googleFontFamily: 'Orbitron',
+    googleFontVariant: '700',
+    fontUrl: buildDeterministicFontsourceTTFUrl('Orbitron', '700'),
     size: 0.35,
     depth: 0.08,
     bevelEnabled: true,
@@ -22,7 +29,10 @@ const QUICK_TEXT_PRESETS = [
   {
     name: 'Arched Header Banner',
     text: 'WHERE EVERYDAY IS',
-    fontFamily: 'helvetiker_bold',
+    fontFamily: 'gf:Montserrat:800',
+    googleFontFamily: 'Montserrat',
+    googleFontVariant: '800',
+    fontUrl: buildDeterministicFontsourceTTFUrl('Montserrat', '800'),
     size: 0.135,
     depth: 0.04,
     curveRadius: 1.08,
@@ -40,9 +50,12 @@ const QUICK_TEXT_PRESETS = [
     roughness: 0.15
   },
   {
-    name: '24K Polished Gold',
+    name: '24K Cinzel Gold',
     text: 'STAR weAR',
-    fontFamily: 'optimer_bold',
+    fontFamily: 'gf:Cinzel:700',
+    googleFontFamily: 'Cinzel',
+    googleFontVariant: '700',
+    fontUrl: buildDeterministicFontsourceTTFUrl('Cinzel', '700'),
     size: 0.4,
     depth: 0.1,
     bevelEnabled: true,
@@ -56,10 +69,13 @@ const QUICK_TEXT_PRESETS = [
     roughness: 0.15
   },
   {
-    name: 'Obsidian Noir',
+    name: 'Bebas Streetwear Noir',
     text: 'LIMITED EDITION',
-    fontFamily: 'gentilis_bold',
-    size: 0.25,
+    fontFamily: 'gf:Bebas Neue:400',
+    googleFontFamily: 'Bebas Neue',
+    googleFontVariant: '400',
+    fontUrl: buildDeterministicFontsourceTTFUrl('Bebas Neue', '400'),
+    size: 0.34,
     depth: 0.06,
     bevelEnabled: true,
     bevelThickness: 0.01,
@@ -72,10 +88,13 @@ const QUICK_TEXT_PRESETS = [
     roughness: 0.1
   },
   {
-    name: 'Crimson Glow',
+    name: 'Crimson Bungee Glow',
     text: 'EXCLUSIVE DROP',
-    fontFamily: 'helvetiker_bold',
-    size: 0.3,
+    fontFamily: 'gf:Bungee:400',
+    googleFontFamily: 'Bungee',
+    googleFontVariant: '400',
+    fontUrl: buildDeterministicFontsourceTTFUrl('Bungee', '400'),
+    size: 0.28,
     depth: 0.07,
     bevelEnabled: true,
     bevelThickness: 0.015,
@@ -88,9 +107,9 @@ const QUICK_TEXT_PRESETS = [
     roughness: 0.3
   },
   {
-    name: 'Titanium White',
+    name: 'Titanium White Classic',
     text: 'COLLECTION 2026',
-    fontFamily: 'helvetiker_regular',
+    fontFamily: 'helvetiker_bold',
     size: 0.28,
     depth: 0.05,
     bevelEnabled: true,
@@ -111,7 +130,12 @@ export default function Add3DTextModal({
   onAddText
 }) {
   const [text, setText] = useState('STAR weAR');
-  const [fontFamily, setFontFamily] = useState('helvetiker_bold');
+  const [fontFamily, setFontFamily] = useState('gf:Orbitron:700');
+  const [fontMeta, setFontMeta] = useState({
+    fontUrl: buildDeterministicFontsourceTTFUrl('Orbitron', '700'),
+    googleFontFamily: 'Orbitron',
+    googleFontVariant: '700'
+  });
   const [size, setSize] = useState(0.35);
   const [depth, setDepth] = useState(0.08);
   const [bevelEnabled, setBevelEnabled] = useState(true);
@@ -128,13 +152,18 @@ export default function Add3DTextModal({
   const [emissiveIntensity, setEmissiveIntensity] = useState(0.5);
   const [metalness, setMetalness] = useState(0.8);
   const [roughness, setRoughness] = useState(0.25);
-  const [wireframe, setWireframe] = useState(false);
+  const [wireframe] = useState(false);
 
   if (!isOpen) return null;
 
   const handleApplyPreset = (preset) => {
     if (preset.text) setText(preset.text);
     if (preset.fontFamily) setFontFamily(preset.fontFamily);
+    setFontMeta({
+      fontUrl: preset.fontUrl,
+      googleFontFamily: preset.googleFontFamily,
+      googleFontVariant: preset.googleFontVariant
+    });
     if (preset.size !== undefined) setSize(preset.size);
     if (preset.depth !== undefined) setDepth(preset.depth);
     if (preset.bevelEnabled !== undefined) setBevelEnabled(preset.bevelEnabled);
@@ -158,6 +187,9 @@ export default function Add3DTextModal({
       name: text || '3D Text',
       text: text || 'STAR weAR',
       fontFamily,
+      ...(fontMeta?.fontUrl ? { fontUrl: fontMeta.fontUrl } : {}),
+      ...(fontMeta?.googleFontFamily ? { googleFontFamily: fontMeta.googleFontFamily } : {}),
+      ...(fontMeta?.googleFontVariant ? { googleFontVariant: fontMeta.googleFontVariant } : {}),
       size: Number(size),
       depth: Number(depth),
       bevelEnabled,
@@ -247,7 +279,7 @@ export default function Add3DTextModal({
                       {p.name}
                     </p>
                     <p className="text-[10px] font-mono text-neutral-400 truncate">
-                      {p.fontFamily.split('_')[0]} • {p.color}
+                      {formatFontDisplayName(p.fontFamily, p)} • {p.color}
                     </p>
                   </div>
                   <span
@@ -261,31 +293,16 @@ export default function Add3DTextModal({
 
           {/* Text Content & Typography */}
           <div className="space-y-3 pt-3 border-t border-neutral-800/80">
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-neutral-300">Text Content</label>
-              <input
-                type="text"
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="Enter 3D text..."
-                className="w-full px-3 py-2 bg-black border border-neutral-700 rounded-lg text-sm text-white font-semibold focus:outline-none focus:border-pink-500 shadow-inner"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-neutral-300">Typeface Font</label>
-                <select
-                  value={fontFamily}
-                  onChange={(e) => setFontFamily(e.target.value)}
-                  className="w-full px-3 py-2 bg-neutral-800 border border-neutral-700 rounded-lg text-xs text-neutral-200 focus:outline-none focus:border-pink-500"
-                >
-                  {AVAILABLE_FONTS.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name}
-                    </option>
-                  ))}
-                </select>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="sm:col-span-2 space-y-1">
+                <label className="text-xs font-semibold text-neutral-300">Text Content</label>
+                <input
+                  type="text"
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder="Enter 3D text..."
+                  className="w-full px-3 py-2 bg-black border border-neutral-700 rounded-lg text-sm text-white font-semibold focus:outline-none focus:border-pink-500 shadow-inner"
+                />
               </div>
 
               <div className="space-y-1">
@@ -296,7 +313,7 @@ export default function Add3DTextModal({
                       key={al}
                       type="button"
                       onClick={() => setAlign(al)}
-                      className={`py-1 rounded text-[11px] font-semibold capitalize transition-all ${
+                      className={`py-1.5 rounded text-[11px] font-semibold capitalize transition-all ${
                         align === al
                           ? 'bg-pink-600 text-white shadow'
                           : 'text-neutral-400 hover:text-white'
@@ -307,6 +324,31 @@ export default function Add3DTextModal({
                   ))}
                 </div>
               </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-xs text-sky-400">font_download</span>
+                  3D Typeface (Google Fonts & Built-in)
+                </label>
+                <span className="text-[10px] text-neutral-400">
+                  Extruded .TTF & WebGL Vector Outlines
+                </span>
+              </div>
+              <GoogleFontSelector
+                value={fontFamily}
+                textConfig={fontMeta}
+                previewText={text}
+                onChange={(next) => {
+                  setFontFamily(next.fontFamily);
+                  setFontMeta({
+                    fontUrl: next.fontUrl,
+                    googleFontFamily: next.googleFontFamily,
+                    googleFontVariant: next.googleFontVariant
+                  });
+                }}
+              />
             </div>
           </div>
 
