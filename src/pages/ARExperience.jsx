@@ -1446,13 +1446,25 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     };
   }, [arData, cameraEnabled, getOrbitControls, getThreeCamera]);
 
-  // Recompile scene shaders whenever viewing mode (AR Camera <-> 3D Preview <-> Forced Test)
-  // or lighting configuration changes so Three.js updates light uniform counts immediately.
+  // Recompile scene shaders and maintain 1:1 renderer parity with ProductViewer
+  // (ACESFilmicToneMapping, exposure, sRGB color space) whenever viewing mode or lighting changes.
   useEffect(() => {
     const sceneEl = sceneRef.current || document.querySelector('a-scene');
     if (!sceneEl) return;
 
-    const recompileLightingShaders = () => {
+    const setupRendererAndShaders = () => {
+      const renderer = sceneEl.renderer;
+      const THREE_LIB = (typeof AFRAME !== 'undefined' && AFRAME.THREE) ? AFRAME.THREE : THREE;
+      if (renderer) {
+        if (THREE_LIB.ACESFilmicToneMapping !== undefined) {
+          renderer.toneMapping = THREE_LIB.ACESFilmicToneMapping;
+        }
+        renderer.toneMappingExposure = Number(liveStudioLighting?.exposure ?? exposure ?? 1.1);
+        if (renderer.outputColorSpace !== undefined && THREE_LIB.SRGBColorSpace !== undefined) {
+          renderer.outputColorSpace = THREE_LIB.SRGBColorSpace;
+        }
+      }
+
       if (sceneEl.renderer?.renderLists?.dispose) {
         try { sceneEl.renderer.renderLists.dispose(); } catch { /* ignore */ }
       }
@@ -1469,15 +1481,24 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
       });
     };
 
-    const rafId = requestAnimationFrame(recompileLightingShaders);
-    const t1 = setTimeout(recompileLightingShaders, 120);
-    const t2 = setTimeout(recompileLightingShaders, 350);
+    if (sceneEl.hasLoaded) {
+      setupRendererAndShaders();
+    } else {
+      sceneEl.addEventListener('loaded', setupRendererAndShaders);
+      sceneEl.addEventListener('render-target-loaded', setupRendererAndShaders);
+    }
+
+    const rafId = requestAnimationFrame(setupRendererAndShaders);
+    const t1 = setTimeout(setupRendererAndShaders, 120);
+    const t2 = setTimeout(setupRendererAndShaders, 350);
     return () => {
+      sceneEl.removeEventListener('loaded', setupRendererAndShaders);
+      sceneEl.removeEventListener('render-target-loaded', setupRendererAndShaders);
       cancelAnimationFrame(rafId);
       clearTimeout(t1);
       clearTimeout(t2);
     };
-  }, [cameraEnabled, forceShowModel, arData]);
+  }, [cameraEnabled, forceShowModel, arData, liveStudioLighting, exposure]);
 
   // Reactive Effect to ensure flipX is applied if arData config loads after model is in memory
   useEffect(() => {
@@ -1608,30 +1629,34 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const customLightsAttr = `lights: ${encodeURIComponent(JSON.stringify(effectiveCustomLights))}; showHelpers: ${showDiagnostics}; showBulbs: ${showDiagnostics};`;
 
   const ambientColor = liveStudioLighting?.ambientColor || cfg.ambientColor || '#ffffff';
-  const ambientIntensity = liveStudioLighting?.ambientIntensity !== undefined
+  const rawAmbient = liveStudioLighting?.ambientIntensity !== undefined
     ? Number(liveStudioLighting.ambientIntensity)
     : (cfg.ambientIntensity !== undefined ? Number(cfg.ambientIntensity) : 1.4);
+  const ambientIntensity = hasCustomLights ? Number((rawAmbient * 0.5).toFixed(3)) : rawAmbient;
 
   const dir1Color = liveStudioLighting?.dir1Color || cfg.dir1Color || '#ffffff';
-  const dir1Intensity = liveStudioLighting?.dir1Intensity !== undefined
+  const rawDir1 = liveStudioLighting?.dir1Intensity !== undefined
     ? Number(liveStudioLighting.dir1Intensity)
     : (cfg.dir1Intensity !== undefined ? Number(cfg.dir1Intensity) : 2.2);
+  const dir1Intensity = hasCustomLights ? Number((rawDir1 * 0.45).toFixed(3)) : rawDir1;
   const dir1Position = liveStudioLighting?.dir1Position || cfg.dir1Position || '2 4 3';
 
   const dir2Color = liveStudioLighting?.dir2Color || cfg.dir2Color || '#ffffff';
-  const dir2Intensity = liveStudioLighting?.dir2Intensity !== undefined
+  const rawDir2 = liveStudioLighting?.dir2Intensity !== undefined
     ? Number(liveStudioLighting.dir2Intensity)
     : (cfg.dir2Intensity !== undefined ? Number(cfg.dir2Intensity) : 1.2);
+  const dir2Intensity = hasCustomLights ? Number((rawDir2 * 0.45).toFixed(3)) : rawDir2;
   const dir2Position = liveStudioLighting?.dir2Position || cfg.dir2Position || '-2 -1 -2';
 
   const rimColor = liveStudioLighting?.rimColor || cfg.rimColor || '#818cf8';
-  const rimIntensity = liveStudioLighting?.rimIntensity !== undefined
+  const rawRim = liveStudioLighting?.rimIntensity !== undefined
     ? Number(liveStudioLighting.rimIntensity)
     : (cfg.rimIntensity !== undefined ? Number(cfg.rimIntensity) : 1.0);
+  const rimIntensity = hasCustomLights ? Number((rawRim * 0.45).toFixed(3)) : rawRim;
   const rimPosition = liveStudioLighting?.rimPosition || cfg.rimPosition || '0 3 -3';
 
-  const anchorStudioLightingAttr = `enabled: true; includeAmbient: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${rimIntensity}; rimPosition: ${rimPosition};`;
-  const forcedStudioLightingAttr = `enabled: ${trackingStatus !== 'DETECTED'}; includeAmbient: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${rimIntensity}; rimPosition: ${rimPosition};`;
+  // Single Unified Studio Lighting Rig configuration matching ProductViewer & ARTest 1:1
+  const studioLightingAttr = `enabled: true; includeAmbient: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${rimIntensity}; rimPosition: ${rimPosition};`;
 
   const exposure = cfg.exposure !== undefined ? Number(cfg.exposure) : 1.1;
   const envPreset = cfg.envPreset || 'none';
@@ -1954,19 +1979,18 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         >
         </a-camera>
 
+        {/* Single Unified Studio Lighting Rig (Direct Child of <a-scene>, 1:1 Parity with ARTest & ProductViewer) */}
+        <a-entity
+          id="main-studio-lighting"
+          ar-studio-lighting={studioLightingAttr}
+        ></a-entity>
+
         {/* MindAR Target Anchor: Active in Live AR Camera Mode */}
         <a-entity
           id="target-entity"
           mindar-image-target={`targetIndex: ${targetIndex}`}
           mindar-target-sync=""
         >
-          {cameraEnabled && (
-            <a-entity
-              id="target-studio-lighting"
-              ar-studio-lighting={anchorStudioLightingAttr}
-            ></a-entity>
-          )}
-
           {cameraEnabled && !portalHideOutsideModel && arData.gltfPath ? (
             <a-gltf-model
               id="ar-model"
@@ -2075,11 +2099,6 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             id="preview-anchor"
             position="0 0 0"
           >
-            <a-entity
-              id="preview-studio-lighting"
-              ar-studio-lighting={anchorStudioLightingAttr}
-            ></a-entity>
-
             {!portalHideOutsideModel && arData.gltfPath ? (
               <a-gltf-model
                 id="preview-model"
@@ -2187,10 +2206,6 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             id="force-preview-anchor"
             position="0 0 -2"
           >
-            <a-entity
-              id="force-studio-lighting"
-              ar-studio-lighting={forcedStudioLightingAttr}
-            ></a-entity>
             {!portalHideOutsideModel && (
               <a-gltf-model
                 id="ar-model-forced"

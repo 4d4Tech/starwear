@@ -4892,14 +4892,25 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
 
       if (!this.tempTargetPos) this.tempTargetPos = new THREE_LIB.Vector3();
 
-      // Root scene rig (e.g. ARTest.jsx): track the active 3D model entity in world space
+      // Root scene rig (e.g. ARTest.jsx, ARExperience.jsx): track the active 3D model entity in world space
       let targetObj = null;
-      const candidates = ['ar-model', 'preview-model', 'ar-model-forced', 'target-entity', 'preview-anchor'];
+      const candidates = ['ar-model', 'preview-model', 'ar-model-forced', 'target-entity', 'preview-anchor', 'force-preview-anchor'];
       for (let i = 0; i < candidates.length; i++) {
         const candidateEl = document.getElementById(candidates[i]);
-        if (candidateEl && candidateEl.object3D && candidateEl.object3D.visible !== false) {
-          targetObj = candidateEl.object3D;
-          break;
+        if (candidateEl && candidateEl.object3D) {
+          let isVis = true;
+          let cur = candidateEl.object3D;
+          while (cur) {
+            if (cur.visible === false) {
+              isVis = false;
+              break;
+            }
+            cur = cur.parent;
+          }
+          if (isVis) {
+            targetObj = candidateEl.object3D;
+            break;
+          }
         }
       }
 
