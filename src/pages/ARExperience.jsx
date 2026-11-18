@@ -1459,7 +1459,8 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         if (THREE_LIB.ACESFilmicToneMapping !== undefined) {
           renderer.toneMapping = THREE_LIB.ACESFilmicToneMapping;
         }
-        renderer.toneMappingExposure = Number(liveStudioLighting?.exposure ?? exposure ?? 1.1);
+        const activeExposure = Number(liveStudioLighting?.exposure ?? arData?.config?.exposure ?? 1.15);
+        renderer.toneMappingExposure = activeExposure;
         if (renderer.outputColorSpace !== undefined && THREE_LIB.SRGBColorSpace !== undefined) {
           renderer.outputColorSpace = THREE_LIB.SRGBColorSpace;
         }
@@ -1498,7 +1499,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
       clearTimeout(t1);
       clearTimeout(t2);
     };
-  }, [cameraEnabled, forceShowModel, arData, liveStudioLighting, exposure]);
+  }, [cameraEnabled, forceShowModel, arData, liveStudioLighting]);
 
   // Reactive Effect to ensure flipX is applied if arData config loads after model is in memory
   useEffect(() => {
@@ -1629,40 +1630,43 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const customLightsAttr = `lights: ${encodeURIComponent(JSON.stringify(effectiveCustomLights))}; showHelpers: ${showDiagnostics}; showBulbs: ${showDiagnostics};`;
 
   const ambientColor = liveStudioLighting?.ambientColor || cfg.ambientColor || '#ffffff';
-  const rawAmbient = liveStudioLighting?.ambientIntensity !== undefined
+  // Raise default ambient illumination to 2.2 for bright, rich, true-to-life lighting
+  const ambientIntensity = liveStudioLighting?.ambientIntensity !== undefined
     ? Number(liveStudioLighting.ambientIntensity)
-    : (cfg.ambientIntensity !== undefined ? Number(cfg.ambientIntensity) : 1.4);
-  const ambientIntensity = hasCustomLights ? Number((rawAmbient * 0.5).toFixed(3)) : rawAmbient;
+    : (cfg.ambientIntensity !== undefined ? Number(cfg.ambientIntensity) : 2.2);
 
   const dir1Color = liveStudioLighting?.dir1Color || cfg.dir1Color || '#ffffff';
-  const rawDir1 = liveStudioLighting?.dir1Intensity !== undefined
+  const dir1Intensity = liveStudioLighting?.dir1Intensity !== undefined
     ? Number(liveStudioLighting.dir1Intensity)
-    : (cfg.dir1Intensity !== undefined ? Number(cfg.dir1Intensity) : 2.2);
-  const dir1Intensity = hasCustomLights ? Number((rawDir1 * 0.45).toFixed(3)) : rawDir1;
+    : (cfg.dir1Intensity !== undefined ? Number(cfg.dir1Intensity) : 2.5);
   const dir1Position = liveStudioLighting?.dir1Position || cfg.dir1Position || '2 4 3';
 
   const dir2Color = liveStudioLighting?.dir2Color || cfg.dir2Color || '#ffffff';
-  const rawDir2 = liveStudioLighting?.dir2Intensity !== undefined
+  const dir2Intensity = liveStudioLighting?.dir2Intensity !== undefined
     ? Number(liveStudioLighting.dir2Intensity)
     : (cfg.dir2Intensity !== undefined ? Number(cfg.dir2Intensity) : 1.2);
-  const dir2Intensity = hasCustomLights ? Number((rawDir2 * 0.45).toFixed(3)) : rawDir2;
   const dir2Position = liveStudioLighting?.dir2Position || cfg.dir2Position || '-2 -1 -2';
 
   const rimColor = liveStudioLighting?.rimColor || cfg.rimColor || '#818cf8';
-  const rawRim = liveStudioLighting?.rimIntensity !== undefined
+  const rimIntensity = liveStudioLighting?.rimIntensity !== undefined
     ? Number(liveStudioLighting.rimIntensity)
     : (cfg.rimIntensity !== undefined ? Number(cfg.rimIntensity) : 1.0);
-  const rimIntensity = hasCustomLights ? Number((rawRim * 0.45).toFixed(3)) : rawRim;
   const rimPosition = liveStudioLighting?.rimPosition || cfg.rimPosition || '0 3 -3';
 
   // Single Unified Studio Lighting Rig configuration matching ProductViewer & ARTest 1:1
   const studioLightingAttr = `enabled: true; includeAmbient: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${rimIntensity}; rimPosition: ${rimPosition};`;
 
-  const exposure = cfg.exposure !== undefined ? Number(cfg.exposure) : 1.1;
-  const envPreset = cfg.envPreset || 'none';
-  const envIntensity = cfg.envIntensity !== undefined
-    ? Number(cfg.envIntensity)
-    : (cfg.hdrIntensity !== undefined ? Number(cfg.hdrIntensity) : 1.0);
+  const exposure = liveStudioLighting?.exposure !== undefined
+    ? Number(liveStudioLighting.exposure)
+    : (cfg.exposure !== undefined ? Number(cfg.exposure) : 1.15);
+
+  // Enable studio-chrome environment reflection by default so PBR materials never look dark from a distance
+  const envPreset = liveStudioLighting?.envPreset || cfg.envPreset || 'studio-chrome';
+  const envIntensity = liveStudioLighting?.envIntensity !== undefined
+    ? Number(liveStudioLighting.envIntensity)
+    : (cfg.envIntensity !== undefined
+      ? Number(cfg.envIntensity)
+      : (cfg.hdrIntensity !== undefined ? Number(cfg.hdrIntensity) : 1.2));
   const envEnabled = Boolean(envPreset && envPreset !== 'none' && envIntensity > 0);
   const fogColor = cfg.fogColor || '#000000';
   const fogDensity = cfg.fogDensity !== undefined ? Number(cfg.fogDensity) : 0;
@@ -2539,6 +2543,19 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           customLights={effectiveCustomLights}
           onUpdateCustomLights={(updatedLights) => {
             setCustomLights(updatedLights);
+          }}
+          studioLighting={{
+            ambientIntensity,
+            dir1Intensity,
+            exposure,
+            envPreset,
+            envIntensity
+          }}
+          onUpdateStudioLighting={(updatedStudio) => {
+            setLiveStudioLighting((prev) => ({
+              ...(prev || {}),
+              ...updatedStudio
+            }));
           }}
           getThreeCamera={getThreeCamera}
         />

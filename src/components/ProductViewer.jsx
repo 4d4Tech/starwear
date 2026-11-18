@@ -490,9 +490,9 @@ function SceneContent({
     };
   }, [config]);
 
-  const effectiveExposure = normCfg.exposure !== undefined ? Number(normCfg.exposure) : 1.1;
-  const effectiveEnvPreset = String(normCfg.envPreset || 'none').trim().toLowerCase();
-  const effectiveEnvIntensity = normCfg.envIntensity !== undefined ? Number(normCfg.envIntensity) : 1.0;
+  const effectiveExposure = normCfg.exposure !== undefined ? Number(normCfg.exposure) : 1.15;
+  const effectiveEnvPreset = String(normCfg.envPreset || 'studio-chrome').trim().toLowerCase();
+  const effectiveEnvIntensity = normCfg.envIntensity !== undefined ? Number(normCfg.envIntensity) : 1.2;
   const effectiveFogColor = normCfg.fogColor || '#000000';
   const effectiveFogDensity = normCfg.fogDensity !== undefined ? Number(normCfg.fogDensity) : 0;
 
@@ -956,8 +956,8 @@ function SceneContent({
         color={normCfg.ambientColor || 0xffffff}
         intensity={
           normCfg.ambientIntensity !== undefined
-            ? (hasCustomLights ? Number(normCfg.ambientIntensity) * 0.5 : Number(normCfg.ambientIntensity))
-            : (hasCustomLights ? 0.6 : 1.4)
+            ? Number(normCfg.ambientIntensity)
+            : 2.2
         }
       />
       <directionalLight
@@ -965,8 +965,8 @@ function SceneContent({
         color={normCfg.dir1Color || 0xffffff}
         intensity={
           normCfg.dir1Intensity !== undefined
-            ? (hasCustomLights ? Number(normCfg.dir1Intensity) * 0.45 : Number(normCfg.dir1Intensity))
-            : (hasCustomLights ? 0.9 : 2.2)
+            ? Number(normCfg.dir1Intensity)
+            : 2.5
         }
       />
       <directionalLight
@@ -974,8 +974,8 @@ function SceneContent({
         color={normCfg.dir2Color || 0xffffff}
         intensity={
           normCfg.dir2Intensity !== undefined
-            ? (hasCustomLights ? Number(normCfg.dir2Intensity) * 0.45 : Number(normCfg.dir2Intensity))
-            : (hasCustomLights ? 0.5 : 1.2)
+            ? Number(normCfg.dir2Intensity)
+            : 1.2
         }
       />
       <directionalLight
@@ -983,8 +983,8 @@ function SceneContent({
         color={normCfg.rimColor || 0x818cf8}
         intensity={
           normCfg.rimIntensity !== undefined
-            ? (hasCustomLights ? Number(normCfg.rimIntensity) * 0.45 : Number(normCfg.rimIntensity))
-            : (hasCustomLights ? 0.4 : 1.0)
+            ? Number(normCfg.rimIntensity)
+            : 1.0
         }
       />
 

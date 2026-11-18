@@ -1007,27 +1007,20 @@ const ARTest = () => {
     [customLights]
   );
   const effectiveStudioAmbientIntensity = useMemo(() => {
-    const base = Number(ambientIntensity ?? 1.4);
-    if (previewRenderMode === 'product-preview' && hasActiveCustomLights) {
-      return Number((base * 0.5).toFixed(3));
-    }
-    return base;
-  }, [ambientIntensity, previewRenderMode, hasActiveCustomLights]);
+    return Number(ambientIntensity ?? 2.2);
+  }, [ambientIntensity]);
 
   const effectiveStudioDir1Intensity = useMemo(() => {
-    const base = Number(dir1Intensity ?? 2.2);
-    return hasActiveCustomLights ? Number((base * 0.45).toFixed(3)) : base;
-  }, [dir1Intensity, hasActiveCustomLights]);
+    return Number(dir1Intensity ?? 2.5);
+  }, [dir1Intensity]);
 
   const effectiveStudioDir2Intensity = useMemo(() => {
-    const base = Number(dir2Intensity ?? 1.2);
-    return hasActiveCustomLights ? Number((base * 0.45).toFixed(3)) : base;
-  }, [dir2Intensity, hasActiveCustomLights]);
+    return Number(dir2Intensity ?? 1.2);
+  }, [dir2Intensity]);
 
   const effectiveStudioRimIntensity = useMemo(() => {
-    const base = Number(rimIntensity ?? 1.0);
-    return hasActiveCustomLights ? Number((base * 0.45).toFixed(3)) : base;
-  }, [rimIntensity, hasActiveCustomLights]);
+    return Number(rimIntensity ?? 1.0);
+  }, [rimIntensity]);
 
   // UI Elements
   const [showBuyButton, setShowBuyButton] = useState(true);
@@ -21857,6 +21850,25 @@ const ARTest = () => {
         sceneRef={sceneRef}
         trackingStatus="STUDIO_VIEW"
         cameraEnabled={false}
+        batchId={batchId}
+        customLights={customLights}
+        onUpdateCustomLights={(updatedLights) => {
+          setCustomLights(updatedLights);
+        }}
+        studioLighting={{
+          ambientIntensity: Number(ambientIntensity ?? 2.2),
+          dir1Intensity: Number(dir1Intensity ?? 2.5),
+          exposure: Number(exposure ?? 1.15),
+          envPreset: envPreset || 'studio-chrome',
+          envIntensity: Number(envIntensity ?? 1.2)
+        }}
+        onUpdateStudioLighting={(updatedStudio) => {
+          if (updatedStudio.ambientIntensity !== undefined) setAmbientIntensity(updatedStudio.ambientIntensity);
+          if (updatedStudio.dir1Intensity !== undefined) setDir1Intensity(updatedStudio.dir1Intensity);
+          if (updatedStudio.exposure !== undefined) setExposure(updatedStudio.exposure);
+          if (updatedStudio.envPreset !== undefined) setEnvPreset(updatedStudio.envPreset);
+          if (updatedStudio.envIntensity !== undefined) setEnvIntensity(updatedStudio.envIntensity);
+        }}
       />
 
       {/* Interactive Face Sketch & Extrude Studio */}

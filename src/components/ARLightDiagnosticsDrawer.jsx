@@ -31,6 +31,8 @@ export default function ARLightDiagnosticsDrawer({
   batchId = '',
   customLights = [],
   onUpdateCustomLights,
+  studioLighting = null,
+  onUpdateStudioLighting = null,
   getThreeCamera
 }) {
   const { currentUser, isSuperAdmin, isSuperUser } = useAuth();
@@ -56,6 +58,57 @@ export default function ARLightDiagnosticsDrawer({
   const [isSavingLights, setIsSavingLights] = useState(false);
   const [saveLightSuccessMsg, setSaveLightSuccessMsg] = useState('');
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
+  // Global & Environment Master Lighting State (Scrubbable live controls)
+  const [globalLighting, setGlobalLighting] = useState({
+    ambientIntensity: studioLighting?.ambientIntensity ?? 2.2,
+    dir1Intensity: studioLighting?.dir1Intensity ?? 2.5,
+    exposure: studioLighting?.exposure ?? 1.15,
+    envPreset: studioLighting?.envPreset ?? 'studio-chrome',
+    envIntensity: studioLighting?.envIntensity ?? 1.2
+  });
+
+  useEffect(() => {
+    if (!studioLighting) return;
+    setGlobalLighting((prev) => ({
+      ambientIntensity: studioLighting.ambientIntensity !== undefined ? Number(studioLighting.ambientIntensity) : prev.ambientIntensity,
+      dir1Intensity: studioLighting.dir1Intensity !== undefined ? Number(studioLighting.dir1Intensity) : prev.dir1Intensity,
+      exposure: studioLighting.exposure !== undefined ? Number(studioLighting.exposure) : prev.exposure,
+      envPreset: studioLighting.envPreset !== undefined ? studioLighting.envPreset : prev.envPreset,
+      envIntensity: studioLighting.envIntensity !== undefined ? Number(studioLighting.envIntensity) : prev.envIntensity
+    }));
+  }, [studioLighting]);
+
+  const handleUpdateGlobalLighting = (field, value) => {
+    const updated = {
+      ...globalLighting,
+      [field]: value
+    };
+    setGlobalLighting(updated);
+    setHasUnsavedChanges(true);
+
+    if (typeof onUpdateStudioLighting === 'function') {
+      onUpdateStudioLighting(updated);
+    }
+
+    // Direct 60fps Three.js manipulation for instant scrubbing feedback
+    const sceneEl = sceneRef?.current || document.querySelector('a-scene');
+    if (sceneEl) {
+      const studioRig = sceneEl.querySelector('#main-studio-lighting')?.components?.['ar-studio-lighting'] ||
+        sceneEl.querySelector('[ar-studio-lighting]')?.components?.['ar-studio-lighting'];
+      if (studioRig) {
+        if (field === 'ambientIntensity' && studioRig.ambientLight) {
+          studioRig.ambientLight.intensity = Number(value);
+        }
+        if (field === 'dir1Intensity' && studioRig.dir1Light) {
+          studioRig.dir1Light.intensity = Number(value);
+        }
+      }
+      if (field === 'exposure' && sceneEl.renderer) {
+        sceneEl.renderer.toneMappingExposure = Number(value);
+      }
+    }
+  };
 
   // Scene discovery & active lights
   const [discoveredLights, setDiscoveredLights] = useState([]);
@@ -633,12 +686,33 @@ export default function ARLightDiagnosticsDrawer({
       const batchRef = doc(db, 'batches', cleanId);
       const assetRef = doc(db, 'assets', cleanId);
 
+      const ambVal = Number(globalLighting.ambientIntensity ?? 2.2);
+      const dir1Val = Number(globalLighting.dir1Intensity ?? 2.5);
+      const expVal = Number(globalLighting.exposure ?? 1.15);
+      const envPresetVal = globalLighting.envPreset || 'studio-chrome';
+      const envIntVal = Number(globalLighting.envIntensity ?? 1.2);
+
       const payload = {
         customLights: customLights || [],
+        ambientIntensity: ambVal,
+        dir1Intensity: dir1Val,
+        exposure: expVal,
+        envPreset: envPresetVal,
+        envIntensity: envIntVal,
         ar_config: {
           customLights: customLights || [],
+          ambientIntensity: ambVal,
+          dir1Intensity: dir1Val,
+          exposure: expVal,
+          envPreset: envPresetVal,
+          envIntensity: envIntVal,
           lighting: {
-            customLights: customLights || []
+            customLights: customLights || [],
+            ambientIntensity: ambVal,
+            dir1Intensity: dir1Val,
+            exposure: expVal,
+            envPreset: envPresetVal,
+            envIntensity: envIntVal
           }
         },
         updatedAt: new Date().toISOString()
@@ -653,6 +727,11 @@ export default function ARLightDiagnosticsDrawer({
         const localKey = 'starwear_live_preview_config_' + cleanId;
         const existingLocal = JSON.parse(localStorage.getItem(localKey) || '{}');
         existingLocal.customLights = customLights || [];
+        existingLocal.ambientIntensity = ambVal;
+        existingLocal.dir1Intensity = dir1Val;
+        existingLocal.exposure = expVal;
+        existingLocal.envPreset = envPresetVal;
+        existingLocal.envIntensity = envIntVal;
         localStorage.setItem(localKey, JSON.stringify(existingLocal));
         localStorage.setItem('starwear_live_preview_config_last', JSON.stringify(existingLocal));
       } catch (stErr) {
@@ -1026,6 +1105,197 @@ export default function ARLightDiagnosticsDrawer({
               {/* TAB 1: REAL-TIME LIGHTING STUDIO */}
               {activeTab === 'lighting' && (
                 <div className="space-y-4">
+                  {/* Global & Environment Lighting Master Controls Card */}
+                  <div className="p-3.5 rounded-2xl bg-gradient-to-br from-amber-950/40 via-neutral-900/90 to-neutral-950 border border-amber-500/40 shadow-xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="material-symbols-outlined text-amber-400 text-lg">wb_sunny</span>
+                        <div>
+                          <div className="text-xs font-mono font-bold text-white uppercase tracking-wider">
+                            Global & Environment Light Master
+                          </div>
+                          <div className="text-[10px] text-amber-300/80">
+                            Scrub to adjust global ambient & studio light in real time
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-[10px] font-mono text-amber-300 bg-black/60 px-2 py-0.5 rounded border border-amber-500/30">
+                        Amb: {globalLighting.ambientIntensity}x • Exp: {globalLighting.exposure}
+                      </div>
+                    </div>
+
+                    {/* Quick Preset Boost Buttons */}
+                    <div className="grid grid-cols-3 gap-1.5 font-mono text-[10px]">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleUpdateGlobalLighting('ambientIntensity', 1.4);
+                          handleUpdateGlobalLighting('dir1Intensity', 2.0);
+                          handleUpdateGlobalLighting('exposure', 1.0);
+                          handleUpdateGlobalLighting('envIntensity', 0.8);
+                        }}
+                        className="py-1 px-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-semibold border border-neutral-700 transition-colors"
+                      >
+                        Subtle (1.4x)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleUpdateGlobalLighting('ambientIntensity', 2.2);
+                          handleUpdateGlobalLighting('dir1Intensity', 2.5);
+                          handleUpdateGlobalLighting('exposure', 1.15);
+                          handleUpdateGlobalLighting('envIntensity', 1.2);
+                        }}
+                        className="py-1 px-2 rounded-lg bg-amber-600/30 hover:bg-amber-600/50 text-amber-200 font-semibold border border-amber-500/50 transition-colors"
+                      >
+                        Studio (2.2x)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleUpdateGlobalLighting('ambientIntensity', 3.5);
+                          handleUpdateGlobalLighting('dir1Intensity', 3.5);
+                          handleUpdateGlobalLighting('exposure', 1.3);
+                          handleUpdateGlobalLighting('envIntensity', 1.8);
+                        }}
+                        className="py-1 px-2 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 font-semibold border border-indigo-500/50 transition-colors"
+                      >
+                        Vibrant (3.5x)
+                      </button>
+                    </div>
+
+                    {/* Scrubber 1: Global Ambient Light */}
+                    <div className="space-y-1 font-mono text-xs">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-neutral-300 font-semibold flex items-center gap-1">
+                          <span>🌐 Global Ambient Light</span>
+                          <span className="text-[9px] text-neutral-500">(360° Uniform Bounce)</span>
+                        </span>
+                        <span className="text-amber-400 font-bold">{globalLighting.ambientIntensity}x</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range"
+                          min="0.2"
+                          max="6.0"
+                          step="0.1"
+                          value={globalLighting.ambientIntensity}
+                          onChange={(e) => handleUpdateGlobalLighting('ambientIntensity', parseFloat(e.target.value))}
+                          className="flex-1 accent-amber-500 h-1.5 bg-neutral-800 rounded-lg cursor-pointer"
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          max="15"
+                          step="0.1"
+                          value={globalLighting.ambientIntensity}
+                          onChange={(e) => handleUpdateGlobalLighting('ambientIntensity', parseFloat(e.target.value) || 0)}
+                          className="w-14 px-1.5 py-0.5 bg-neutral-900 border border-neutral-700 rounded text-center text-[10px] text-white"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Scrubber 2: Key Directional Light */}
+                    <div className="space-y-1 font-mono text-xs">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-neutral-300 font-semibold flex items-center gap-1">
+                          <span>☀️ Key Studio Light (Dir 1)</span>
+                          <span className="text-[9px] text-neutral-500">(Highlights & Shadows)</span>
+                        </span>
+                        <span className="text-amber-400 font-bold">{globalLighting.dir1Intensity}x</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range"
+                          min="0.0"
+                          max="6.0"
+                          step="0.1"
+                          value={globalLighting.dir1Intensity}
+                          onChange={(e) => handleUpdateGlobalLighting('dir1Intensity', parseFloat(e.target.value))}
+                          className="flex-1 accent-amber-500 h-1.5 bg-neutral-800 rounded-lg cursor-pointer"
+                        />
+                        <input
+                          type="number"
+                          min="0"
+                          max="15"
+                          step="0.1"
+                          value={globalLighting.dir1Intensity}
+                          onChange={(e) => handleUpdateGlobalLighting('dir1Intensity', parseFloat(e.target.value) || 0)}
+                          className="w-14 px-1.5 py-0.5 bg-neutral-900 border border-neutral-700 rounded text-center text-[10px] text-white"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Scrubber 3: Camera Exposure (ACES Filmic) */}
+                    <div className="space-y-1 font-mono text-xs">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-neutral-300 font-semibold flex items-center gap-1">
+                          <span>📷 Camera Exposure (ACES)</span>
+                          <span className="text-[9px] text-neutral-500">(Overall Brightness)</span>
+                        </span>
+                        <span className="text-amber-400 font-bold">{globalLighting.exposure}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range"
+                          min="0.4"
+                          max="2.5"
+                          step="0.05"
+                          value={globalLighting.exposure}
+                          onChange={(e) => handleUpdateGlobalLighting('exposure', parseFloat(e.target.value))}
+                          className="flex-1 accent-amber-500 h-1.5 bg-neutral-800 rounded-lg cursor-pointer"
+                        />
+                        <input
+                          type="number"
+                          min="0.1"
+                          max="5"
+                          step="0.05"
+                          value={globalLighting.exposure}
+                          onChange={(e) => handleUpdateGlobalLighting('exposure', parseFloat(e.target.value) || 1)}
+                          className="w-14 px-1.5 py-0.5 bg-neutral-900 border border-neutral-700 rounded text-center text-[10px] text-white"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Scrubber 4: PBR Environment Reflection (IBL) */}
+                    <div className="space-y-1.5 font-mono text-xs pt-1 border-t border-neutral-800">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-neutral-300 font-semibold flex items-center gap-1">
+                          <span>🪞 PBR Environment Reflection</span>
+                          <span className="text-[9px] text-neutral-500">({globalLighting.envPreset})</span>
+                        </span>
+                        <span className="text-amber-400 font-bold">{globalLighting.envIntensity}x</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <select
+                          value={globalLighting.envPreset}
+                          onChange={(e) => handleUpdateGlobalLighting('envPreset', e.target.value)}
+                          className="px-2 py-1 bg-neutral-900 border border-neutral-700 rounded text-[10px] text-white font-mono"
+                        >
+                          <option value="studio-chrome">Studio Chrome (Default)</option>
+                          <option value="neutral">Neutral Room</option>
+                          <option value="city">City Ambient</option>
+                          <option value="sunset">Sunset Warmth</option>
+                          <option value="cyber">Cyber Neon</option>
+                          <option value="forest">Forest Outdoor</option>
+                          <option value="none">Disabled (No EnvMap)</option>
+                        </select>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="range"
+                            min="0.0"
+                            max="3.0"
+                            step="0.1"
+                            value={globalLighting.envIntensity}
+                            onChange={(e) => handleUpdateGlobalLighting('envIntensity', parseFloat(e.target.value))}
+                            className="flex-1 accent-amber-500 h-1.5 bg-neutral-800 rounded-lg cursor-pointer"
+                          />
+                          <span className="text-[10px] text-neutral-400 w-8 text-right font-mono">{globalLighting.envIntensity}x</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Phone Viewpoint Lighting Card */}
                   <div className="p-3.5 rounded-2xl bg-gradient-to-br from-indigo-950/60 to-purple-950/40 border border-indigo-500/40 shadow-lg space-y-2.5">
                     <div className="flex items-center justify-between">
