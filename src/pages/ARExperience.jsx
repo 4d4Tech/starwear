@@ -12,7 +12,7 @@ import { db, storage } from '../firebase';
 
 // Initialize Surface Scattering & Instanced Foliage Distribution component
 registerSurfaceScatterComponent();
-import { doc, getDoc, getDocFromServer } from 'firebase/firestore';
+import { doc, getDoc, getDocFromServer, onSnapshot, setDoc, writeBatch } from 'firebase/firestore';
 import { ref, getDownloadURL } from 'firebase/storage';
 
 // Disable Three.js internal caching to guarantee latest GLTF/GLB models are always fetched
@@ -36,10 +36,88 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   );
 
   const [arData, setArData] = useState(null);
+  const [customLights, setCustomLights] = useState([]);
+  const [liveStudioLighting, setLiveStudioLighting] = useState(null);
   const [error, setError] = useState(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [mediaPlaying, setMediaPlaying] = useState(true);
   const [mediaMuted, setMediaMuted] = useState(false);
+
+  // Real-Time Batch Lighting & Scene Synchronization
+  // Automatically syncs newly added or modified lights when saved from ARTest or another admin session
+  useEffect(() => {
+    if (!batchId) return;
+    const cleanBatchId = String(batchId).trim();
+    if (!cleanBatchId) return;
+
+    const batchDocRef = doc(db, 'batches', cleanBatchId);
+    const unsubscribe = onSnapshot(batchDocRef, (docSnap) => {
+      if (!docSnap.exists()) return;
+      const bData = docSnap.data();
+      if (!bData) return;
+
+      const incomingLights = bData.customLights || bData.ar_config?.customLights || bData.ar_config?.lighting?.customLights;
+      if (Array.isArray(incomingLights)) {
+        setCustomLights((prev) => {
+          if (JSON.stringify(prev) !== JSON.stringify(incomingLights)) {
+            console.log('[ARExperience] Real-time batch lighting sync received from Firestore:', incomingLights);
+            return incomingLights;
+          }
+          return prev;
+        });
+      }
+
+      setLiveStudioLighting((prev) => {
+        const next = { ...(prev || {}) };
+        let changed = false;
+        const lightingKeys = [
+          'ambientColor', 'ambientIntensity',
+          'dir1Color', 'dir1Intensity', 'dir1Position',
+          'dir2Color', 'dir2Intensity', 'dir2Position',
+          'rimColor', 'rimIntensity', 'rimPosition',
+          'exposure', 'envPreset', 'envIntensity', 'fogColor', 'fogDensity'
+        ];
+        lightingKeys.forEach((k) => {
+          const val = bData[k] ?? bData.ar_config?.[k];
+          if (val !== undefined && next[k] !== val) {
+            next[k] = val;
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+
+      // Force scene recompilation so Three.js renders updated lights immediately
+      const sceneEl = sceneRef.current || document.querySelector('a-scene');
+      if (sceneEl) {
+        sceneEl.querySelectorAll('[ar-custom-lights]').forEach((el) => {
+          const comp = el.components?.['ar-custom-lights'];
+          if (comp && typeof comp.rebuildLights === 'function') {
+            comp.rebuildLights();
+          }
+        });
+      }
+    }, (err) => {
+      console.warn('[ARExperience] Real-time batch snapshot warning:', err);
+    });
+
+    const handleStorageChange = (e) => {
+      if (e.key === `starwear_live_preview_config_${cleanBatchId}` && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed.customLights)) {
+            setCustomLights(parsed.customLights);
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, [batchId]);
 
   useEffect(() => {
     const handleMuteStatus = (e) => {
@@ -344,20 +422,26 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         const extractConfigFields = (docData) => {
           if (!docData || typeof docData !== 'object') return {};
           const cfg = {};
+          if (docData.scene && typeof docData.scene === 'object') Object.assign(cfg, docData.scene);
+          if (docData.ar_config?.scene && typeof docData.ar_config.scene === 'object') Object.assign(cfg, docData.ar_config.scene);
           if (docData.config && typeof docData.config === 'object') Object.assign(cfg, docData.config);
           if (docData.arExperience?.config && typeof docData.arExperience.config === 'object') Object.assign(cfg, docData.arExperience.config);
           if (docData.ar_config && typeof docData.ar_config === 'object') Object.assign(cfg, docData.ar_config);
           if (docData.lighting && typeof docData.lighting === 'object') Object.assign(cfg, docData.lighting);
           if (docData.lightingConfig && typeof docData.lightingConfig === 'object') Object.assign(cfg, docData.lightingConfig);
+          if (docData.ar_config?.lighting && typeof docData.ar_config.lighting === 'object') Object.assign(cfg, docData.ar_config.lighting);
+          if (docData.ar_config?.lightingConfig && typeof docData.ar_config.lightingConfig === 'object') Object.assign(cfg, docData.ar_config.lightingConfig);
           if (docData.portalConfig && typeof docData.portalConfig === 'object') cfg.portalConfig = docData.portalConfig;
           if (docData.particleConfig && typeof docData.particleConfig === 'object') cfg.particleConfig = docData.particleConfig;
           if (Array.isArray(docData.additionalGeometries)) cfg.additionalGeometries = docData.additionalGeometries;
           if (Array.isArray(docData.custom3DTexts)) cfg.custom3DTexts = docData.custom3DTexts;
           if (Array.isArray(docData.customLights)) cfg.customLights = docData.customLights;
+          if (Array.isArray(docData.lighting?.customLights)) cfg.customLights = docData.lighting.customLights;
           if (Array.isArray(docData.scatterLayers)) cfg.scatterLayers = docData.scatterLayers;
           if (Array.isArray(docData.ar_config?.additionalGeometries)) cfg.additionalGeometries = docData.ar_config.additionalGeometries;
           if (Array.isArray(docData.ar_config?.custom3DTexts)) cfg.custom3DTexts = docData.ar_config.custom3DTexts;
           if (Array.isArray(docData.ar_config?.customLights)) cfg.customLights = docData.ar_config.customLights;
+          if (Array.isArray(docData.ar_config?.lighting?.customLights)) cfg.customLights = docData.ar_config.lighting.customLights;
           if (Array.isArray(docData.ar_config?.scatterLayers)) cfg.scatterLayers = docData.ar_config.scatterLayers;
           if (Array.isArray(docData.config?.custom3DTexts)) cfg.custom3DTexts = docData.config.custom3DTexts;
           if (Array.isArray(docData.config?.customLights)) cfg.customLights = docData.config.customLights;
@@ -368,6 +452,8 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             'dir1Color', 'dir1Intensity', 'dir1Position',
             'dir2Color', 'dir2Intensity', 'dir2Position',
             'rimColor', 'rimIntensity', 'rimPosition',
+            'exposure', 'envPreset', 'envIntensity', 'hdrIntensity',
+            'fogColor', 'fogDensity',
             'modelScale', 'modelPosition', 'modelRotation',
             'modelRotX', 'modelRotY', 'modelRotZ',
             'modelPosX', 'modelPosY', 'modelPosZ', 'modelRotSpeed',
@@ -379,8 +465,13 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
               cfg[key] = docData[key];
             } else if (docData.ar_config?.[key] !== undefined && docData.ar_config?.[key] !== null) {
               cfg[key] = docData.ar_config[key];
+            } else if (docData.config?.[key] !== undefined && docData.config?.[key] !== null) {
+              cfg[key] = docData.config[key];
             }
           });
+          if (cfg.envIntensity === undefined && cfg.hdrIntensity !== undefined) {
+            cfg.envIntensity = cfg.hdrIntensity;
+          }
           return cfg;
         };
 
@@ -402,8 +493,10 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           ...(Array.isArray(batchDocData?.ar_config?.custom3DTexts) ? { custom3DTexts: batchDocData.ar_config.custom3DTexts } : {}),
           ...(Array.isArray(assetDocData?.customLights) ? { customLights: assetDocData.customLights } : {}),
           ...(Array.isArray(assetDocData?.ar_config?.customLights) ? { customLights: assetDocData.ar_config.customLights } : {}),
+          ...(Array.isArray(assetDocData?.ar_config?.lighting?.customLights) ? { customLights: assetDocData.ar_config.lighting.customLights } : {}),
           ...(Array.isArray(batchDocData?.customLights) ? { customLights: batchDocData.customLights } : {}),
           ...(Array.isArray(batchDocData?.ar_config?.customLights) ? { customLights: batchDocData.ar_config.customLights } : {}),
+          ...(Array.isArray(batchDocData?.ar_config?.lighting?.customLights) ? { customLights: batchDocData.ar_config.lighting.customLights } : {}),
           ...(Array.isArray(assetDocData?.scatterLayers) ? { scatterLayers: assetDocData.scatterLayers } : {}),
           ...(Array.isArray(assetDocData?.ar_config?.scatterLayers) ? { scatterLayers: assetDocData.ar_config.scatterLayers } : {}),
           ...(Array.isArray(batchDocData?.scatterLayers) ? { scatterLayers: batchDocData.scatterLayers } : {}),
@@ -415,13 +508,44 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           logToScreen('FIRESTORE_CONFIG', 'Using live Firestore configuration merged from batches and assets.');
         }
 
+        const toTimestampMs = (val) => {
+          if (!val) return 0;
+          if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
+          if (typeof val.toMillis === 'function') {
+            try { return val.toMillis(); } catch { return 0; }
+          }
+          if (typeof val === 'object' && typeof val.seconds === 'number') {
+            return val.seconds * 1000 + Math.floor((val.nanoseconds || 0) / 1e6);
+          }
+          const parsed = Date.parse(String(val));
+          return Number.isFinite(parsed) ? parsed : 0;
+        };
+
         // Check local preview calibration config (for instant preview from AR Test editor)
         let localPreviewConfig = null;
         try {
           const batchSpecificStored = localStorage.getItem(`starwear_live_preview_config_${batchId}`);
           if (batchSpecificStored) {
-            localPreviewConfig = JSON.parse(batchSpecificStored);
-            logToScreen('LOCAL_PREVIEW_CONFIG', `Loaded active calibration config for ${batchId} from AR Test session.`);
+            const candidate = JSON.parse(batchSpecificStored);
+            const fsUpdatedMs = Math.max(
+              toTimestampMs(batchDocData?.ar_config?.updatedAt),
+              toTimestampMs(batchDocData?.updatedAt),
+              toTimestampMs(assetDocData?.ar_config?.updatedAt),
+              toTimestampMs(assetDocData?.updatedAt),
+              toTimestampMs(liveConfig?.updatedAt)
+            );
+            const localUpdatedMs = Math.max(
+              toTimestampMs(candidate?.updatedAt),
+              toTimestampMs(candidate?.ar_config?.updatedAt)
+            );
+            // Only apply localStorage cache over Firestore if Firestore has no timestamp
+            // or localStorage was saved at/after Firestore (within a 5s clock/roundtrip grace window)
+            if (hasFsConfig && fsUpdatedMs > 0 && (localUpdatedMs === 0 || fsUpdatedMs > localUpdatedMs + 5000)) {
+              logToScreen('LOCAL_PREVIEW_CONFIG', `Skipped stale local calibration cache for ${batchId} in favor of newer Firestore config.`);
+            } else {
+              localPreviewConfig = candidate;
+              logToScreen('LOCAL_PREVIEW_CONFIG', `Loaded active calibration config for ${batchId} from AR Test session.`);
+            }
           } else if (!hasFsConfig) {
             const lastStored = localStorage.getItem('starwear_live_preview_config_last');
             if (lastStored) {
@@ -520,13 +644,21 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
         const resolvedLights = getNonEmptyArray(
           localPreviewConfig?.customLights,
+          localPreviewConfig?.lighting?.customLights,
           localPreviewConfig?.ar_config?.customLights,
+          localPreviewConfig?.ar_config?.lighting?.customLights,
           batchDocData?.customLights,
+          batchDocData?.lighting?.customLights,
           batchDocData?.ar_config?.customLights,
+          batchDocData?.ar_config?.lighting?.customLights,
           assetDocData?.customLights,
+          assetDocData?.lighting?.customLights,
           assetDocData?.ar_config?.customLights,
+          assetDocData?.ar_config?.lighting?.customLights,
           data?.customLights,
-          data?.ar_config?.customLights
+          data?.lighting?.customLights,
+          data?.ar_config?.customLights,
+          data?.ar_config?.lighting?.customLights
         );
 
         const resolvedCustomModels = getNonEmptyArray(
@@ -611,11 +743,14 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           }
         }
 
+        const resolvedCustomLights = mergedConfig.customLights || [];
+        setCustomLights(Array.isArray(resolvedCustomLights) ? resolvedCustomLights : []);
         setArData({
           gltfPath: gltfUrl,
           mindPath: mindUrl,
           config: mergedConfig,
-          videoUrl: videoUrl
+          videoUrl: videoUrl,
+          customLights: resolvedCustomLights
         });
 
         if (mergedConfig.mediaPlaying !== undefined) {
@@ -986,35 +1121,39 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         }
       });
 
-      // Force target-entity matrixWorld to update with MindAR's camera tracking
+      // MindAR emits targetFound BEFORE assigning targetEntity.object3D.matrix = t.
+      // Mark matrixWorldNeedsUpdate = true now, and defer updateMatrixWorld(true) to the
+      // microtask/animation frame AFTER MindAR finishes writing the tracked matrix.
       const targetEntity = document.getElementById('target-entity');
       if (targetEntity && targetEntity.object3D) {
         targetEntity.object3D.visible = true;
         targetEntity.object3D.matrixWorldNeedsUpdate = true;
-        targetEntity.object3D.updateMatrixWorld(true);
       }
 
-      // Ensure all custom lights refresh matrix & visibility on marker lock
-      document.querySelectorAll('[ar-custom-lights]').forEach((el) => {
-        if (el && el.object3D) {
-          el.object3D.visible = true;
-          el.object3D.matrixWorldNeedsUpdate = true;
-          el.object3D.updateMatrixWorld(true);
+      const syncLightsOnLock = () => {
+        if (targetEntity && targetEntity.object3D) {
+          targetEntity.object3D.visible = true;
+          targetEntity.object3D.matrixWorldNeedsUpdate = true;
+          targetEntity.object3D.updateMatrixWorld(true);
         }
-        if (el && el.components && el.components['ar-custom-lights']) {
-          const comp = el.components['ar-custom-lights'];
-          if (comp.rootGroup) {
-            comp.rootGroup.visible = true;
-            comp.rootGroup.children.forEach((c) => {
-              c.visible = c.userData?.visible !== false;
-            });
-            comp.rootGroup.updateMatrixWorld(true);
+
+        // Ensure all custom lights refresh matrix, world-scale attenuation & visibility on marker lock
+        document.querySelectorAll('[ar-custom-lights]').forEach((el) => {
+          if (el && el.object3D) {
+            el.object3D.visible = true;
+            el.object3D.matrixWorldNeedsUpdate = true;
+            el.object3D.updateMatrixWorld(true);
           }
-          if (typeof comp.onTargetFound === 'function') {
-            comp.onTargetFound();
+          if (el && el.components && el.components['ar-custom-lights']) {
+            const comp = el.components['ar-custom-lights'];
+            if (typeof comp.onTargetFound === 'function') {
+              comp.onTargetFound();
+            }
           }
-        }
-      });
+        });
+      };
+      Promise.resolve().then(syncLightsOnLock);
+      requestAnimationFrame(syncLightsOnLock);
 
       const isFlipX = !!(arData?.config?.videoFlipX);
       const targetMesh = arData?.config?.videoTargetMesh || 'auto';
@@ -1269,9 +1408,12 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     });
 
     const onTargetUpdate = () => {
+      // MindAR dispatches targetUpdate right BEFORE assigning targetEl.object3D.matrix = t.
+      // Only flag matrixWorldNeedsUpdate = true here (do NOT call updateMatrixWorld synchronously,
+      // which would clear matrixWorldNeedsUpdate using the previous frame's matrix);
+      // mindar-target-sync's tick() and WebGLRenderer then propagate the fresh matrix t.
       if (targetEl && targetEl.object3D) {
         targetEl.object3D.matrixWorldNeedsUpdate = true;
-        targetEl.object3D.updateMatrixWorld(true);
       }
     };
 
@@ -1303,6 +1445,39 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
       }
     };
   }, [arData, cameraEnabled, getOrbitControls, getThreeCamera]);
+
+  // Recompile scene shaders whenever viewing mode (AR Camera <-> 3D Preview <-> Forced Test)
+  // or lighting configuration changes so Three.js updates light uniform counts immediately.
+  useEffect(() => {
+    const sceneEl = sceneRef.current || document.querySelector('a-scene');
+    if (!sceneEl) return;
+
+    const recompileLightingShaders = () => {
+      if (sceneEl.renderer?.renderLists?.dispose) {
+        try { sceneEl.renderer.renderLists.dispose(); } catch { /* ignore */ }
+      }
+      const sObj = sceneEl.object3D;
+      if (!sObj) return;
+      sObj.updateMatrixWorld(true);
+      sObj.traverse((node) => {
+        if (node.isMesh && node.material) {
+          const mats = Array.isArray(node.material) ? node.material : [node.material];
+          mats.forEach((m) => {
+            if (m) m.needsUpdate = true;
+          });
+        }
+      });
+    };
+
+    const rafId = requestAnimationFrame(recompileLightingShaders);
+    const t1 = setTimeout(recompileLightingShaders, 120);
+    const t2 = setTimeout(recompileLightingShaders, 350);
+    return () => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [cameraEnabled, forceShowModel, arData]);
 
   // Reactive Effect to ensure flipX is applied if arData config loads after model is in memory
   useEffect(() => {
@@ -1424,50 +1599,45 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   // Extract Scene & Lighting Properties
   const cfg = arData.config || {};
 
-  const customLights = (Array.isArray(cfg?.customLights) && cfg.customLights.length > 0)
-    ? cfg.customLights
-    : (Array.isArray(cfg?.ar_config?.customLights) && cfg.ar_config.customLights.length > 0)
-      ? cfg.ar_config.customLights
-      : (Array.isArray(arData?.customLights) && arData.customLights.length > 0)
-        ? arData.customLights
-        : (Array.isArray(arData?.config?.customLights) && arData.config.customLights.length > 0)
-          ? arData.config.customLights
-          : (Array.isArray(arData?.ar_config?.customLights) && arData.ar_config.customLights.length > 0)
-            ? arData.ar_config.customLights
-            : (Array.isArray(cfg?.customLights) ? cfg.customLights : []);
-  const hasCustomLights = Array.isArray(customLights) && customLights.some((l) => l && l.visible !== false);
-  const customLightsAttr = customLights && customLights.length > 0
-    ? `lights: ${encodeURIComponent(JSON.stringify(customLights))}; showHelpers: false; showBulbs: false;`
-    : '';
+  const effectiveCustomLights = Array.isArray(customLights) && customLights.length > 0
+    ? customLights
+    : (Array.isArray(cfg?.customLights) && cfg.customLights.length > 0)
+      ? cfg.customLights
+      : (Array.isArray(arData?.customLights) ? arData.customLights : []);
+  const hasCustomLights = Array.isArray(effectiveCustomLights) && effectiveCustomLights.some((l) => l && l.visible !== false);
+  const customLightsAttr = `lights: ${encodeURIComponent(JSON.stringify(effectiveCustomLights))}; showHelpers: ${showDiagnostics}; showBulbs: ${showDiagnostics};`;
 
-  const ambientColor = cfg.ambientColor || '#ffffff';
-  const ambientIntensity = cfg.ambientIntensity !== undefined
-    ? Number(cfg.ambientIntensity)
-    : (hasCustomLights ? 0.6 : 1.4);
+  const ambientColor = liveStudioLighting?.ambientColor || cfg.ambientColor || '#ffffff';
+  const ambientIntensity = liveStudioLighting?.ambientIntensity !== undefined
+    ? Number(liveStudioLighting.ambientIntensity)
+    : (cfg.ambientIntensity !== undefined ? Number(cfg.ambientIntensity) : 1.4);
 
-  const dir1Color = cfg.dir1Color || '#ffffff';
-  const dir1Intensity = cfg.dir1Intensity !== undefined
-    ? (hasCustomLights ? Number(cfg.dir1Intensity) * 0.45 : Number(cfg.dir1Intensity))
-    : (hasCustomLights ? 0.9 : 2.2);
-  const dir1Position = cfg.dir1Position || '2 4 3';
+  const dir1Color = liveStudioLighting?.dir1Color || cfg.dir1Color || '#ffffff';
+  const dir1Intensity = liveStudioLighting?.dir1Intensity !== undefined
+    ? Number(liveStudioLighting.dir1Intensity)
+    : (cfg.dir1Intensity !== undefined ? Number(cfg.dir1Intensity) : 2.2);
+  const dir1Position = liveStudioLighting?.dir1Position || cfg.dir1Position || '2 4 3';
 
-  const dir2Color = cfg.dir2Color || '#ffffff';
-  const dir2Intensity = cfg.dir2Intensity !== undefined
-    ? (hasCustomLights ? Number(cfg.dir2Intensity) * 0.45 : Number(cfg.dir2Intensity))
-    : (hasCustomLights ? 0.5 : 1.2);
-  const dir2Position = cfg.dir2Position || '-2 -1 -2';
+  const dir2Color = liveStudioLighting?.dir2Color || cfg.dir2Color || '#ffffff';
+  const dir2Intensity = liveStudioLighting?.dir2Intensity !== undefined
+    ? Number(liveStudioLighting.dir2Intensity)
+    : (cfg.dir2Intensity !== undefined ? Number(cfg.dir2Intensity) : 1.2);
+  const dir2Position = liveStudioLighting?.dir2Position || cfg.dir2Position || '-2 -1 -2';
 
-  const rimColor = cfg.rimColor || '#818cf8';
-  const rimIntensity = cfg.rimIntensity !== undefined
-    ? (hasCustomLights ? Number(cfg.rimIntensity) * 0.45 : Number(cfg.rimIntensity))
-    : (hasCustomLights ? 0.4 : 1.0);
-  const rimPosition = cfg.rimPosition || '0 3 -3';
+  const rimColor = liveStudioLighting?.rimColor || cfg.rimColor || '#818cf8';
+  const rimIntensity = liveStudioLighting?.rimIntensity !== undefined
+    ? Number(liveStudioLighting.rimIntensity)
+    : (cfg.rimIntensity !== undefined ? Number(cfg.rimIntensity) : 1.0);
+  const rimPosition = liveStudioLighting?.rimPosition || cfg.rimPosition || '0 3 -3';
 
-  const studioLightingAttr = `enabled: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${rimIntensity}; rimPosition: ${rimPosition};`;
+  const anchorStudioLightingAttr = `enabled: true; includeAmbient: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${rimIntensity}; rimPosition: ${rimPosition};`;
+  const forcedStudioLightingAttr = `enabled: ${trackingStatus !== 'DETECTED'}; includeAmbient: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${rimIntensity}; rimPosition: ${rimPosition};`;
 
   const exposure = cfg.exposure !== undefined ? Number(cfg.exposure) : 1.1;
   const envPreset = cfg.envPreset || 'none';
-  const envIntensity = cfg.envIntensity !== undefined ? Number(cfg.envIntensity) : 1.0;
+  const envIntensity = cfg.envIntensity !== undefined
+    ? Number(cfg.envIntensity)
+    : (cfg.hdrIntensity !== undefined ? Number(cfg.hdrIntensity) : 1.0);
   const envEnabled = Boolean(envPreset && envPreset !== 'none' && envIntensity > 0);
   const fogColor = cfg.fogColor || '#000000';
   const fogDensity = cfg.fogDensity !== undefined ? Number(cfg.fogDensity) : 0;
@@ -1784,41 +1954,17 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         >
         </a-camera>
 
-        {/* Dynamic Ambient Light Base for All Viewing Modes */}
-        <a-entity
-          id="experience-ambient-light"
-          light={`type: ambient; color: ${ambientColor}; intensity: ${ambientIntensity};`}
-        ></a-entity>
-
         {/* MindAR Target Anchor: Active in Live AR Camera Mode */}
         <a-entity
           id="target-entity"
           mindar-image-target={`targetIndex: ${targetIndex}`}
+          mindar-target-sync=""
         >
           {cameraEnabled && (
-            <>
-              <a-entity
-                id="target-dir1-light"
-                light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false; target: #target-dir1-aim;`}
-                position={dir1Position}
-              >
-                <a-entity id="target-dir1-aim" position="0 0 0"></a-entity>
-              </a-entity>
-              <a-entity
-                id="target-dir2-light"
-                light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false; target: #target-dir2-aim;`}
-                position={dir2Position}
-              >
-                <a-entity id="target-dir2-aim" position="0 0 0"></a-entity>
-              </a-entity>
-              <a-entity
-                id="target-rim-light"
-                light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false; target: #target-rim-aim;`}
-                position={rimPosition}
-              >
-                <a-entity id="target-rim-aim" position="0 0 0"></a-entity>
-              </a-entity>
-            </>
+            <a-entity
+              id="target-studio-lighting"
+              ar-studio-lighting={anchorStudioLightingAttr}
+            ></a-entity>
           )}
 
           {cameraEnabled && !portalHideOutsideModel && arData.gltfPath ? (
@@ -1882,7 +2028,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             ></a-entity>
           )}
 
-          {cameraEnabled && customLights && customLights.length > 0 && (
+          {cameraEnabled && (
             <a-entity
               id="ar-custom-lights-target"
               ar-custom-lights={customLightsAttr}
@@ -1930,26 +2076,9 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             position="0 0 0"
           >
             <a-entity
-              id="preview-dir1-light"
-              light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false; target: #preview-dir1-aim;`}
-              position={dir1Position}
-            >
-              <a-entity id="preview-dir1-aim" position="0 0 0"></a-entity>
-            </a-entity>
-            <a-entity
-              id="preview-dir2-light"
-              light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false; target: #preview-dir2-aim;`}
-              position={dir2Position}
-            >
-              <a-entity id="preview-dir2-aim" position="0 0 0"></a-entity>
-            </a-entity>
-            <a-entity
-              id="preview-rim-light"
-              light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false; target: #preview-rim-aim;`}
-              position={rimPosition}
-            >
-              <a-entity id="preview-rim-aim" position="0 0 0"></a-entity>
-            </a-entity>
+              id="preview-studio-lighting"
+              ar-studio-lighting={anchorStudioLightingAttr}
+            ></a-entity>
 
             {!portalHideOutsideModel && arData.gltfPath ? (
               <a-gltf-model
@@ -2012,12 +2141,10 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
               ></a-entity>
             )}
 
-            {customLights && customLights.length > 0 && (
-              <a-entity
-                id="ar-custom-lights-preview"
-                ar-custom-lights={customLightsAttr}
-              ></a-entity>
-            )}
+            <a-entity
+              id="ar-custom-lights-preview"
+              ar-custom-lights={customLightsAttr}
+            ></a-entity>
 
             {websiteLayerEnabled && (
               <a-entity
@@ -2057,29 +2184,13 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         {/* Force Test Render Anchor (Bypasses marker requirement for testing) */}
         {forceShowModel && cameraEnabled && (
           <a-entity
+            id="force-preview-anchor"
             position="0 0 -2"
           >
             <a-entity
-              id="force-dir1-light"
-              light={`type: directional; color: ${dir1Color}; intensity: ${dir1Intensity}; castShadow: false; target: #force-dir1-aim;`}
-              position={dir1Position}
-            >
-              <a-entity id="force-dir1-aim" position="0 0 0"></a-entity>
-            </a-entity>
-            <a-entity
-              id="force-dir2-light"
-              light={`type: directional; color: ${dir2Color}; intensity: ${dir2Intensity}; castShadow: false; target: #force-dir2-aim;`}
-              position={dir2Position}
-            >
-              <a-entity id="force-dir2-aim" position="0 0 0"></a-entity>
-            </a-entity>
-            <a-entity
-              id="force-rim-light"
-              light={`type: directional; color: ${rimColor}; intensity: ${rimIntensity}; castShadow: false; target: #force-rim-aim;`}
-              position={rimPosition}
-            >
-              <a-entity id="force-rim-aim" position="0 0 0"></a-entity>
-            </a-entity>
+              id="force-studio-lighting"
+              ar-studio-lighting={forcedStudioLightingAttr}
+            ></a-entity>
             {!portalHideOutsideModel && (
               <a-gltf-model
                 id="ar-model-forced"
@@ -2135,7 +2246,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
               ></a-entity>
             )}
 
-            {customLights && customLights.length > 0 && (
+            {trackingStatus !== 'DETECTED' && (
               <a-entity
                 id="ar-custom-lights-forced"
                 ar-custom-lights={customLightsAttr}
@@ -2409,6 +2520,12 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           onForceRender={() => setForceShowModel(!forceShowModel)}
           forceShowModel={forceShowModel}
           requireSuperUser={true}
+          batchId={batchId}
+          customLights={effectiveCustomLights}
+          onUpdateCustomLights={(updatedLights) => {
+            setCustomLights(updatedLights);
+          }}
+          getThreeCamera={getThreeCamera}
         />
       )}
     </div>

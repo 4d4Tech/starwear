@@ -1,6 +1,5 @@
 import 'aframe';
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRenderer.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -878,6 +877,82 @@ if (typeof AFRAME !== 'undefined') {
   // =========================================================================
   // 1. SCENE-ENVIRONMENT COMPONENT (RoomEnvironment & HDR Reflections)
   // =========================================================================
+  // Helper: Builds a procedural RoomEnvironment scene using the active THREE_LIB instance
+  // (avoids cross-bundle Three.js class mismatches between standalone three and AFRAME.THREE,
+  // and returns a dispose() handle so temporary bake meshes never leak GPU memory).
+  const createRoomEnvironmentScene = (THREE_LIB) => {
+    const envScene = new THREE_LIB.Scene();
+    envScene.name = 'RoomEnvironment';
+    envScene.position.y = -3.5;
+
+    const geometry = new THREE_LIB.BoxGeometry();
+    geometry.deleteAttribute('uv');
+
+    const roomMaterial = new THREE_LIB.MeshStandardMaterial({ side: THREE_LIB.BackSide });
+    const boxMaterial = new THREE_LIB.MeshStandardMaterial();
+
+    const createAreaLightMat = (intensity) => {
+      const mat = new THREE_LIB.MeshLambertMaterial({
+        color: 0x000000,
+        emissive: 0xffffff,
+        emissiveIntensity: intensity
+      });
+      return mat;
+    };
+
+    const mainLight = new THREE_LIB.PointLight(0xffffff, 900, 28, 2);
+    mainLight.position.set(0.418, 16.199, 0.300);
+    envScene.add(mainLight);
+
+    const room = new THREE_LIB.Mesh(geometry, roomMaterial);
+    room.position.set(-0.757, 13.219, 0.717);
+    room.scale.set(31.713, 28.305, 28.591);
+    envScene.add(room);
+
+    const boxTransforms = [
+      { pos: [-10.906, 2.009, 1.846], rotY: -0.195, scale: [2.328, 7.905, 4.651] },
+      { pos: [-5.607, -0.754, -0.758], rotY: 0.994, scale: [1.970, 1.534, 3.955] },
+      { pos: [6.167, 0.857, 7.803], rotY: 0.561, scale: [3.927, 6.285, 3.687] },
+      { pos: [-2.017, 0.018, 6.124], rotY: 0.333, scale: [2.002, 4.566, 2.064] },
+      { pos: [2.291, -0.756, -2.621], rotY: -0.286, scale: [1.546, 1.552, 1.496] },
+      { pos: [-2.193, -0.369, -5.547], rotY: 0.516, scale: [3.875, 3.487, 2.986] }
+    ];
+    boxTransforms.forEach(({ pos, rotY, scale }) => {
+      const b = new THREE_LIB.Mesh(geometry, boxMaterial);
+      b.position.set(pos[0], pos[1], pos[2]);
+      b.rotation.set(0, rotY, 0);
+      b.scale.set(scale[0], scale[1], scale[2]);
+      envScene.add(b);
+    });
+
+    const areaPanels = [
+      { intensity: 50, pos: [-16.116, 14.37, 8.208], scale: [0.1, 2.428, 2.739] },
+      { intensity: 50, pos: [-16.109, 18.021, -8.207], scale: [0.1, 2.425, 2.751] },
+      { intensity: 17, pos: [14.904, 12.198, -1.832], scale: [0.15, 4.265, 6.331] },
+      { intensity: 43, pos: [-0.462, 8.89, 14.520], scale: [4.38, 5.441, 0.088] },
+      { intensity: 20, pos: [3.235, 11.486, -12.541], scale: [2.5, 2.0, 0.1] },
+      { intensity: 100, pos: [0.0, 20.0, 0.0], scale: [1.0, 0.1, 1.0] }
+    ];
+    const extraMats = [];
+    areaPanels.forEach(({ intensity, pos, scale }) => {
+      const m = createAreaLightMat(intensity);
+      extraMats.push(m);
+      const panel = new THREE_LIB.Mesh(geometry, m);
+      panel.position.set(pos[0], pos[1], pos[2]);
+      panel.scale.set(scale[0], scale[1], scale[2]);
+      envScene.add(panel);
+    });
+
+    const disposeEnvScene = () => {
+      geometry.dispose();
+      roomMaterial.dispose();
+      boxMaterial.dispose();
+      extraMats.forEach((m) => m.dispose());
+    };
+
+    return { envScene, disposeEnvScene };
+  };
+
   if (!AFRAME.components['scene-environment']) {
     AFRAME.registerComponent('scene-environment', {
       schema: {
@@ -896,6 +971,24 @@ if (typeof AFRAME !== 'undefined') {
           sceneEl.addEventListener('loaded', this.setupEnvironment);
           sceneEl.addEventListener('render-target-loaded', this.setupEnvironment);
         }
+      },
+      refreshEnvMaterials: function () {
+        const scene = this.el?.object3D;
+        if (!scene) return;
+        const intensity = Number(this.data.hdrIntensity ?? 1.0);
+        scene.traverse((node) => {
+          if (node.isMesh && node.material) {
+            const mats = Array.isArray(node.material) ? node.material : [node.material];
+            mats.forEach((m) => {
+              if (m && (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial)) {
+                if (scene.environmentIntensity === undefined && m.envMapIntensity !== undefined) {
+                  m.envMapIntensity = this.el.object3D?.environment ? intensity : 1.0;
+                }
+                m.needsUpdate = true;
+              }
+            });
+          }
+        });
       },
       update: function (oldData) {
         const renderer = this.el.renderer;
@@ -918,8 +1011,9 @@ if (typeof AFRAME !== 'undefined') {
           Number(this.data.hdrIntensity) > 0;
 
         if (!isEnabled) {
-          if (this.el.object3D) {
+          if (this.el.object3D && this.el.object3D.environment) {
             this.el.object3D.environment = null;
+            this.refreshEnvMaterials();
           }
         } else {
           if (
@@ -930,8 +1024,12 @@ if (typeof AFRAME !== 'undefined') {
             !this.el.object3D?.environment
           ) {
             this.setupEnvironment();
-          } else if (this.el.object3D && this.el.object3D.environmentIntensity !== undefined) {
-            this.el.object3D.environmentIntensity = Number(this.data.hdrIntensity || 1.0);
+          } else if (this.el.object3D) {
+            if (this.el.object3D.environmentIntensity !== undefined) {
+              this.el.object3D.environmentIntensity = Number(this.data.hdrIntensity || 1.0);
+            } else {
+              this.refreshEnvMaterials();
+            }
           }
         }
       },
@@ -958,13 +1056,17 @@ if (typeof AFRAME !== 'undefined') {
           normalizedPreset !== '' &&
           normalizedPreset !== 'none' &&
           Number(this.data.hdrIntensity) > 0;
+        const hadEnv = Boolean(scene.environment);
         if (isEnabled) {
+          let disposeEnvScene = null;
           try {
             const pmremGenerator = this.pmremGenerator || new THREE_LIB.PMREMGenerator(renderer);
             this.pmremGenerator = pmremGenerator;
             pmremGenerator.compileEquirectangularShader();
 
-            const roomEnv = new RoomEnvironment();
+            const built = createRoomEnvironmentScene(THREE_LIB);
+            const roomEnv = built.envScene;
+            disposeEnvScene = built.disposeEnvScene;
             const preset = String(this.data.preset || 'studio-chrome').toLowerCase();
 
             if (preset === 'sunset') {
@@ -1003,11 +1105,21 @@ if (typeof AFRAME !== 'undefined') {
             if (scene.environmentIntensity !== undefined) {
               scene.environmentIntensity = Number(this.data.hdrIntensity || 1.0);
             }
+            if (!hadEnv || scene.environmentIntensity === undefined) {
+              this.refreshEnvMaterials();
+            }
           } catch (err) {
             console.warn('[scene-environment] Could not initialize RoomEnvironment:', err);
+          } finally {
+            if (disposeEnvScene) {
+              try { disposeEnvScene(); } catch { /* ignore */ }
+            }
           }
         } else {
           scene.environment = null;
+          if (hadEnv) {
+            this.refreshEnvMaterials();
+          }
         }
       },
       remove: function () {
@@ -4486,10 +4598,55 @@ export const PARTICLE_PRESETS = {
 // the rig's Three.js group so their world-space positions track the model 1:1,
 // eliminating unanchored Three.js directional target bugs and camera headlight washout.
 // =========================================================================
+if (typeof AFRAME !== 'undefined' && !AFRAME.components['mindar-target-sync']) {
+  AFRAME.registerComponent('mindar-target-sync', {
+    init: function () {
+      this._wasVisible = false;
+      this.refreshMaterials = () => {
+        const sceneEl = this.el?.sceneEl;
+        if (!sceneEl) return;
+        if (sceneEl.renderer?.renderLists?.dispose) {
+          try { sceneEl.renderer.renderLists.dispose(); } catch { /* ignore */ }
+        }
+        const sObj = sceneEl.object3D;
+        if (!sObj) return;
+        sObj.traverse((node) => {
+          if (node.isMesh && node.material) {
+            const mats = Array.isArray(node.material) ? node.material : [node.material];
+            mats.forEach((m) => {
+              if (m) m.needsUpdate = true;
+            });
+          }
+        });
+      };
+    },
+    tick: function () {
+      const obj = this.el?.object3D;
+      if (!obj) return;
+      if (obj.visible) {
+        // MindAR assigns el.object3D.matrix directly with matrixAutoUpdate=false
+        // without setting matrixWorldNeedsUpdate=true. Force propagation every frame
+        // so all child models, studio directional lights/targets, and custom lights
+        // maintain exact world-space transforms before WebGLRenderer renders.
+        obj.matrixWorldNeedsUpdate = true;
+        obj.updateMatrixWorld(true);
+        if (!this._wasVisible) {
+          this._wasVisible = true;
+          this.refreshMaterials();
+          requestAnimationFrame(this.refreshMaterials);
+        }
+      } else if (this._wasVisible) {
+        this._wasVisible = false;
+      }
+    }
+  });
+}
+
 if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
   AFRAME.registerComponent('ar-studio-lighting', {
     schema: {
       enabled: { type: 'boolean', default: true },
+      includeAmbient: { type: 'boolean', default: true },
       ambientColor: { type: 'string', default: '#ffffff' },
       ambientIntensity: { type: 'number', default: 1.4 },
       dir1Color: { type: 'string', default: '#ffffff' },
@@ -4512,14 +4669,18 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
       this.lightingGroup.name = 'ar_studio_lighting_group';
       this.lightingGroup.visible = this.data.enabled !== false;
 
+      const rigPrefix = this.el?.id || 'studio';
+
       // 1. Ambient Light
       this.ambientLight = new THREE_LIB.AmbientLight(this.data.ambientColor || '#ffffff', Number(this.data.ambientIntensity ?? 1.4));
-      this.ambientLight.name = 'studio_ambient_light';
+      this.ambientLight.name = 'Studio Ambient Light';
+      this.ambientLight.userData = { isStudioLight: true, lightId: `${rigPrefix}_ambient` };
       this.lightingGroup.add(this.ambientLight);
 
       // 2. Key Light (Directional 1)
       this.dir1Light = new THREE_LIB.DirectionalLight(this.data.dir1Color || '#ffffff', Number(this.data.dir1Intensity ?? 2.2));
-      this.dir1Light.name = 'studio_dir1_light';
+      this.dir1Light.name = 'Studio Key Light (Dir 1)';
+      this.dir1Light.userData = { isStudioLight: true, lightId: `${rigPrefix}_dir1` };
       this.dir1Target = new THREE_LIB.Object3D();
       this.dir1Target.name = 'studio_dir1_target';
       this.dir1Target.position.set(0, 0, 0);
@@ -4529,7 +4690,8 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
 
       // 3. Fill Light (Directional 2)
       this.dir2Light = new THREE_LIB.DirectionalLight(this.data.dir2Color || '#ffffff', Number(this.data.dir2Intensity ?? 1.2));
-      this.dir2Light.name = 'studio_dir2_light';
+      this.dir2Light.name = 'Studio Fill Light (Dir 2)';
+      this.dir2Light.userData = { isStudioLight: true, lightId: `${rigPrefix}_dir2` };
       this.dir2Target = new THREE_LIB.Object3D();
       this.dir2Target.name = 'studio_dir2_target';
       this.dir2Target.position.set(0, 0, 0);
@@ -4539,7 +4701,8 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
 
       // 4. Rim / Specular Backlight (Directional 3 - matches ProductViewer signature edge sheen)
       this.rimLight = new THREE_LIB.DirectionalLight(this.data.rimColor || '#818cf8', Number(this.data.rimIntensity ?? 1.0));
-      this.rimLight.name = 'studio_rim_light';
+      this.rimLight.name = 'Studio Rim Light';
+      this.rimLight.userData = { isStudioLight: true, lightId: `${rigPrefix}_rim` };
       this.rimTarget = new THREE_LIB.Object3D();
       this.rimTarget.name = 'studio_rim_target';
       this.rimTarget.position.set(0, 0, 0);
@@ -4569,6 +4732,24 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
         } catch {}
       };
 
+      this.refreshSceneShaders = () => {
+        const sceneEl = this.el?.sceneEl;
+        if (!sceneEl) return;
+        if (sceneEl.renderer?.renderLists?.dispose) {
+          try { sceneEl.renderer.renderLists.dispose(); } catch { /* ignore */ }
+        }
+        const sObj = sceneEl.object3D;
+        if (!sObj) return;
+        sObj.traverse((node) => {
+          if (node.isMesh && node.material) {
+            const mats = Array.isArray(node.material) ? node.material : [node.material];
+            mats.forEach((m) => {
+              if (m) m.needsUpdate = true;
+            });
+          }
+        });
+      };
+
       this.removeDefaultLights();
       if (this.el && this.el.sceneEl) {
         this.el.sceneEl.addEventListener('loaded', this.removeDefaultLights);
@@ -4576,11 +4757,19 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
       }
 
       this.updateLights();
+      this.refreshSceneShaders();
+      requestAnimationFrame(this.refreshSceneShaders);
     },
 
-    update: function () {
+    update: function (oldData) {
       if (this.removeDefaultLights) this.removeDefaultLights();
       this.updateLights();
+      if (oldData && (oldData.enabled !== this.data.enabled || oldData.includeAmbient !== this.data.includeAmbient)) {
+        if (this.refreshSceneShaders) {
+          this.refreshSceneShaders();
+          requestAnimationFrame(this.refreshSceneShaders);
+        }
+      }
     },
 
     updateLights: function () {
@@ -4593,8 +4782,15 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
 
       // 1. Ambient Light
       if (this.ambientLight) {
+        const useAmbient = this.data.includeAmbient !== false;
+        this.ambientLight.visible = useAmbient;
         this.ambientLight.color.set(this.data.ambientColor || '#ffffff');
-        this.ambientLight.intensity = Math.max(0, Number(this.data.ambientIntensity ?? 1.4));
+        const ambBase = useAmbient ? Math.max(0, Number(this.data.ambientIntensity ?? 1.4)) : 0;
+        this.ambientLight.userData.__baseIntensity = ambBase;
+        const ambMult = this.ambientLight.userData.__devIntensityMultiplier !== undefined
+          ? Number(this.ambientLight.userData.__devIntensityMultiplier)
+          : 1.0;
+        this.ambientLight.intensity = ambBase * ambMult;
       }
 
       const parsePos = (posStr, fallback) => {
@@ -4616,41 +4812,34 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
       this.p2 = parsePos(this.data.dir2Position, new THREE_LIB.Vector3(-2, -1, -2));
       this.rimP = parsePos(this.data.rimPosition, new THREE_LIB.Vector3(0, 3, -3));
 
+      const applyDirConfig = (light, target, colorVal, fallbackColor, intensityVal, fallbackIntensity, posVec) => {
+        if (!light) return;
+        light.color.set(colorVal || fallbackColor);
+        const baseInt = Math.max(0, Number(intensityVal ?? fallbackIntensity));
+        light.userData.__baseIntensity = baseInt;
+        const mult = light.userData.__devIntensityMultiplier !== undefined
+          ? Number(light.userData.__devIntensityMultiplier)
+          : 1.0;
+        light.intensity = baseInt * mult;
+        const off = light.userData.__devPosOffset;
+        if (off) {
+          light.position.set(posVec.x + (off.x || 0), posVec.y + (off.y || 0), posVec.z + (off.z || 0));
+        } else {
+          light.position.copy(posVec);
+        }
+        if (target) {
+          target.position.set(0, 0, 0);
+          target.updateMatrixWorld(true);
+        }
+        light.updateMatrixWorld(true);
+      };
+
       // 2. Key Light
-      if (this.dir1Light) {
-        this.dir1Light.color.set(this.data.dir1Color || '#ffffff');
-        this.dir1Light.intensity = Math.max(0, Number(this.data.dir1Intensity ?? 2.2));
-        this.dir1Light.position.copy(this.p1);
-        if (this.dir1Target) {
-          this.dir1Target.position.set(0, 0, 0);
-          this.dir1Target.updateMatrixWorld(true);
-        }
-        this.dir1Light.updateMatrixWorld(true);
-      }
-
+      applyDirConfig(this.dir1Light, this.dir1Target, this.data.dir1Color, '#ffffff', this.data.dir1Intensity, 2.2, this.p1);
       // 3. Fill Light
-      if (this.dir2Light) {
-        this.dir2Light.color.set(this.data.dir2Color || '#ffffff');
-        this.dir2Light.intensity = Math.max(0, Number(this.data.dir2Intensity ?? 1.2));
-        this.dir2Light.position.copy(this.p2);
-        if (this.dir2Target) {
-          this.dir2Target.position.set(0, 0, 0);
-          this.dir2Target.updateMatrixWorld(true);
-        }
-        this.dir2Light.updateMatrixWorld(true);
-      }
-
+      applyDirConfig(this.dir2Light, this.dir2Target, this.data.dir2Color, '#ffffff', this.data.dir2Intensity, 1.2, this.p2);
       // 4. Rim Light
-      if (this.rimLight) {
-        this.rimLight.color.set(this.data.rimColor || '#818cf8');
-        this.rimLight.intensity = Math.max(0, Number(this.data.rimIntensity ?? 1.0));
-        this.rimLight.position.copy(this.rimP);
-        if (this.rimTarget) {
-          this.rimTarget.position.set(0, 0, 0);
-          this.rimTarget.updateMatrixWorld(true);
-        }
-        this.rimLight.updateMatrixWorld(true);
-      }
+      applyDirConfig(this.rimLight, this.rimTarget, this.data.rimColor, '#818cf8', this.data.rimIntensity, 1.0, this.rimP);
     },
 
     tick: function () {
@@ -4659,9 +4848,51 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
         ? window.AFRAME.THREE
         : THREE;
 
+      const p1 = this.p1 || new THREE_LIB.Vector3(2, 4, 3);
+      const p2 = this.p2 || new THREE_LIB.Vector3(-2, -1, -2);
+      const rimP = this.rimP || new THREE_LIB.Vector3(0, 3, -3);
+
+      const parentEl = this.el?.parentElement;
+      const isAnchoredToParent = Boolean(parentEl && parentEl.tagName !== 'A-SCENE');
+
+      if (isAnchoredToParent) {
+        // Mounted directly inside a local anchor (#target-entity, #preview-anchor, or forced anchor):
+        // Keep lights at their authored local positions and targets at local (0, 0, 0) so
+        // light directions rotate and translate 1:1 with the parent anchor's world matrix.
+        const targetEntityEl = this.el.closest('#target-entity') || this.el.closest('#preview-anchor') || this.el.closest('#force-preview-anchor');
+        if (targetEntityEl && targetEntityEl.object3D && targetEntityEl.object3D.visible) {
+          targetEntityEl.object3D.matrixWorldNeedsUpdate = true;
+          targetEntityEl.object3D.updateMatrixWorld(true);
+        }
+        if (this.lightingGroup) {
+          this.lightingGroup.updateMatrixWorld(true);
+        }
+        const syncLocalDir = (light, target, posVec) => {
+          if (!light || !target) return;
+          target.position.set(0, 0, 0);
+          const off = light.userData.__devPosOffset;
+          if (off) {
+            light.position.set(posVec.x + (off.x || 0), posVec.y + (off.y || 0), posVec.z + (off.z || 0));
+          } else {
+            light.position.copy(posVec);
+          }
+          const baseInt = light.userData.__baseIntensity ?? light.intensity;
+          const mult = light.userData.__devIntensityMultiplier !== undefined
+            ? Number(light.userData.__devIntensityMultiplier)
+            : 1.0;
+          light.intensity = baseInt * mult;
+          target.updateMatrixWorld(true);
+          light.updateMatrixWorld(true);
+        };
+        syncLocalDir(this.dir1Light, this.dir1Target, p1);
+        syncLocalDir(this.dir2Light, this.dir2Target, p2);
+        syncLocalDir(this.rimLight, this.rimTarget, rimP);
+        return;
+      }
+
       if (!this.tempTargetPos) this.tempTargetPos = new THREE_LIB.Vector3();
 
-      // Find the active 3D model entity in the scene
+      // Root scene rig (e.g. ARTest.jsx): track the active 3D model entity in world space
       let targetObj = null;
       const candidates = ['ar-model', 'preview-model', 'ar-model-forced', 'target-entity', 'preview-anchor'];
       for (let i = 0; i < candidates.length; i++) {
@@ -4678,37 +4909,37 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
         this.tempTargetPos.set(0, 0, 0);
       }
 
-      const p1 = this.p1 || new THREE_LIB.Vector3(2, 4, 3);
-      const p2 = this.p2 || new THREE_LIB.Vector3(-2, -1, -2);
-      const rimP = this.rimP || new THREE_LIB.Vector3(0, 3, -3);
-
       const tX = this.tempTargetPos.x;
       const tY = this.tempTargetPos.y;
       const tZ = this.tempTargetPos.z;
 
       if (this.dir1Light && this.dir1Target) {
         this.dir1Target.position.set(tX, tY, tZ);
-        this.dir1Light.position.set(tX + p1.x, tY + p1.y, tZ + p1.z);
+        const off1 = this.dir1Light.userData.__devPosOffset;
+        this.dir1Light.position.set(tX + p1.x + (off1?.x || 0), tY + p1.y + (off1?.y || 0), tZ + p1.z + (off1?.z || 0));
         this.dir1Target.updateMatrixWorld(true);
         this.dir1Light.updateMatrixWorld(true);
       }
 
       if (this.dir2Light && this.dir2Target) {
         this.dir2Target.position.set(tX, tY, tZ);
-        this.dir2Light.position.set(tX + p2.x, tY + p2.y, tZ + p2.z);
+        const off2 = this.dir2Light.userData.__devPosOffset;
+        this.dir2Light.position.set(tX + p2.x + (off2?.x || 0), tY + p2.y + (off2?.y || 0), tZ + p2.z + (off2?.z || 0));
         this.dir2Target.updateMatrixWorld(true);
         this.dir2Light.updateMatrixWorld(true);
       }
 
       if (this.rimLight && this.rimTarget) {
         this.rimTarget.position.set(tX, tY, tZ);
-        this.rimLight.position.set(tX + rimP.x, tY + rimP.y, tZ + rimP.z);
+        const offRim = this.rimLight.userData.__devPosOffset;
+        this.rimLight.position.set(tX + rimP.x + (offRim?.x || 0), tY + rimP.y + (offRim?.y || 0), tZ + rimP.z + (offRim?.z || 0));
         this.rimTarget.updateMatrixWorld(true);
         this.rimLight.updateMatrixWorld(true);
       }
     },
 
     remove: function () {
+      const sceneEl = this.el?.sceneEl;
       if (this.lightingGroup && this.el) {
         if (typeof this.el.removeObject3D === 'function') {
           this.el.removeObject3D('lightingGroup');
@@ -4720,9 +4951,24 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
         if (this.dir2Light && typeof this.dir2Light.dispose === 'function') this.dir2Light.dispose();
         if (this.rimLight && typeof this.rimLight.dispose === 'function') this.rimLight.dispose();
       }
-      if (this.el && this.el.sceneEl && this.removeDefaultLights) {
-        this.el.sceneEl.removeEventListener('loaded', this.removeDefaultLights);
-        this.el.sceneEl.removeEventListener('render-target-loaded', this.removeDefaultLights);
+      if (sceneEl && this.removeDefaultLights) {
+        sceneEl.removeEventListener('loaded', this.removeDefaultLights);
+        sceneEl.removeEventListener('render-target-loaded', this.removeDefaultLights);
+      }
+      if (sceneEl?.object3D) {
+        requestAnimationFrame(() => {
+          if (sceneEl.renderer?.renderLists?.dispose) {
+            try { sceneEl.renderer.renderLists.dispose(); } catch { /* ignore */ }
+          }
+          sceneEl.object3D.traverse((node) => {
+            if (node.isMesh && node.material) {
+              const mats = Array.isArray(node.material) ? node.material : [node.material];
+              mats.forEach((m) => {
+                if (m) m.needsUpdate = true;
+              });
+            }
+          });
+        });
       }
     }
   });
@@ -6307,6 +6553,8 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
         this.rootGroup.name = 'ar_custom_lights_group';
         this.el.setObject3D('lightsRoot', this.rootGroup);
         this.helpers = [];
+        this.customLightNodes = [];
+        this._tempScale = new THREE_LIB.Vector3(1, 1, 1);
 
         this.onTargetFound = this.onTargetFound.bind(this);
         this.refreshSceneMaterials = this.refreshSceneMaterials.bind(this);
@@ -6322,16 +6570,6 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
         window.addEventListener('starwear-model-loaded', this.refreshSceneMaterials);
         if (this.el.parentEl) {
           this.el.parentEl.addEventListener('targetFound', this.onTargetFound);
-        }
-        const targetEl = document.getElementById('target-entity');
-        if (targetEl && targetEl !== this.el.parentEl) {
-          targetEl.addEventListener('targetFound', this.onTargetFound);
-          targetEl.addEventListener('targetUpdate', () => {
-            if (targetEl.object3D) {
-              targetEl.object3D.matrixWorldNeedsUpdate = true;
-              targetEl.object3D.updateMatrixWorld(true);
-            }
-          });
         }
 
         this.rebuildLights();
@@ -6362,6 +6600,66 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
         setTimeout(triggerUpdate, 600);
       },
 
+      syncLightWorldScale: function () {
+        if (!this.rootGroup || !this.customLightNodes || this.customLightNodes.length === 0) return;
+
+        let worldScale = 1.0;
+        if (this._tempScale) {
+          this.rootGroup.getWorldScale(this._tempScale);
+          const rawS = Math.abs(this._tempScale.x);
+          if (Number.isFinite(rawS) && rawS > 0.0001) {
+            worldScale = rawS;
+          }
+        }
+
+        for (let i = 0; i < this.customLightNodes.length; i++) {
+          const light = this.customLightNodes[i];
+          if (!light) continue;
+          const ud = light.userData || {};
+
+          if (ud.__origPos && ud.__devPosOffset) {
+            light.position.set(
+              ud.__origPos.x + (ud.__devPosOffset.x || 0),
+              ud.__origPos.y + (ud.__devPosOffset.y || 0),
+              ud.__origPos.z + (ud.__devPosOffset.z || 0)
+            );
+          }
+
+          const mult = ud.__devIntensityMultiplier !== undefined ? Number(ud.__devIntensityMultiplier) : 1.0;
+
+          if (light.isPointLight || light.isSpotLight) {
+            // Compensate for MindAR's marker pixel-width scale S (often 500–1024 units) in view space:
+            // Setting distance = baseDistance * S and intensity = baseIntensity * S^decay cancels S
+            // identically inside Three.js's getDistanceAttenuation(), giving exact 1:1 lighting parity
+            // across ARTest, ProductViewer, 3D Preview (S=1), and Live Camera WebAR (S=markerWidthPx).
+            const baseDecay = ud.__baseDecay !== undefined ? Number(ud.__baseDecay) : 1.0;
+            const effectiveDecay = (ud.__devDecayOverride !== undefined && ud.__devDecayOverride !== null)
+              ? Math.max(0, Number(ud.__devDecayOverride))
+              : baseDecay;
+
+            const baseDistance = ud.__baseDistance !== undefined ? Number(ud.__baseDistance) : 0;
+            const localDist = (ud.__devDistanceOverride !== undefined && ud.__devDistanceOverride !== null)
+              ? Math.max(0, Number(ud.__devDistanceOverride))
+              : baseDistance;
+
+            const baseIntensity = ud.__baseIntensity !== undefined ? Number(ud.__baseIntensity) : 2.5;
+            const scaleFactor = (worldScale > 1.0 && effectiveDecay > 0) ? Math.pow(worldScale, effectiveDecay) : 1.0;
+
+            light.decay = effectiveDecay;
+            light.distance = localDist > 0 ? localDist * worldScale : 0;
+            light.intensity = (baseIntensity * mult) * scaleFactor;
+          } else {
+            const baseIntensity = ud.__baseIntensity !== undefined ? Number(ud.__baseIntensity) : light.intensity;
+            light.intensity = baseIntensity * mult;
+          }
+
+          if (light.target) {
+            light.target.updateMatrixWorld(true);
+          }
+          light.updateMatrixWorld(true);
+        }
+      },
+
       rebuildLights: function () {
         const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE)
           ? window.AFRAME.THREE
@@ -6381,15 +6679,23 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
           }
         }
         this.helpers = [];
+        this.customLightNodes = [];
 
         let items = [];
         try {
           let raw = this.data.lights;
           if (typeof raw === 'string') {
+            raw = raw.trim();
+            if (raw.startsWith('lights:')) {
+              raw = raw.slice('lights:'.length).trim();
+            }
+            if (raw.endsWith(';')) {
+              raw = raw.slice(0, -1).trim();
+            }
             if (raw.startsWith('%5B') || raw.startsWith('%7B') || raw.includes('%22')) {
               raw = decodeURIComponent(raw);
             }
-            items = JSON.parse(raw);
+            items = raw ? JSON.parse(raw) : [];
           } else if (Array.isArray(raw)) {
             items = raw;
           }
@@ -6407,28 +6713,27 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
           const intensity = item.intensity !== undefined ? Number(item.intensity) : 2.5;
           let light = null;
           let helper = null;
+          let baseIntensity = intensity;
+          let baseDecay = 0;
+          let baseDistance = 0;
 
           switch (item.type) {
             case 'point': {
-              // In WebAR / MindAR, cutoff distance < 200m causes Three.js to extinguish point lights completely
-              // because camera-to-marker matrix translations can scale up to ~600-1000 units.
-              // Use distance = 0 (infinite cutoff) in AR so the point light is NEVER artificially extinguished.
-              const rawDistance = (item.distance !== undefined && item.distance !== null) ? Number(item.distance) : 0;
-              const distance = rawDistance >= 200 ? rawDistance : 0;
+              // Exact 1:1 parity with createCustomLightsGroup in lightingHelper.js:
+              // World-scale compensation for MindAR pixel coordinates is applied dynamically in syncLightWorldScale().
+              baseDistance = (item.distance !== undefined && item.distance !== null && Number(item.distance) > 0)
+                ? Number(item.distance)
+                : 0;
+              const userDecay = item.decay !== undefined ? Number(item.decay) : 1.0;
+              baseDecay = userDecay > 1.2 ? 1.0 : Math.max(0, userDecay);
+              baseIntensity = intensity * (userDecay >= 1.5 ? 2.5 : 1.5);
 
-              // In WebAR, inverse-square decay (decay = 2.0) attenuates point lights to near zero
-              // unless decay is 0 (constant illumination) or intensity is boosted to physical lumen scale.
-              // Using decay = 0 and visible intensity (matching DevTool test light) ensures point lights
-              // illuminate the model and 3D typography with high-contrast clarity.
-              const effectiveDecay = 0; // Decay 0 guarantees full visibility across AR viewports
-              const effectiveIntensity = Math.max(intensity * 10.0, 30.0);
-
-              light = new THREE_LIB.PointLight(color, effectiveIntensity, distance, effectiveDecay);
-              light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 0.6), Number(item.posZ ?? 0.8));
+              light = new THREE_LIB.PointLight(color, baseIntensity, baseDistance, baseDecay);
+              light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 2), Number(item.posZ ?? 2));
               if (this.data.showHelpers && item.showHelper !== false) {
                 helper = new THREE_LIB.PointLightHelper(light, 0.25, color);
-                if (distance > 0) {
-                  const distGeo = new THREE_LIB.SphereGeometry(distance, 16, 8);
+                if (baseDistance > 0) {
+                  const distGeo = new THREE_LIB.SphereGeometry(baseDistance, 16, 8);
                   const distMat = new THREE_LIB.MeshBasicMaterial({
                     color: color,
                     wireframe: true,
@@ -6444,14 +6749,17 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
               break;
             }
             case 'spot': {
-              const rawDistance = (item.distance !== undefined && item.distance !== null) ? Number(item.distance) : 0;
-              const distance = rawDistance >= 200 ? rawDistance : 0;
+              baseDistance = (item.distance !== undefined && item.distance !== null && Number(item.distance) > 0)
+                ? Number(item.distance)
+                : 0;
               const angleRad = ((Number(item.angle || 45)) * Math.PI) / 180;
               const penumbra = item.penumbra !== undefined ? Number(item.penumbra) : 0.35;
-              const effectiveDecay = 0;
-              const effectiveIntensity = Math.max(intensity * 8.0, 25.0);
-              light = new THREE_LIB.SpotLight(color, effectiveIntensity, distance, angleRad, penumbra, effectiveDecay);
-              light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 1.5), Number(item.posZ ?? 1.5));
+              const userDecay = item.decay !== undefined ? Number(item.decay) : 1.0;
+              baseDecay = userDecay > 1.2 ? 1.0 : Math.max(0, userDecay);
+              baseIntensity = intensity * (userDecay >= 1.5 ? 2.5 : 1.5);
+
+              light = new THREE_LIB.SpotLight(color, baseIntensity, baseDistance, angleRad, penumbra, baseDecay);
+              light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 2.5), Number(item.posZ ?? 2));
               light.target.position.set(Number(item.targetX ?? 0), Number(item.targetY ?? 0), Number(item.targetZ ?? 0));
               this.rootGroup.add(light.target);
               if (this.data.showHelpers && item.showHelper !== false) {
@@ -6460,6 +6768,7 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
               break;
             }
             case 'directional': {
+              baseIntensity = intensity;
               light = new THREE_LIB.DirectionalLight(color, intensity);
               light.position.set(Number(item.posX ?? 1.5), Number(item.posY ?? 3), Number(item.posZ ?? 2));
               light.target.position.set(Number(item.targetX ?? 0), Number(item.targetY ?? 0), Number(item.targetZ ?? 0));
@@ -6470,7 +6779,8 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
               break;
             }
             case 'hemisphere': {
-              const groundColor = new THREE_LIB.Color(item.groundColor || '#334155');
+              baseIntensity = intensity;
+              const groundColor = new THREE_LIB.Color(item.groundColor || '#1e293b');
               light = new THREE_LIB.HemisphereLight(color, groundColor, intensity);
               light.position.set(Number(item.posX ?? 0), Number(item.posY ?? 3), Number(item.posZ ?? 0));
               if (this.data.showHelpers && item.showHelper !== false) {
@@ -6489,10 +6799,15 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
             light.userData = {
               ...(item || {}),
               isCustomLight: true,
-              lightId: item.id
+              lightId: item.id,
+              __baseIntensity: baseIntensity,
+              __baseDecay: baseDecay,
+              __baseDistance: baseDistance,
+              __origPos: light.position.clone()
             };
 
             this.rootGroup.add(light);
+            this.customLightNodes.push(light);
 
             // Add Visual Glowing 3D Light Source Emitter / Bulb ONLY when showBulbs is explicitly enabled
             const shouldRenderBulb = (this.data.showBulbs === true) &&
@@ -6538,6 +6853,7 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
                   side: THREE_LIB.DoubleSide
                 });
               }
+              bulbGroup.add(new THREE_LIB.Mesh(auraGeo, auraMat));
               bulbGroup.position.copy(light.position);
               bulbGroup.userData = {
                 ...(item || {}),
@@ -6599,6 +6915,7 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
         });
 
         this.rootGroup.updateMatrixWorld(true);
+        this.syncLightWorldScale();
 
         // Force scene model materials to recompile shaders to receive custom lights
         this.refreshSceneMaterials();
@@ -6615,7 +6932,7 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
       },
 
       onTargetFound: function () {
-        const targetEl = this.el.closest('#target-entity') || document.getElementById('target-entity');
+        const targetEl = this.el.closest('#target-entity');
         if (targetEl && targetEl.object3D) {
           targetEl.object3D.visible = true;
           targetEl.object3D.matrixWorldNeedsUpdate = true;
@@ -6627,6 +6944,7 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
             c.visible = c.userData?.visible !== false;
           });
           this.rootGroup.updateMatrixWorld(true);
+          this.syncLightWorldScale();
         }
         this.refreshSceneMaterials();
       },
@@ -6634,14 +6952,19 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
       tick: function () {
         if (!this.rootGroup) return;
 
-        // Force ancestor target-entity to update its matrixWorld with MindAR's camera tracking
-        const targetEl = this.el.closest('#target-entity') || document.getElementById('target-entity');
+        // Force ancestor target-entity (ONLY if this rig lives inside #target-entity)
+        // to update its matrixWorld with MindAR's camera tracking
+        const targetEl = this.el.closest('#target-entity');
         if (targetEl && targetEl.object3D) {
-          targetEl.object3D.matrixWorldNeedsUpdate = true;
-          targetEl.object3D.updateMatrixWorld(true);
+          if (targetEl.object3D.visible) {
+            targetEl.object3D.matrixWorldNeedsUpdate = true;
+            targetEl.object3D.updateMatrixWorld(true);
+          }
         } else {
           this.rootGroup.updateMatrixWorld(true);
         }
+
+        this.syncLightWorldScale();
 
         // Keep bulb and anchor positions synced with their light positions in case of gizmo movement
         for (let i = 0; i < this.rootGroup.children.length; i++) {
@@ -6659,12 +6982,13 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
       },
 
       remove: function () {
+        const sceneEl = this.el?.sceneEl;
         document.removeEventListener('targetFound', this.onTargetFound, true);
         document.removeEventListener('model-loaded', this.refreshSceneMaterials, true);
         window.removeEventListener('starwear-model-loaded', this.refreshSceneMaterials);
-        if (this.el && this.el.sceneEl) {
-          this.el.sceneEl.removeEventListener('targetFound', this.onTargetFound);
-          this.el.sceneEl.removeEventListener('model-loaded', this.refreshSceneMaterials);
+        if (sceneEl) {
+          sceneEl.removeEventListener('targetFound', this.onTargetFound);
+          sceneEl.removeEventListener('model-loaded', this.refreshSceneMaterials);
         }
         if (this.el && this.el.parentEl) {
           this.el.parentEl.removeEventListener('targetFound', this.onTargetFound);
@@ -6686,6 +7010,23 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-custom-models']) {
           }
           this.rootGroup = null;
           this.helpers = [];
+          this.customLightNodes = [];
+        }
+
+        if (sceneEl?.object3D) {
+          requestAnimationFrame(() => {
+            if (sceneEl.renderer?.renderLists?.dispose) {
+              try { sceneEl.renderer.renderLists.dispose(); } catch { /* ignore */ }
+            }
+            sceneEl.object3D.traverse((node) => {
+              if (node.isMesh && node.material) {
+                const mats = Array.isArray(node.material) ? node.material : [node.material];
+                mats.forEach((m) => {
+                  if (m) m.needsUpdate = true;
+                });
+              }
+            });
+          });
         }
       }
     });

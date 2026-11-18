@@ -1140,31 +1140,31 @@ export default function Shop() {
                     res.customLights = (Array.isArray(bCfg.customLights) && bCfg.customLights.length > 0)
                       ? bCfg.customLights
                       : (Array.isArray(selectedBatchConfig?.customLights) && selectedBatchConfig.customLights.length > 0)
-                      ? selectedBatchConfig.customLights
-                      : (Array.isArray(pCfg.customLights) && pCfg.customLights.length > 0)
-                      ? pCfg.customLights
-                      : (Array.isArray(selectedProduct?.customLights) ? selectedProduct.customLights : []);
+                        ? selectedBatchConfig.customLights
+                        : (Array.isArray(pCfg.customLights) && pCfg.customLights.length > 0)
+                          ? pCfg.customLights
+                          : (Array.isArray(selectedProduct?.customLights) ? selectedProduct.customLights : []);
                     res.custom3DTexts = (Array.isArray(bCfg.custom3DTexts) && bCfg.custom3DTexts.length > 0)
                       ? bCfg.custom3DTexts
                       : (Array.isArray(selectedBatchConfig?.custom3DTexts) && selectedBatchConfig.custom3DTexts.length > 0)
-                      ? selectedBatchConfig.custom3DTexts
-                      : (Array.isArray(pCfg.custom3DTexts) && pCfg.custom3DTexts.length > 0)
-                      ? pCfg.custom3DTexts
-                      : (Array.isArray(selectedProduct?.custom3DTexts) ? selectedProduct.custom3DTexts : []);
+                        ? selectedBatchConfig.custom3DTexts
+                        : (Array.isArray(pCfg.custom3DTexts) && pCfg.custom3DTexts.length > 0)
+                          ? pCfg.custom3DTexts
+                          : (Array.isArray(selectedProduct?.custom3DTexts) ? selectedProduct.custom3DTexts : []);
                     res.additionalGeometries = (Array.isArray(bCfg.additionalGeometries) && bCfg.additionalGeometries.length > 0)
                       ? bCfg.additionalGeometries
                       : (Array.isArray(selectedBatchConfig?.additionalGeometries) && selectedBatchConfig.additionalGeometries.length > 0)
-                      ? selectedBatchConfig.additionalGeometries
-                      : (Array.isArray(pCfg.additionalGeometries) && pCfg.additionalGeometries.length > 0)
-                      ? pCfg.additionalGeometries
-                      : (Array.isArray(selectedProduct?.additionalGeometries) ? selectedProduct.additionalGeometries : []);
+                        ? selectedBatchConfig.additionalGeometries
+                        : (Array.isArray(pCfg.additionalGeometries) && pCfg.additionalGeometries.length > 0)
+                          ? pCfg.additionalGeometries
+                          : (Array.isArray(selectedProduct?.additionalGeometries) ? selectedProduct.additionalGeometries : []);
                     res.scatterLayers = (Array.isArray(bCfg.scatterLayers) && bCfg.scatterLayers.length > 0)
                       ? bCfg.scatterLayers
                       : (Array.isArray(selectedBatchConfig?.scatterLayers) && selectedBatchConfig.scatterLayers.length > 0)
-                      ? selectedBatchConfig.scatterLayers
-                      : (Array.isArray(pCfg.scatterLayers) && pCfg.scatterLayers.length > 0)
-                      ? pCfg.scatterLayers
-                      : (Array.isArray(selectedProduct?.scatterLayers) ? selectedProduct.scatterLayers : []);
+                        ? selectedBatchConfig.scatterLayers
+                        : (Array.isArray(pCfg.scatterLayers) && pCfg.scatterLayers.length > 0)
+                          ? pCfg.scatterLayers
+                          : (Array.isArray(selectedProduct?.scatterLayers) ? selectedProduct.scatterLayers : []);
                     return res;
                   })()}
                   assetName={selectedProduct?.name || selectedProduct?.id}

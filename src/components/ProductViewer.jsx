@@ -303,8 +303,8 @@ function YouTube3DScreen({
       typeof config.videoTargetMaterialIndex === 'number'
         ? config.videoTargetMaterialIndex
         : typeof targetNode.userData?.videoTargetMaterialIndex === 'number'
-        ? targetNode.userData.videoTargetMaterialIndex
-        : 0;
+          ? targetNode.userData.videoTargetMaterialIndex
+          : 0;
     const frame = computeGeometrySurfaceFrame(targetNode, slotIdx);
     baseCssScale = Math.max(frame.size.x, 0.05) / iframeW;
   }
@@ -320,8 +320,8 @@ function YouTube3DScreen({
         typeof config.videoTargetMaterialIndex === 'number'
           ? config.videoTargetMaterialIndex
           : typeof targetNode.userData?.videoTargetMaterialIndex === 'number'
-          ? targetNode.userData.videoTargetMaterialIndex
-          : 0;
+            ? targetNode.userData.videoTargetMaterialIndex
+            : 0;
       const frame = computeGeometrySurfaceFrame(targetNode, slotIdx);
 
       const uScale = Number(config.videoScale ?? targetNode.userData?.videoScale ?? 1.0);
@@ -401,9 +401,8 @@ function YouTube3DScreen({
           <iframe
             ref={iframeRef}
             style={{ width: '100%', height: '100%', border: '0' }}
-            src={`https://www.youtube-nocookie.com/embed/${ytId}?enablejsapi=1&autoplay=1&mute=${
-              isMuted ? 1 : 0
-            }&controls=1&loop=1&playlist=${ytId}${originParam}`}
+            src={`https://www.youtube-nocookie.com/embed/${ytId}?enablejsapi=1&autoplay=1&mute=${isMuted ? 1 : 0
+              }&controls=1&loop=1&playlist=${ytId}${originParam}`}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
             allowFullScreen
             title="3D YouTube Player"
@@ -739,7 +738,7 @@ function SceneContent({
     procVideo.autoplay = true;
     procVideo.loop = true;
     procVideo.src = resolvedVideoUrl;
-    procVideo.play().catch(() => {});
+    procVideo.play().catch(() => { });
 
     const procTex = new THREE.VideoTexture(procVideo);
     if (THREE.SRGBColorSpace !== undefined) procTex.colorSpace = THREE.SRGBColorSpace;
@@ -938,7 +937,7 @@ function SceneContent({
             mesh.position.y =
               basePosY +
               Math.sin(state.clock.elapsedTime * Number(mesh.userData.bobbingSpeed) * 3) *
-                Number(mesh.userData.bobbingHeight);
+              Number(mesh.userData.bobbingHeight);
           }
         }
       }
@@ -1166,7 +1165,7 @@ export default function ProductViewer({
   // Unlock video autoplay on user interaction
   const handleUserUnlock = () => {
     if (videoElRef.current && videoElRef.current.paused) {
-      videoElRef.current.play().catch(() => {});
+      videoElRef.current.play().catch(() => { });
     }
   };
 
@@ -1503,11 +1502,10 @@ export default function ProductViewer({
           {hasActiveVideo && (
             <div className="flex items-center gap-1.5">
               <span
-                className={`backdrop-blur-md px-2.5 py-1 rounded text-[10px] font-mono font-bold border flex items-center gap-1 ${
-                  activeVideoType === 'youtube'
+                className={`backdrop-blur-md px-2.5 py-1 rounded text-[10px] font-mono font-bold border flex items-center gap-1 ${activeVideoType === 'youtube'
                     ? 'bg-red-950/80 text-red-300 border-red-500/40'
                     : 'bg-purple-950/80 text-purple-300 border-purple-500/40'
-                }`}
+                  }`}
               >
                 <span className="material-symbols-outlined text-xs">
                   {activeVideoType === 'youtube' ? 'smart_display' : 'play_circle'}
@@ -1519,11 +1517,10 @@ export default function ProductViewer({
               <button
                 type="button"
                 onClick={toggleMute}
-                className={`backdrop-blur-md px-2.5 py-1 rounded text-[10px] font-mono font-bold border flex items-center gap-1 transition-all cursor-pointer shadow-md ${
-                  !isMuted
+                className={`backdrop-blur-md px-2.5 py-1 rounded text-[10px] font-mono font-bold border flex items-center gap-1 transition-all cursor-pointer shadow-md ${!isMuted
                     ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500/60'
                     : 'bg-neutral-900/80 text-neutral-400 hover:text-white border-white/10'
-                }`}
+                  }`}
                 title={isMuted ? 'Unmute Audio' : 'Mute Audio'}
               >
                 <span className="material-symbols-outlined text-xs">
@@ -1536,11 +1533,10 @@ export default function ProductViewer({
               <button
                 type="button"
                 onClick={() => setShowPip((prev) => !prev)}
-                className={`backdrop-blur-md px-2 py-1 rounded text-[10px] font-mono border flex items-center gap-1 transition-all cursor-pointer ${
-                  showPip
+                className={`backdrop-blur-md px-2 py-1 rounded text-[10px] font-mono border flex items-center gap-1 transition-all cursor-pointer ${showPip
                     ? 'bg-cyan-950 text-cyan-300 border-cyan-500/50'
                     : 'bg-black/60 text-neutral-400 hover:text-white border-white/10'
-                }`}
+                  }`}
                 title="Toggle Picture-In-Picture Monitor"
               >
                 <span className="material-symbols-outlined text-xs">picture_in_picture_alt</span>
@@ -1568,19 +1564,17 @@ export default function ProductViewer({
             </button>
           </div>
           <div
-            className={`${
-              config?.aspectRatio === '9:16' ||
-              config?.videoAspectRatio === '9:16' ||
-              isYouTubeShortUrl(resolvedVideoUrl)
+            className={`${config?.aspectRatio === '9:16' ||
+                config?.videoAspectRatio === '9:16' ||
+                isYouTubeShortUrl(resolvedVideoUrl)
                 ? 'aspect-[9/16] max-h-72'
                 : 'aspect-video'
-            } w-full bg-black relative flex items-center justify-center`}
+              } w-full bg-black relative flex items-center justify-center`}
           >
             {activeVideoType === 'youtube' && ytVideoId ? (
               <iframe
-                src={`https://www.youtube-nocookie.com/embed/${ytVideoId}?autoplay=1&mute=${
-                  isMuted ? '1' : '0'
-                }&controls=1`}
+                src={`https://www.youtube-nocookie.com/embed/${ytVideoId}?autoplay=1&mute=${isMuted ? '1' : '0'
+                  }&controls=1`}
                 className="w-full h-full border-0"
                 title="PIP Monitor"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"

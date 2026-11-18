@@ -6,7 +6,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import BuyNowButton from '../components/BuyNowButton';
 import { db, storage, functions, analytics } from '../firebase';
-import { doc, getDoc, getDocFromServer, setDoc, collection, getDocs, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, getDocFromServer, setDoc, collection, getDocs, writeBatch, onSnapshot } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject, listAll } from 'firebase/storage';
 
 if (typeof THREE !== 'undefined' && THREE.Cache) {
@@ -780,6 +780,75 @@ const ARTest = () => {
   useEffect(() => {
     selectedObjectsRef.current = selectedObjects;
   }, [selectedObjects]);
+
+  // Real-Time Batch Lighting & Scene Synchronization with Mobile ARExperience
+  // When lighting or batch configuration is saved on mobile in ARExperience,
+  // ARTest on computer automatically reflects the newly added lighting in real-time.
+  useEffect(() => {
+    if (!batchId) return;
+    const cleanId = String(batchId).trim();
+    if (!cleanId) return;
+
+    const batchRef = doc(db, 'batches', cleanId);
+    const unsubscribe = onSnapshot(batchRef, (docSnap) => {
+      if (!docSnap.exists() || isSavingConfigRef.current) return;
+      const bData = docSnap.data();
+      if (!bData) return;
+
+      const incomingLights = bData.customLights || bData.ar_config?.customLights || bData.ar_config?.lighting?.customLights;
+      if (Array.isArray(incomingLights)) {
+        setCustomLights((prev) => {
+          if (JSON.stringify(prev) !== JSON.stringify(incomingLights)) {
+            console.log('[ARTest] Real-time customLights sync received from Firestore:', incomingLights);
+            return incomingLights;
+          }
+          return prev;
+        });
+      }
+
+      if (bData.ambientColor !== undefined) setAmbientColor(bData.ambientColor);
+      if (bData.ambientIntensity !== undefined) setAmbientIntensity(bData.ambientIntensity);
+      if (bData.dir1Color !== undefined) setDir1Color(bData.dir1Color);
+      if (bData.dir1Intensity !== undefined) setDir1Intensity(bData.dir1Intensity);
+      if (bData.dir1Position !== undefined) setDir1Position(bData.dir1Position);
+      if (bData.dir2Color !== undefined) setDir2Color(bData.dir2Color);
+      if (bData.dir2Intensity !== undefined) setDir2Intensity(bData.dir2Intensity);
+      if (bData.dir2Position !== undefined) setDir2Position(bData.dir2Position);
+      if (bData.rimColor !== undefined) setRimColor(bData.rimColor);
+      if (bData.rimIntensity !== undefined) setRimIntensity(bData.rimIntensity);
+      if (bData.rimPosition !== undefined) setRimPosition(bData.rimPosition);
+
+      // Force scene recompilation so Three.js renders updated lights immediately
+      const sceneEl = sceneRef.current || document.querySelector('a-scene');
+      if (sceneEl) {
+        sceneEl.querySelectorAll('[ar-custom-lights]').forEach((el) => {
+          const comp = el.components?.['ar-custom-lights'];
+          if (comp && typeof comp.rebuildLights === 'function') {
+            comp.rebuildLights();
+          }
+        });
+      }
+    }, (err) => {
+      console.warn('[ARTest] Real-time batch snapshot warning:', err);
+    });
+
+    const handleStorageChange = (e) => {
+      if (e.key === `starwear_live_preview_config_${cleanId}` && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed.customLights)) {
+            setCustomLights(parsed.customLights);
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, [batchId]);
 
   const transformControlsRef = useRef(null);
 
@@ -7926,6 +7995,9 @@ const ARTest = () => {
       useNativePBR,
       fogColor,
       fogDensity,
+      envPreset: envPreset || 'none',
+      envIntensity: Number(envIntensity),
+      exposure: Number(exposure),
       showBuyButton,
       buyButtonColor,
       mediaPlaying,
@@ -9809,6 +9881,7 @@ const ARTest = () => {
         try {
           const cfg = {
             ...(arData?.config || {}),
+            ...(buildCurrentArConfig() || {}),
             thumbnailUrl: newUrl,
             thumbnail_url: newUrl
           };
@@ -21322,12 +21395,10 @@ const ARTest = () => {
           ></a-entity>
 
           {/* Custom Multi-Source Lighting Rig Anchor (hides bulbs/helpers in Render Preview modes) */}
-          {customLights.length > 0 && (
-            <a-entity
-              id="ar-custom-lights-anchor"
-              ar-custom-lights={`lights: ${encodeURIComponent(JSON.stringify(customLights))}; showHelpers: ${showLightHelpers && !isRenderPreviewActive}; showBulbs: ${showLightHelpers && !isRenderPreviewActive};`}
-            ></a-entity>
-          )}
+          <a-entity
+            id="ar-custom-lights-anchor"
+            ar-custom-lights={`lights: ${encodeURIComponent(JSON.stringify(customLights || []))}; showHelpers: ${showLightHelpers && !isRenderPreviewActive}; showBulbs: ${showLightHelpers && !isRenderPreviewActive};`}
+          ></a-entity>
 
           {/* MindAR Target Marker Reference Plane Anchor (Hidden during Render Preview) */}
           {markerVisible && !isRenderPreviewActive && (
