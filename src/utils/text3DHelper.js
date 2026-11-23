@@ -857,10 +857,12 @@ export function create3DTextMesh(config = {}, THREE_LIB = THREE, font) {
     Number(config.posY ?? 0.6),
     Number(config.posZ ?? 0)
   );
+  mesh.rotation.order = 'YXZ';
   mesh.rotation.set(
     ((Number(config.rotX ?? 0)) * Math.PI) / 180,
     ((Number(config.rotY ?? 0)) * Math.PI) / 180,
-    ((Number(config.rotZ ?? 0)) * Math.PI) / 180
+    ((Number(config.rotZ ?? 0)) * Math.PI) / 180,
+    'YXZ'
   );
 
   const scale = Number(config.scale ?? 1);

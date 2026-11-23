@@ -119,6 +119,144 @@ const SHAPE_TEXTURE_SAMPLES = [
 ];
 
 // =========================================================================
+// MATERIAL & HDRI SETTINGS DICTIONARY (DESCRIPTIONS & TOOLTIPS)
+// =========================================================================
+export const MATERIAL_TOOLTIPS = {
+  metalness: {
+    title: 'Metalness',
+    text: 'Defines how metallic the surface is. 0.0 is dielectric (plastic, wood, ceramic, fabric) with white highlights. 1.0 is conductive metal (chrome, gold, copper) where reflections inherit surface color.'
+  },
+  roughness: {
+    title: 'Roughness',
+    text: 'Controls microscopic surface smoothness. 0.0 is mirror-polish gloss with sharp reflections. 1.0 is completely matte and chalky with diffused, scattered reflections.'
+  },
+  opacity: {
+    title: 'Opacity',
+    text: 'Overall surface visibility. 1.0 is solid; values below 1.0 enable WebGL alpha transparency for tinted acrylic, glass, decals, or thin fabrics.'
+  },
+  transmission: {
+    title: 'Transmission (Physical Glass)',
+    text: 'Simulates true physical light passing through optical materials (glass, water, crystals). Bends and refracts the background based on Index of Refraction (IOR) and thickness.'
+  },
+  ior: {
+    title: 'Index of Refraction (IOR)',
+    text: 'Refractive index determining how sharply light rays bend entering the material: Air = 1.0, Water = 1.33, Glass/Acrylic = 1.5, Polycarbonate = 1.58, Diamond = 2.42.'
+  },
+  thickness: {
+    title: 'Physical Thickness',
+    text: 'Simulated depth of the 3D volume along ray paths. Thicker geometry creates deeper refraction distortion and internal light absorption.'
+  },
+  clearcoat: {
+    title: 'Clearcoat Layer',
+    text: 'Adds a secondary high-gloss protective lacquer coating over the base material, characteristic of automotive car paint, polished wood, or wet resin.'
+  },
+  clearcoatRoughness: {
+    title: 'Clearcoat Roughness',
+    text: 'Micro-roughness of the outer clearcoat lacquer film. 0.0 produces mirror-sharp lacquer reflections; higher values create a satin or frosted clearcoat.'
+  },
+  sheen: {
+    title: 'Sheen (Cloth & Microfibers)',
+    text: 'Simulates grazing-angle Fresnel reflectance produced by microscopic fibers on textiles like velvet, velour, satin, silk, and peach-fuzz cloth.'
+  },
+  sheenRoughness: {
+    title: 'Sheen Roughness',
+    text: 'Controls how broadly the microfiber highlights spread across the surface edges and silhouettes.'
+  },
+  sheenColor: {
+    title: 'Sheen Tint Color',
+    text: 'The color of the microfiber reflections at grazing angles, allowing iridescent or two-tone luxury fabrics.'
+  },
+  normalMap: {
+    title: 'Normal Map',
+    text: 'An RGB vector map that perturbs surface normals pixel-by-pixel, simulating high-res bumps, grooves, stitching, and engravings without adding extra 3D polygons.'
+  },
+  normalScale: {
+    title: 'Normal Map Depth (Scale)',
+    text: 'Multiplier for the perceived depth and sharpness of normal map indentations and raised surface relief.'
+  },
+  displacementMap: {
+    title: 'Displacement Map',
+    text: 'A grayscale heightmap that shifts geometric vertices along their normals to produce authentic physical silhouettes, self-shadowing, and true 3D surface relief.'
+  },
+  displacementScale: {
+    title: 'Displacement Scale & Bias',
+    text: 'Scale sets how far vertices shift outward. Bias shifts the reference zero-plane so displacements can push inward as well as outward.'
+  },
+  emissiveMap: {
+    title: 'Emissive Map & Glow',
+    text: 'A self-illuminated texture that emits light directly from the surface, like LED indicators, neon tubes, or glowing runes, unaffected by scene shadows.'
+  },
+  emissiveIntensity: {
+    title: 'Emissive Glow Intensity',
+    text: 'Brightness multiplier for surface self-illumination. Higher values produce radiant, luminous glows across the scene.'
+  },
+  hdriPreset: {
+    title: 'HDRI Environment Preset',
+    text: '360° High Dynamic Range Image-Based Lighting (IBL) that illuminates your model with realistic studio or outdoor environments, casting rich reflections on metals, clearcoat, and glass.'
+  },
+  hdriIntensity: {
+    title: 'HDRI Reflection Intensity',
+    text: 'Multiplies the brightness of 360° environment reflections on materials. Gives metallic, glossy, and glass surfaces brilliance and realism.'
+  },
+  hdriRotation: {
+    title: 'HDRI Turntable Rotation',
+    text: 'Spins the 360° environment map around the scene (0° to 360°), allowing you to position specular reflection highlights and studio softboxes across any angle of your model.'
+  },
+  hdriCustom: {
+    title: 'Custom Equirectangular HDRI',
+    text: 'Upload your own 360° panoramic environment image (.hdr, .exr, .jpg, .png) or provide an image URL to illuminate the scene with custom real-world lighting.'
+  },
+  hdriBackground: {
+    title: 'HDRI 360° Background View',
+    text: 'Choose whether the 360° HDRI environment is visible in the viewport background or kept reflection-only for a clean, distraction-free dark studio workspace.'
+  },
+  hdriBackgroundBlur: {
+    title: 'HDRI Background Blur',
+    text: 'Blurs the 360° background image (depth of field effect) while preserving sharp specular reflections on your 3D models.'
+  }
+};
+
+const InfoTooltip = ({ title, text, position = 'top' }) => {
+  const tooltipObj = (typeof text === 'object' && text !== null)
+    ? text
+    : (typeof title === 'object' && title !== null)
+      ? title
+      : null;
+
+  const finalTitle = (typeof title === 'string' && title.trim()) ? title : (tooltipObj?.title || '');
+  const finalText = tooltipObj?.text || (typeof text === 'string' ? text : (typeof text === 'number' ? String(text) : ''));
+
+  if (!finalText && !finalTitle) return null;
+
+  return (
+    <div className="relative group inline-flex items-center ml-1 align-middle cursor-help">
+      <span className="material-symbols-outlined text-[13px] text-neutral-400 group-hover:text-cyan-400 transition-colors select-none">
+        help
+      </span>
+      <div
+        className={`absolute z-50 hidden group-hover:flex flex-col w-64 p-2.5 rounded-lg bg-neutral-900/95 border border-cyan-500/40 text-neutral-200 shadow-2xl backdrop-blur-md pointer-events-none transition-opacity duration-200 ${
+          position === 'bottom'
+            ? 'top-full mt-2 left-1/2 -translate-x-1/2'
+            : position === 'right'
+            ? 'left-full ml-2 top-1/2 -translate-y-1/2'
+            : position === 'left'
+            ? 'right-full mr-2 top-1/2 -translate-y-1/2'
+            : 'bottom-full mb-2 left-1/2 -translate-x-1/2'
+        }`}
+      >
+        {finalTitle && (
+          <span className="text-[11px] font-bold text-cyan-300 pb-1 mb-1 border-b border-neutral-800 flex items-center gap-1">
+            <span className="material-symbols-outlined text-xs text-cyan-400">info</span>
+            {finalTitle}
+          </span>
+        )}
+        <span className="text-[10px] text-neutral-300 leading-relaxed font-normal">{finalText}</span>
+      </div>
+    </div>
+  );
+};
+
+// =========================================================================
 // 1. REUSABLE TYPED SLIDER CONTROL WITH DUAL-WAY DATA BINDING
 // =========================================================================
 const NumberSliderInput = ({
@@ -129,9 +267,10 @@ const NumberSliderInput = ({
   max = 100,
   step = 1,
   unit = '',
-  color = 'indigo', // 'rose' | 'emerald' | 'sky' | 'indigo' | 'amber' | 'purple'
+  color = 'indigo', // 'rose' | 'emerald' | 'sky' | 'indigo' | 'amber' | 'purple' | 'cyan' | 'teal'
   precision = 2,
   description = '',
+  tooltip = undefined,
   stepButtons = true,
   resetValue = undefined,
   showRange = true
@@ -226,6 +365,13 @@ const NumberSliderInput = ({
       border: 'border-cyan-500/40 focus-within:border-cyan-400',
       bg: 'bg-cyan-950/20',
       badge: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
+    },
+    teal: {
+      accent: 'accent-teal-500',
+      text: 'text-teal-400',
+      border: 'border-teal-500/40 focus-within:border-teal-400',
+      bg: 'bg-teal-950/20',
+      badge: 'bg-teal-500/20 text-teal-300 border-teal-500/30'
     }
   };
 
@@ -234,11 +380,16 @@ const NumberSliderInput = ({
   return (
     <div className="flex flex-col gap-1.5 p-2 rounded-lg bg-neutral-900/70 border border-neutral-800 hover:border-neutral-700 transition-colors">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+        <div className="flex items-center gap-1 flex-1 min-w-0">
           <span className="text-xs font-semibold text-neutral-300 truncate">{label}</span>
-          {description && (
-            <span className="text-[10px] text-neutral-500" title={description}>ⓘ</span>
-          )}
+          {tooltip ? (
+            <InfoTooltip
+              title={typeof tooltip === 'object' ? tooltip.title : label}
+              text={typeof tooltip === 'object' ? tooltip.text : tooltip}
+            />
+          ) : description ? (
+            <InfoTooltip title={label} text={description} />
+          ) : null}
         </div>
 
         <div className={`flex items-center rounded bg-black/60 border ${theme.border} px-1 py-0.5 shadow-inner transition-colors`}>
@@ -743,6 +894,21 @@ const ARTest = () => {
   const [isModifierHeld, setIsModifierHeld] = useState(false);
   const activeGroupDragRef = useRef(null);
 
+  // Undo & Redo History State & Stack Management (Studio Undo Engine)
+  const undoStackRef = useRef([]);
+  const redoStackRef = useRef([]);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const isRestoringHistoryRef = useRef(false);
+  const handleRestoreMeshRef = useRef(null);
+  const pushUndoSnapshotRef = useRef(null);
+  const triggerUndoSnapshot = () => {
+    if (pushUndoSnapshotRef.current) {
+      pushUndoSnapshotRef.current();
+    }
+  };
+  const MAX_UNDO_STACK = 40;
+
   useEffect(() => {
     const handleModifierDown = (e) => {
       if (e.key === 'Control' || e.key === 'Meta') {
@@ -986,12 +1152,32 @@ const ARTest = () => {
   const [matEmissiveIntensity, setMatEmissiveIntensity] = useState(0.0);
   const [matWireframe, setMatWireframe] = useState(false);
   const [matOpacity, setMatOpacity] = useState(1.0);
+  const [matTransmission, setMatTransmission] = useState(0.0);
+  const [matIor, setMatIor] = useState(1.5);
+  const [matThickness, setMatThickness] = useState(0.5);
+  const [matClearcoat, setMatClearcoat] = useState(0.0);
+  const [matClearcoatRoughness, setMatClearcoatRoughness] = useState(0.1);
+  const [matSheen, setMatSheen] = useState(0.0);
+  const [matSheenRoughness, setMatSheenRoughness] = useState(0.5);
+  const [matSheenColor, setMatSheenColor] = useState('#ffffff');
+  const [matNormalScale, setMatNormalScale] = useState(1.0);
+  const [matNormalMapUrl, setMatNormalMapUrl] = useState('');
+  const [matDisplacementScale, setMatDisplacementScale] = useState(0.0);
+  const [matDisplacementBias, setMatDisplacementBias] = useState(0.0);
+  const [matDisplacementMapUrl, setMatDisplacementMapUrl] = useState('');
+  const [matEmissiveMapUrl, setMatEmissiveMapUrl] = useState('');
+  const [mapUploadingSlot, setMapUploadingSlot] = useState(null);
 
-  // Environment / Effects
+  // Environment / HDRI & Effects
   const [fogColor, setFogColor] = useState('#000000');
   const [fogDensity, setFogDensity] = useState(0.0);
   const [envPreset, setEnvPreset] = useState('none');
   const [envIntensity, setEnvIntensity] = useState(1.0);
+  const [envImage, setEnvImage] = useState('');
+  const [envRotation, setEnvRotation] = useState(0); // 0 to 360 turntable angle
+  const [envShowBackground, setEnvShowBackground] = useState(false);
+  const [envBackgroundBlur, setEnvBackgroundBlur] = useState(0.0);
+  const [matEnvMapIntensity, setMatEnvMapIntensity] = useState(1.0);
   const [exposure, setExposure] = useState(1.1);
 
   // Live Render Preview State ('studio' | 'ar-experience' | 'product-preview')
@@ -1481,6 +1667,7 @@ const ARTest = () => {
   const [particleTwinkle, setParticleTwinkle] = useState(true);
 
   const applyParticlePreset = (presetKey) => {
+    triggerUndoSnapshot();
     const p = PARTICLE_PRESETS[presetKey];
     if (!p) return;
     setParticlePreset(presetKey);
@@ -1527,6 +1714,7 @@ const ARTest = () => {
 
   // Create & Add a new Scatter Layer to the scene
   const handleAddScatterLayer = useCallback((presetId = 'lush_foliage', targetSurface = null) => {
+    triggerUndoSnapshot();
     const p = SCATTER_PRESETS.find((item) => item.id === presetId) || SCATTER_PRESETS[0];
     const newId = `layer_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const layerCount = scatterLayers.length + 1;
@@ -1580,6 +1768,7 @@ const ARTest = () => {
 
   // Duplicate an existing scatter layer
   const handleDuplicateScatterLayer = useCallback((id) => {
+    triggerUndoSnapshot();
     const source = scatterLayers.find((l) => l.id === id);
     if (!source) return;
     const newId = `layer_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
@@ -1600,6 +1789,7 @@ const ARTest = () => {
 
   // Delete a scatter layer
   const handleDeleteScatterLayer = useCallback((id) => {
+    triggerUndoSnapshot();
     setScatterLayers((prev) => {
       const remaining = prev.filter((l) => l.id !== id);
       if (selectedScatterLayerId === id) {
@@ -1727,6 +1917,7 @@ const ARTest = () => {
   const [isArApiModalOpen, setIsArApiModalOpen] = useState(false);
 
   const handleAddCustomModel = (payload) => {
+    triggerUndoSnapshot();
     setCustomModels((prev) => [...prev, payload]);
     selectSceneObject('customModel', payload.id);
     setActiveTab('hierarchy');
@@ -1741,6 +1932,7 @@ const ARTest = () => {
   };
 
   const handleDeleteCustomModel = (id) => {
+    triggerUndoSnapshot();
     setCustomModels((prev) => prev.filter((m) => m.id !== id));
     setSceneGroups((prev) =>
       prev.map((g) => ({
@@ -1756,6 +1948,7 @@ const ARTest = () => {
   };
 
   const handleDuplicateCustomModel = (id) => {
+    triggerUndoSnapshot();
     const target = customModels.find((m) => m.id === id);
     if (!target) return;
     const newId = `model_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
@@ -1897,6 +2090,7 @@ const ARTest = () => {
   const [vectorPenInitialMode, setVectorPenInitialMode] = useState('extrude');
 
   const handleAddGeometry = (payload) => {
+    triggerUndoSnapshot();
     const count = additionalGeometries.length;
     const newId = `geom_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const type = payload.type || 'box';
@@ -1937,6 +2131,7 @@ const ARTest = () => {
   };
 
   const handleCommitVectorExtrude = (payload) => {
+    triggerUndoSnapshot();
     if (editingVectorGeom) {
       handleUpdateGeometry(editingVectorGeom.id, {
         name: payload.name || editingVectorGeom.name,
@@ -1987,6 +2182,7 @@ const ARTest = () => {
   };
 
   const handleDeleteGeometry = (id) => {
+    triggerUndoSnapshot();
     setAdditionalGeometries((prev) => prev.filter((g) => g.id !== id));
     setSceneGroups((prev) =>
       prev.map((g) => ({
@@ -2002,6 +2198,7 @@ const ARTest = () => {
   };
 
   const handleDuplicateGeometry = (id) => {
+    triggerUndoSnapshot();
     const target = additionalGeometries.find((g) => g.id === id);
     if (!target) return;
     const newId = `geom_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
@@ -2023,6 +2220,7 @@ const ARTest = () => {
   };
 
   const handleApplyGeometryPreset = (id, presetId) => {
+    triggerUndoSnapshot();
     const preset = Array.isArray(MATERIAL_PRESETS)
       ? MATERIAL_PRESETS.find((m) => m.id === presetId) || MATERIAL_PRESETS[presetId]
       : MATERIAL_PRESETS[presetId];
@@ -2044,6 +2242,7 @@ const ARTest = () => {
   const [isAddTextModalOpen, setIsAddTextModalOpen] = useState(false);
 
   const handleAdd3DText = (payload) => {
+    triggerUndoSnapshot();
     const count = custom3DTexts.length;
     const newId = payload.id || `text_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const newText = {
@@ -2101,6 +2300,7 @@ const ARTest = () => {
   };
 
   const handleDelete3DText = (id) => {
+    triggerUndoSnapshot();
     setCustom3DTexts((prev) => prev.filter((t) => t.id !== id));
     setSceneGroups((prev) =>
       prev.map((g) => ({
@@ -2116,6 +2316,7 @@ const ARTest = () => {
   };
 
   const handleDuplicate3DText = (id) => {
+    triggerUndoSnapshot();
     const target = custom3DTexts.find((t) => t.id === id);
     if (!target) return;
     const newId = `text_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
@@ -2166,6 +2367,7 @@ const ARTest = () => {
   // CUSTOM MULTI-SOURCE LIGHTING HANDLERS & PRESETS
   // =========================================================================
   const handleAddLight = (type = 'point') => {
+    triggerUndoSnapshot();
     const count = customLights.length;
     const newId = `light_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const cleanType = type.charAt(0).toUpperCase() + type.slice(1);
@@ -2207,6 +2409,7 @@ const ARTest = () => {
   };
 
   const handleDeleteLight = (id) => {
+    triggerUndoSnapshot();
     setCustomLights((prev) => prev.filter((l) => l.id !== id));
     setSceneGroups((prev) =>
       prev.map((g) => ({
@@ -2221,6 +2424,7 @@ const ARTest = () => {
   };
 
   const handleDuplicateLight = (id) => {
+    triggerUndoSnapshot();
     const target = customLights.find((l) => l.id === id);
     if (!target) return;
     const newId = `light_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
@@ -2242,6 +2446,7 @@ const ARTest = () => {
   };
 
   const applyLightingRigPreset = (presetName) => {
+    triggerUndoSnapshot();
     if (presetName === 'cyberpunk_dual') {
       const l1 = {
         id: `light_cyber_cyan_${Date.now()}`,
@@ -3761,6 +3966,7 @@ const ARTest = () => {
 
   // Create New Group from currently selected objects
   const handleCreateGroupFromSelection = useCallback((customName = null) => {
+    triggerUndoSnapshot();
     if (selectedObjects.length === 0) {
       handleCreateEmptyGroup(customName);
       return;
@@ -3837,6 +4043,7 @@ const ARTest = () => {
 
   // Ungroup Group container while preserving all member world transforms
   const handleUngroup = useCallback((groupId) => {
+    triggerUndoSnapshot();
     const group = sceneGroups.find((g) => g.id === groupId);
     if (!group) return;
 
@@ -3862,6 +4069,7 @@ const ARTest = () => {
 
   // Delete Group (and optionally its member objects)
   const handleDeleteGroup = useCallback((groupId, deleteMembers = false) => {
+    triggerUndoSnapshot();
     const group = sceneGroups.find((g) => g.id === groupId);
     if (!group) return;
 
@@ -3893,6 +4101,7 @@ const ARTest = () => {
 
   // Duplicate Group container and clone all its constituent member objects
   const handleDuplicateGroup = useCallback((groupId) => {
+    triggerUndoSnapshot();
     const group = sceneGroups.find((g) => g.id === groupId);
     if (!group) return;
 
@@ -4478,6 +4687,18 @@ const ARTest = () => {
         let emissiveIntensity = 0;
         let opacity = 1;
         let wireframe = false;
+        let transmission = 0.0;
+        let ior = 1.5;
+        let thickness = 0.5;
+        let clearcoat = 0.0;
+        let clearcoatRoughness = 0.1;
+        let sheen = 0.0;
+        let sheenRoughness = 0.5;
+        let sheenColor = '#ffffff';
+        let normalScale = 1.0;
+        let displacementScale = 0.0;
+        let displacementBias = 0.0;
+        let envMapIntensity = 1.0;
 
         if (node.material) {
           const mat = Array.isArray(node.material) ? node.material[0] : node.material;
@@ -4492,12 +4713,30 @@ const ARTest = () => {
           if (mat.emissiveIntensity !== undefined) emissiveIntensity = mat.emissiveIntensity;
           if (mat.opacity !== undefined) opacity = mat.opacity;
           wireframe = !!mat.wireframe;
+          if (mat.transmission !== undefined) transmission = mat.transmission;
+          if (mat.ior !== undefined) ior = mat.ior;
+          if (mat.thickness !== undefined) thickness = mat.thickness;
+          if (mat.clearcoat !== undefined) clearcoat = mat.clearcoat;
+          if (mat.clearcoatRoughness !== undefined) clearcoatRoughness = mat.clearcoatRoughness;
+          if (mat.sheen !== undefined) sheen = mat.sheen;
+          if (mat.sheenRoughness !== undefined) sheenRoughness = mat.sheenRoughness;
+          if (mat.sheenColor && typeof mat.sheenColor.getHexString === 'function') {
+            sheenColor = '#' + mat.sheenColor.getHexString();
+          }
+          if (mat.normalScale && mat.normalScale.x !== undefined) normalScale = mat.normalScale.x;
+          if (mat.displacementScale !== undefined) displacementScale = mat.displacementScale;
+          if (mat.displacementBias !== undefined) displacementBias = mat.displacementBias;
+          if (mat.envMapIntensity !== undefined) envMapIntensity = mat.envMapIntensity;
         }
 
         const ovr = (arData?.config?.meshOverrides && (arData.config.meshOverrides[node.name] || arData.config.meshOverrides[node.uuid])) || null;
         const customTexUrl = ovr?.material?.textureUrl || (node.userData?.__hasCustomTexture ? node.userData?.__customTextureUrl : null);
         const customStoragePath = ovr?.material?.textureStoragePath || null;
         const hasCustomTex = !!customTexUrl || !!node.userData?.__hasCustomTexture;
+
+        const normalMapUrl = ovr?.material?.normalMapUrl || node.userData?.__customNormalMapUrl || null;
+        const displacementMapUrl = ovr?.material?.displacementMapUrl || node.userData?.__customDisplacementMapUrl || null;
+        const emissiveMapUrl = ovr?.material?.emissiveMapUrl || node.userData?.__customEmissiveMapUrl || null;
 
         let origHexColor = hexColor;
         if (node.userData.__originalMaterialBackup) {
@@ -4549,12 +4788,27 @@ const ARTest = () => {
           originalColor: origHexColor,
           material: {
             color: hexColor,
-            metalness,
-            roughness,
-            emissive,
-            emissiveIntensity,
-            opacity,
-            wireframe,
+            metalness: ovr?.material?.metalness !== undefined ? ovr.material.metalness : metalness,
+            roughness: ovr?.material?.roughness !== undefined ? ovr.material.roughness : roughness,
+            emissive: ovr?.material?.emissive !== undefined ? ovr.material.emissive : emissive,
+            emissiveIntensity: ovr?.material?.emissiveIntensity !== undefined ? ovr.material.emissiveIntensity : emissiveIntensity,
+            opacity: ovr?.material?.opacity !== undefined ? ovr.material.opacity : opacity,
+            wireframe: ovr?.material?.wireframe !== undefined ? ovr.material.wireframe : wireframe,
+            transmission: ovr?.material?.transmission !== undefined ? ovr.material.transmission : transmission,
+            ior: ovr?.material?.ior !== undefined ? ovr.material.ior : ior,
+            thickness: ovr?.material?.thickness !== undefined ? ovr.material.thickness : thickness,
+            clearcoat: ovr?.material?.clearcoat !== undefined ? ovr.material.clearcoat : clearcoat,
+            clearcoatRoughness: ovr?.material?.clearcoatRoughness !== undefined ? ovr.material.clearcoatRoughness : clearcoatRoughness,
+            sheen: ovr?.material?.sheen !== undefined ? ovr.material.sheen : sheen,
+            sheenRoughness: ovr?.material?.sheenRoughness !== undefined ? ovr.material.sheenRoughness : sheenRoughness,
+            sheenColor: ovr?.material?.sheenColor !== undefined ? ovr.material.sheenColor : sheenColor,
+            normalScale: ovr?.material?.normalScale !== undefined ? ovr.material.normalScale : normalScale,
+            normalMapUrl,
+            displacementScale: ovr?.material?.displacementScale !== undefined ? ovr.material.displacementScale : displacementScale,
+            displacementBias: ovr?.material?.displacementBias !== undefined ? ovr.material.displacementBias : displacementBias,
+            displacementMapUrl,
+            emissiveMapUrl,
+            envMapIntensity: ovr?.material?.envMapIntensity !== undefined ? ovr.material.envMapIntensity : envMapIntensity,
             textureUrl: customTexUrl,
             textureStoragePath: customStoragePath,
             hasCustomTexture: hasCustomTex,
@@ -4644,26 +4898,104 @@ const ARTest = () => {
               }
               if (ovr.visible !== undefined) node.visible = !!ovr.visible;
               if (ovr.material && node.material) {
-                const mats = Array.isArray(node.material) ? node.material : [node.material];
-                mats.forEach((m) => {
-                  if (ovr.material.color && m.color) m.color.set(ovr.material.color);
-                  if (ovr.material.metalness !== undefined && m.metalness !== undefined) m.metalness = ovr.material.metalness;
-                  if (ovr.material.roughness !== undefined && m.roughness !== undefined) m.roughness = ovr.material.roughness;
-                  if (ovr.material.emissive && m.emissive) m.emissive.set(ovr.material.emissive);
-                  if (ovr.material.opacity !== undefined) {
-                    m.opacity = ovr.material.opacity;
-                    if (m.opacity < 1.0) m.transparent = true;
+                const isMulti = Array.isArray(node.material);
+                const mats = isMulti ? node.material : [node.material];
+                const needsPhysical = (
+                  (ovr.material.transmission !== undefined && Number(ovr.material.transmission) > 0) ||
+                  (ovr.material.clearcoat !== undefined && Number(ovr.material.clearcoat) > 0) ||
+                  (ovr.material.sheen !== undefined && Number(ovr.material.sheen) > 0)
+                );
+
+                mats.forEach((m, idx) => {
+                  let curM = m;
+                  if (needsPhysical && !curM.isMeshPhysicalMaterial) {
+                    const phys = new THREE.MeshPhysicalMaterial().copy(curM);
+                    curM = phys;
+                    if (isMulti) node.material[idx] = curM;
+                    else node.material = curM;
                   }
-                  if (ovr.material.wireframe !== undefined) m.wireframe = !!ovr.material.wireframe;
-                  m.needsUpdate = true;
+                  if (ovr.material.color && curM.color) curM.color.set(ovr.material.color);
+                  if (ovr.material.metalness !== undefined && curM.metalness !== undefined) curM.metalness = ovr.material.metalness;
+                  if (ovr.material.roughness !== undefined && curM.roughness !== undefined) curM.roughness = ovr.material.roughness;
+                  if (ovr.material.emissive && curM.emissive) curM.emissive.set(ovr.material.emissive);
+                  if (ovr.material.emissiveIntensity !== undefined && curM.emissiveIntensity !== undefined) curM.emissiveIntensity = ovr.material.emissiveIntensity;
+                  if (ovr.material.opacity !== undefined) {
+                    curM.opacity = ovr.material.opacity;
+                  }
+                  if (ovr.material.wireframe !== undefined) curM.wireframe = !!ovr.material.wireframe;
+                  if (ovr.material.transmission !== undefined && curM.transmission !== undefined) curM.transmission = Number(ovr.material.transmission);
+                  if (ovr.material.ior !== undefined && curM.ior !== undefined) curM.ior = Number(ovr.material.ior);
+                  if (ovr.material.thickness !== undefined && curM.thickness !== undefined) curM.thickness = Number(ovr.material.thickness);
+                  if (ovr.material.clearcoat !== undefined && curM.clearcoat !== undefined) curM.clearcoat = Number(ovr.material.clearcoat);
+                  if (ovr.material.clearcoatRoughness !== undefined && curM.clearcoatRoughness !== undefined) curM.clearcoatRoughness = Number(ovr.material.clearcoatRoughness);
+                  if (ovr.material.sheen !== undefined && curM.sheen !== undefined) curM.sheen = Number(ovr.material.sheen);
+                  if (ovr.material.sheenRoughness !== undefined && curM.sheenRoughness !== undefined) curM.sheenRoughness = Number(ovr.material.sheenRoughness);
+                  if (ovr.material.sheenColor && curM.sheenColor) curM.sheenColor.set(ovr.material.sheenColor);
+                  if (ovr.material.normalScale !== undefined && curM.normalScale) curM.normalScale.set(Number(ovr.material.normalScale), Number(ovr.material.normalScale));
+                  if (ovr.material.displacementScale !== undefined && curM.displacementScale !== undefined) curM.displacementScale = Number(ovr.material.displacementScale);
+                  if (ovr.material.displacementBias !== undefined && curM.displacementBias !== undefined) curM.displacementBias = Number(ovr.material.displacementBias);
+                  if (Number(curM.opacity ?? 1.0) < 1.0 || Number(curM.transmission ?? 0) > 0) curM.transparent = true;
+                  curM.needsUpdate = true;
                 });
+
+                const updatedMats = Array.isArray(node.material) ? node.material : [node.material];
+
+                // Load normalMap if configured in override
+                if (ovr.material.normalMapUrl && typeof ovr.material.normalMapUrl === 'string' && !ovr.material.normalMapUrl.startsWith('blob:')) {
+                  const nLoader = new THREE.TextureLoader();
+                  nLoader.load(ovr.material.normalMapUrl, (tex) => {
+                    tex.wrapS = THREE.RepeatWrapping;
+                    tex.wrapT = THREE.RepeatWrapping;
+                    tex.flipY = false;
+                    applyTextureTransform(tex, ovr.material);
+                    updatedMats.forEach((m) => {
+                      m.normalMap = tex;
+                      m.needsUpdate = true;
+                    });
+                    node.userData.__customNormalMapUrl = ovr.material.normalMapUrl;
+                  });
+                }
+
+                // Load displacementMap if configured in override
+                if (ovr.material.displacementMapUrl && typeof ovr.material.displacementMapUrl === 'string' && !ovr.material.displacementMapUrl.startsWith('blob:')) {
+                  const dLoader = new THREE.TextureLoader();
+                  dLoader.load(ovr.material.displacementMapUrl, (tex) => {
+                    tex.wrapS = THREE.RepeatWrapping;
+                    tex.wrapT = THREE.RepeatWrapping;
+                    tex.flipY = false;
+                    applyTextureTransform(tex, ovr.material);
+                    updatedMats.forEach((m) => {
+                      m.displacementMap = tex;
+                      m.needsUpdate = true;
+                    });
+                    node.userData.__customDisplacementMapUrl = ovr.material.displacementMapUrl;
+                  });
+                }
+
+                // Load emissiveMap if configured in override
+                if (ovr.material.emissiveMapUrl && typeof ovr.material.emissiveMapUrl === 'string' && !ovr.material.emissiveMapUrl.startsWith('blob:')) {
+                  const eLoader = new THREE.TextureLoader();
+                  eLoader.load(ovr.material.emissiveMapUrl, (tex) => {
+                    if (THREE.SRGBColorSpace !== undefined) tex.colorSpace = THREE.SRGBColorSpace;
+                    tex.wrapS = THREE.RepeatWrapping;
+                    tex.wrapT = THREE.RepeatWrapping;
+                    tex.flipY = false;
+                    applyTextureTransform(tex, ovr.material);
+                    updatedMats.forEach((m) => {
+                      m.emissiveMap = tex;
+                      m.needsUpdate = true;
+                    });
+                    node.userData.__customEmissiveMapUrl = ovr.material.emissiveMapUrl;
+                  });
+                }
+
                 if (ovr.material.textureUrl && typeof ovr.material.textureUrl === 'string' && !ovr.material.textureUrl.startsWith('blob:')) {
                   const loader = new THREE.TextureLoader();
                   loader.load(ovr.material.textureUrl, (tex) => {
                     tex.colorSpace = THREE.SRGBColorSpace;
                     tex.flipY = false;
                     applyTextureTransform(tex, ovr.material);
-                    mats.forEach((m) => {
+                    updatedMats.forEach((m) => {
                       m.map = tex;
                       m.needsUpdate = true;
                     });
@@ -5053,6 +5385,7 @@ const ARTest = () => {
           }
 
           if (isDragging) {
+            triggerUndoSnapshot();
             const targetObj = tc.object;
             if (targetObj && (targetObj.userData?.isGroupPivot || targetObj.userData?.isMultiPivot)) {
               threeScene.updateMatrixWorld(true);
@@ -6210,14 +6543,481 @@ const ARTest = () => {
     selectSceneObject('mesh', uuid);
   }, [transitionCamera, selectSceneObject]);
 
+  // =========================================================================
+  // UNDO & REDO ENGINE (Full Scene Snapshot & Reversion)
+  // =========================================================================
+  const createSceneSnapshot = useCallback(() => {
+    try {
+      return {
+        additionalGeometries: JSON.parse(JSON.stringify(additionalGeometries)),
+        customModels: JSON.parse(JSON.stringify(customModels)),
+        custom3DTexts: JSON.parse(JSON.stringify(custom3DTexts)),
+        customLights: JSON.parse(JSON.stringify(customLights)),
+        scatterLayers: JSON.parse(JSON.stringify(scatterLayers)),
+        sceneGroups: JSON.parse(JSON.stringify(sceneGroups)),
+        deletedMeshNames: [...deletedMeshNames],
+        meshOverrides: JSON.parse(JSON.stringify(arData?.config?.meshOverrides || {})),
+        modelScale,
+        modelRotSpeed,
+        modelRotX,
+        modelRotY,
+        modelRotZ,
+        modelPosX,
+        modelPosY,
+        modelPosZ,
+        ambientColor,
+        ambientIntensity,
+        dir1Color,
+        dir1Intensity,
+        dir1Position,
+        dir2Color,
+        dir2Intensity,
+        dir2Position,
+        rimColor,
+        rimIntensity,
+        rimPosition,
+        fogColor,
+        fogDensity,
+        cameraAutoRotate,
+        envPreset,
+        envIntensity,
+        envImage,
+        envRotation,
+        envShowBackground,
+        envBackgroundBlur,
+        matEnvMapIntensity,
+        exposure,
+        useNativePBR,
+        matMetalness,
+        matRoughness,
+        matEmissive,
+        matEmissiveIntensity,
+        matWireframe,
+        matOpacity,
+        matTransmission,
+        matIor,
+        matThickness,
+        matClearcoat,
+        matClearcoatRoughness,
+        matSheen,
+        matSheenRoughness,
+        matSheenColor,
+        matNormalScale,
+        matNormalMapUrl,
+        matDisplacementScale,
+        matDisplacementBias,
+        matDisplacementMapUrl,
+        matEmissiveMapUrl,
+        particleSystemEnabled,
+        particlePreset,
+        particleCount,
+        particleSize,
+        particleColor,
+        particleColorSecondary,
+        particleOpacity,
+        particleBlending,
+        particleSpeed,
+        particleSpreadX,
+        particleSpreadY,
+        particleSpreadZ,
+        particleDirection,
+        particleShape,
+        particlePosX,
+        particlePosY,
+        particlePosZ,
+        particleRotationSpeed,
+        particleTwinkle,
+        portalEnabled,
+        portalPreset,
+        portalShape,
+        portalWidth,
+        portalHeight,
+        portalFrameColor,
+        portalFrameEmissive,
+        portalFloatingText,
+        portalTextColor,
+        portalPosX,
+        portalPosY,
+        portalPosZ,
+        websiteEnabled,
+        websiteUrl,
+        websiteWidth,
+        websiteHeight,
+        websiteFrameStyle,
+        websiteCurved,
+        websiteInteractive
+      };
+    } catch (err) {
+      console.warn('[ARTest] Failed to create snapshot:', err);
+      return null;
+    }
+  }, [
+    additionalGeometries,
+    customModels,
+    custom3DTexts,
+    customLights,
+    scatterLayers,
+    sceneGroups,
+    deletedMeshNames,
+    arData,
+    modelScale,
+    modelRotSpeed,
+    modelRotX,
+    modelRotY,
+    modelRotZ,
+    modelPosX,
+    modelPosY,
+    modelPosZ,
+    ambientColor,
+    ambientIntensity,
+    dir1Color,
+    dir1Intensity,
+    dir1Position,
+    dir2Color,
+    dir2Intensity,
+    dir2Position,
+    rimColor,
+    rimIntensity,
+    rimPosition,
+    fogColor,
+    fogDensity,
+    cameraAutoRotate,
+    envPreset,
+    envIntensity,
+    envImage,
+    envRotation,
+    envShowBackground,
+    envBackgroundBlur,
+    matEnvMapIntensity,
+    exposure,
+    useNativePBR,
+    matMetalness,
+    matRoughness,
+    matEmissive,
+    matEmissiveIntensity,
+    matWireframe,
+    matOpacity,
+    particleSystemEnabled,
+    particlePreset,
+    particleCount,
+    particleSize,
+    particleColor,
+    particleColorSecondary,
+    particleOpacity,
+    particleBlending,
+    particleSpeed,
+    particleSpreadX,
+    particleSpreadY,
+    particleSpreadZ,
+    particleDirection,
+    particleShape,
+    particlePosX,
+    particlePosY,
+    particlePosZ,
+    particleRotationSpeed,
+    particleTwinkle,
+    portalEnabled,
+    portalPreset,
+    portalShape,
+    portalWidth,
+    portalHeight,
+    portalFrameColor,
+    portalFrameEmissive,
+    portalFloatingText,
+    portalTextColor,
+    portalPosX,
+    portalPosY,
+    portalPosZ,
+    websiteEnabled,
+    websiteUrl,
+    websiteWidth,
+    websiteHeight,
+    websiteFrameStyle,
+    websiteCurved,
+    websiteInteractive
+  ]);
+
+  const pushUndoSnapshot = useCallback(() => {
+    if (isRestoringHistoryRef.current) return;
+    const snap = createSceneSnapshot();
+    if (!snap) return;
+
+    const stack = undoStackRef.current;
+    if (stack.length > 0) {
+      const top = stack[stack.length - 1];
+      if (JSON.stringify(top) === JSON.stringify(snap)) {
+        return; // Skip identical duplicate snapshot
+      }
+    }
+
+    stack.push(snap);
+    if (stack.length > MAX_UNDO_STACK) {
+      stack.shift();
+    }
+    redoStackRef.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+  }, [createSceneSnapshot]);
+
+  useEffect(() => {
+    pushUndoSnapshotRef.current = pushUndoSnapshot;
+  }, [pushUndoSnapshot]);
+
+  const applySceneSnapshot = useCallback((snap) => {
+    if (!snap) return;
+    isRestoringHistoryRef.current = true;
+    try {
+      if (snap.additionalGeometries) setAdditionalGeometries(JSON.parse(JSON.stringify(snap.additionalGeometries)));
+      if (snap.customModels) setCustomModels(JSON.parse(JSON.stringify(snap.customModels)));
+      if (snap.custom3DTexts) setCustom3DTexts(JSON.parse(JSON.stringify(snap.custom3DTexts)));
+      if (snap.customLights) setCustomLights(JSON.parse(JSON.stringify(snap.customLights)));
+      if (snap.scatterLayers) setScatterLayers(JSON.parse(JSON.stringify(snap.scatterLayers)));
+      if (snap.sceneGroups) setSceneGroups(JSON.parse(JSON.stringify(snap.sceneGroups)));
+      if (snap.deletedMeshNames) {
+        deletedMeshNames.forEach((n) => {
+          if (!snap.deletedMeshNames.includes(n) && handleRestoreMeshRef.current) {
+            handleRestoreMeshRef.current(n);
+          }
+        });
+        setDeletedMeshNames([...snap.deletedMeshNames]);
+      }
+      if (snap.meshOverrides) {
+        setArData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            config: {
+              ...(prev.config || {}),
+              meshOverrides: JSON.parse(JSON.stringify(snap.meshOverrides))
+            }
+          };
+        });
+      }
+
+      if (snap.modelScale !== undefined) setModelScale(snap.modelScale);
+      if (snap.modelRotSpeed !== undefined) setModelRotSpeed(snap.modelRotSpeed);
+      if (snap.modelRotX !== undefined) setModelRotX(snap.modelRotX);
+      if (snap.modelRotY !== undefined) setModelRotY(snap.modelRotY);
+      if (snap.modelRotZ !== undefined) setModelRotZ(snap.modelRotZ);
+      if (snap.modelPosX !== undefined) setModelPosX(snap.modelPosX);
+      if (snap.modelPosY !== undefined) setModelPosY(snap.modelPosY);
+      if (snap.modelPosZ !== undefined) setModelPosZ(snap.modelPosZ);
+
+      if (snap.ambientColor !== undefined) setAmbientColor(snap.ambientColor);
+      if (snap.ambientIntensity !== undefined) setAmbientIntensity(snap.ambientIntensity);
+      if (snap.dir1Color !== undefined) setDir1Color(snap.dir1Color);
+      if (snap.dir1Intensity !== undefined) setDir1Intensity(snap.dir1Intensity);
+      if (snap.dir1Position !== undefined) setDir1Position(snap.dir1Position);
+      if (snap.dir2Color !== undefined) setDir2Color(snap.dir2Color);
+      if (snap.dir2Intensity !== undefined) setDir2Intensity(snap.dir2Intensity);
+      if (snap.dir2Position !== undefined) setDir2Position(snap.dir2Position);
+      if (snap.rimColor !== undefined) setRimColor(snap.rimColor);
+      if (snap.rimIntensity !== undefined) setRimIntensity(snap.rimIntensity);
+      if (snap.rimPosition !== undefined) setRimPosition(snap.rimPosition);
+
+      if (snap.fogColor !== undefined) setFogColor(snap.fogColor);
+      if (snap.fogDensity !== undefined) setFogDensity(snap.fogDensity);
+      if (snap.cameraAutoRotate !== undefined) setCameraAutoRotate(snap.cameraAutoRotate);
+      if (snap.envPreset !== undefined) setEnvPreset(snap.envPreset);
+      if (snap.envIntensity !== undefined) setEnvIntensity(snap.envIntensity);
+      if (snap.envImage !== undefined) setEnvImage(snap.envImage);
+      if (snap.envRotation !== undefined) setEnvRotation(snap.envRotation);
+      if (snap.envShowBackground !== undefined) setEnvShowBackground(snap.envShowBackground);
+      if (snap.envBackgroundBlur !== undefined) setEnvBackgroundBlur(snap.envBackgroundBlur);
+      if (snap.matEnvMapIntensity !== undefined) setMatEnvMapIntensity(snap.matEnvMapIntensity);
+      if (snap.exposure !== undefined) setExposure(snap.exposure);
+
+      if (snap.useNativePBR !== undefined) setUseNativePBR(snap.useNativePBR);
+      if (snap.matMetalness !== undefined) setMatMetalness(snap.matMetalness);
+      if (snap.matRoughness !== undefined) setMatRoughness(snap.matRoughness);
+      if (snap.matEmissive !== undefined) setMatEmissive(snap.matEmissive);
+      if (snap.matEmissiveIntensity !== undefined) setMatEmissiveIntensity(snap.matEmissiveIntensity);
+      if (snap.matWireframe !== undefined) setMatWireframe(snap.matWireframe);
+      if (snap.matOpacity !== undefined) setMatOpacity(snap.matOpacity);
+      if (snap.matTransmission !== undefined) setMatTransmission(snap.matTransmission);
+      if (snap.matIor !== undefined) setMatIor(snap.matIor);
+      if (snap.matThickness !== undefined) setMatThickness(snap.matThickness);
+      if (snap.matClearcoat !== undefined) setMatClearcoat(snap.matClearcoat);
+      if (snap.matClearcoatRoughness !== undefined) setMatClearcoatRoughness(snap.matClearcoatRoughness);
+      if (snap.matSheen !== undefined) setMatSheen(snap.matSheen);
+      if (snap.matSheenRoughness !== undefined) setMatSheenRoughness(snap.matSheenRoughness);
+      if (snap.matSheenColor !== undefined) setMatSheenColor(snap.matSheenColor);
+      if (snap.matNormalScale !== undefined) setMatNormalScale(snap.matNormalScale);
+      if (snap.matNormalMapUrl !== undefined) setMatNormalMapUrl(snap.matNormalMapUrl);
+      if (snap.matDisplacementScale !== undefined) setMatDisplacementScale(snap.matDisplacementScale);
+      if (snap.matDisplacementBias !== undefined) setMatDisplacementBias(snap.matDisplacementBias);
+      if (snap.matDisplacementMapUrl !== undefined) setMatDisplacementMapUrl(snap.matDisplacementMapUrl);
+      if (snap.matEmissiveMapUrl !== undefined) setMatEmissiveMapUrl(snap.matEmissiveMapUrl);
+
+      if (snap.particleSystemEnabled !== undefined) setParticleSystemEnabled(snap.particleSystemEnabled);
+      if (snap.particlePreset !== undefined) setParticlePreset(snap.particlePreset);
+      if (snap.particleCount !== undefined) setParticleCount(snap.particleCount);
+      if (snap.particleSize !== undefined) setParticleSize(snap.particleSize);
+      if (snap.particleColor !== undefined) setParticleColor(snap.particleColor);
+      if (snap.particleColorSecondary !== undefined) setParticleColorSecondary(snap.particleColorSecondary);
+      if (snap.particleOpacity !== undefined) setParticleOpacity(snap.particleOpacity);
+      if (snap.particleBlending !== undefined) setParticleBlending(snap.particleBlending);
+      if (snap.particleSpeed !== undefined) setParticleSpeed(snap.particleSpeed);
+      if (snap.particleSpreadX !== undefined) setParticleSpreadX(snap.particleSpreadX);
+      if (snap.particleSpreadY !== undefined) setParticleSpreadY(snap.particleSpreadY);
+      if (snap.particleSpreadZ !== undefined) setParticleSpreadZ(snap.particleSpreadZ);
+      if (snap.particleDirection !== undefined) setParticleDirection(snap.particleDirection);
+      if (snap.particleShape !== undefined) setParticleShape(snap.particleShape);
+      if (snap.particlePosX !== undefined) setParticlePosX(snap.particlePosX);
+      if (snap.particlePosY !== undefined) setParticlePosY(snap.particlePosY);
+      if (snap.particlePosZ !== undefined) setParticlePosZ(snap.particlePosZ);
+      if (snap.particleRotationSpeed !== undefined) setParticleRotationSpeed(snap.particleRotationSpeed);
+      if (snap.particleTwinkle !== undefined) setParticleTwinkle(snap.particleTwinkle);
+
+      if (snap.portalEnabled !== undefined) setPortalEnabled(snap.portalEnabled);
+      if (snap.portalPreset !== undefined) setPortalPreset(snap.portalPreset);
+      if (snap.portalShape !== undefined) setPortalShape(snap.portalShape);
+      if (snap.portalWidth !== undefined) setPortalWidth(snap.portalWidth);
+      if (snap.portalHeight !== undefined) setPortalHeight(snap.portalHeight);
+      if (snap.portalFrameColor !== undefined) setPortalFrameColor(snap.portalFrameColor);
+      if (snap.portalFrameEmissive !== undefined) setPortalFrameEmissive(snap.portalFrameEmissive);
+      if (snap.portalFloatingText !== undefined) setPortalFloatingText(snap.portalFloatingText);
+      if (snap.portalTextColor !== undefined) setPortalTextColor(snap.portalTextColor);
+      if (snap.portalPosX !== undefined) setPortalPosX(snap.portalPosX);
+      if (snap.portalPosY !== undefined) setPortalPosY(snap.portalPosY);
+      if (snap.portalPosZ !== undefined) setPortalPosZ(snap.portalPosZ);
+
+      if (snap.websiteEnabled !== undefined) setWebsiteEnabled(snap.websiteEnabled);
+      if (snap.websiteUrl !== undefined) setWebsiteUrl(snap.websiteUrl);
+      if (snap.websiteWidth !== undefined) setWebsiteWidth(snap.websiteWidth);
+      if (snap.websiteHeight !== undefined) setWebsiteHeight(snap.websiteHeight);
+      if (snap.websiteFrameStyle !== undefined) setWebsiteFrameStyle(snap.websiteFrameStyle);
+      if (snap.websiteCurved !== undefined) setWebsiteCurved(snap.websiteCurved);
+      if (snap.websiteInteractive !== undefined) setWebsiteInteractive(snap.websiteInteractive);
+
+      // Verify that active gizmo target or selection still exists in the restored snapshot
+      if (selectedTargetType === 'geometry' && selectedGeometryId) {
+        if (!snap.additionalGeometries?.some((g) => g.id === selectedGeometryId)) {
+          selectSceneObject(null);
+        }
+      } else if (selectedTargetType === 'customModel' && selectedCustomModelId) {
+        if (!snap.customModels?.some((m) => m.id === selectedCustomModelId)) {
+          selectSceneObject(null);
+        }
+      } else if (selectedTargetType === 'text3d' && selectedText3DId) {
+        if (!snap.custom3DTexts?.some((t) => t.id === selectedText3DId)) {
+          selectSceneObject(null);
+        }
+      } else if (selectedTargetType === 'light' && selectedLightId) {
+        if (!snap.customLights?.some((l) => l.id === selectedLightId)) {
+          selectSceneObject(null);
+        }
+      } else if (selectedTargetType === 'scatterLayer' && selectedScatterLayerId) {
+        if (!snap.scatterLayers?.some((s) => s.id === selectedScatterLayerId)) {
+          selectSceneObject(null);
+        }
+      } else if (selectedTargetType === 'group' && selectedGroupId) {
+        if (!snap.sceneGroups?.some((g) => g.id === selectedGroupId)) {
+          selectSceneObject(null);
+        }
+      }
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('starwear-scene-objects-updated'));
+      }
+    } finally {
+      setTimeout(() => {
+        isRestoringHistoryRef.current = false;
+      }, 60);
+    }
+  }, [
+    deletedMeshNames,
+    selectedTargetType,
+    selectedGeometryId,
+    selectedCustomModelId,
+    selectedText3DId,
+    selectedLightId,
+    selectedScatterLayerId,
+    selectedGroupId,
+    selectSceneObject
+  ]);
+
+  const handleUndo = useCallback(() => {
+    if (undoStackRef.current.length === 0) return;
+    const currentSnap = createSceneSnapshot();
+    if (currentSnap) {
+      redoStackRef.current.push(currentSnap);
+      if (redoStackRef.current.length > MAX_UNDO_STACK) {
+        redoStackRef.current.shift();
+      }
+    }
+    const prevSnap = undoStackRef.current.pop();
+    if (prevSnap) {
+      applySceneSnapshot(prevSnap);
+    }
+    setCanUndo(undoStackRef.current.length > 0);
+    setCanRedo(redoStackRef.current.length > 0);
+    setSaveSuccessMsg('Undo: Restored previous state');
+    setTimeout(() => setSaveSuccessMsg(''), 2500);
+  }, [createSceneSnapshot, applySceneSnapshot]);
+
+  const handleRedo = useCallback(() => {
+    if (redoStackRef.current.length === 0) return;
+    const currentSnap = createSceneSnapshot();
+    if (currentSnap) {
+      undoStackRef.current.push(currentSnap);
+      if (undoStackRef.current.length > MAX_UNDO_STACK) {
+        undoStackRef.current.shift();
+      }
+    }
+    const nextSnap = redoStackRef.current.pop();
+    if (nextSnap) {
+      applySceneSnapshot(nextSnap);
+    }
+    setCanUndo(undoStackRef.current.length > 0);
+    setCanRedo(redoStackRef.current.length > 0);
+    setSaveSuccessMsg('Redo: Applied state');
+    setTimeout(() => setSaveSuccessMsg(''), 2500);
+  }, [createSceneSnapshot, applySceneSnapshot]);
+
+  // Capture slider and input start interactions to record undo snapshots prior to value change
+  useEffect(() => {
+    const onPointerDownCapture = (e) => {
+      if (isRestoringHistoryRef.current) return;
+      const target = e.target;
+      if (!target) return;
+      if (
+        target.tagName === 'INPUT' &&
+        (target.type === 'range' || target.type === 'color' || target.type === 'number')
+      ) {
+        pushUndoSnapshot();
+      }
+    };
+    window.addEventListener('pointerdown', onPointerDownCapture, { capture: true });
+    return () => window.removeEventListener('pointerdown', onPointerDownCapture, { capture: true });
+  }, [pushUndoSnapshot]);
+
   // Studio4D4 & AR Keyboard Shortcuts:
   // W: Translate mode, E: Rotate mode, R: Scale mode, Q: Cycle mode, Esc: Deselect, F: Frame, M: Toggle Marker
   // Ctrl/Cmd+G: Group selected objects, Ctrl/Cmd+Shift+G: Ungroup selected group
   // Ctrl/Cmd+D: Duplicate selected group or object
+  // Ctrl/Cmd+Z: Undo, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y: Redo
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (document.activeElement && ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
       const k = e.key.toLowerCase();
+
+      // Undo: Ctrl/Cmd+Z (without Shift)
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && k === 'z') {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+
+      // Redo: Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y
+      if (
+        ((e.metaKey || e.ctrlKey) && e.shiftKey && k === 'z') ||
+        ((e.metaKey || e.ctrlKey) && k === 'y')
+      ) {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
 
       if ((e.metaKey || e.ctrlKey) && k === 'd') {
         e.preventDefault();
@@ -6279,7 +7079,7 @@ const ARTest = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [faceSketchStudioOpen, selectedMeshUuid, focusCameraOnMesh, focusCameraOnSelectedObject, clearSelectionAndDetachGizmo, selectedGroupId, selectedObjects, handleUngroup, handleCreateGroupFromSelection, selectedTargetType, selectedGeometryId, selectedCustomModelId, selectedText3DId, selectedLightId, selectedScatterLayerId, handleDuplicateScatterLayer, handleDuplicateGroup]);
+  }, [faceSketchStudioOpen, selectedMeshUuid, focusCameraOnMesh, focusCameraOnSelectedObject, clearSelectionAndDetachGizmo, selectedGroupId, selectedObjects, handleUngroup, handleCreateGroupFromSelection, selectedTargetType, selectedGeometryId, selectedCustomModelId, selectedText3DId, selectedLightId, selectedScatterLayerId, handleDuplicateScatterLayer, handleDuplicateGroup, handleUndo, handleRedo]);
 
   // Target Marker Alignment & Calibration Actions
   const MARKER_PRESETS = [
@@ -6310,6 +7110,7 @@ const ARTest = () => {
   }, [markerWidth, markerAspectRatio, transitionCamera]);
 
   const snapModelToMarkerAnchor = (anchor) => {
+    triggerUndoSnapshot();
     const halfW = markerWidth / 2;
     const halfH = (markerWidth * (markerAspectRatio || 0.5926)) / 2;
 
@@ -6334,6 +7135,7 @@ const ARTest = () => {
   };
 
   const snapModelToMarkerOrigin = () => {
+    triggerUndoSnapshot();
     handlePositionChange('x', 0);
     handlePositionChange('y', 0);
     handlePositionChange('z', 0);
@@ -6354,6 +7156,7 @@ const ARTest = () => {
 
   // Align / Ground Entire Composite Scene (Root Model + All Shapes + Custom Models) to the Target Marker
   const alignEntireSceneToMarker = (mode = 'ground') => {
+    triggerUndoSnapshot();
     const compositeBox = new THREE.Box3();
     let hasObjects = false;
 
@@ -6623,6 +7426,7 @@ const ARTest = () => {
   };
 
   const handleDeleteMesh = useCallback((uuid, meshName) => {
+    triggerUndoSnapshot();
     const modelEl = document.getElementById('ar-model');
     const model3D = modelEl?.getObject3D('mesh');
     let resolvedName = meshName || '';
@@ -6700,7 +7504,12 @@ const ARTest = () => {
     }, 50);
   }, [scanMeshes]);
 
+  useEffect(() => {
+    handleRestoreMeshRef.current = handleRestoreMesh;
+  }, [handleRestoreMesh]);
+
   const handleRestoreAllMeshes = useCallback(() => {
+    triggerUndoSnapshot();
     for (const [, val] of deletedNodesRef.current.entries()) {
       if (val.parent && val.node) {
         val.parent.add(val.node);
@@ -6727,19 +7536,77 @@ const ARTest = () => {
     if (model3D) {
       model3D.traverse((node) => {
         if (node.uuid === selectedMeshUuid && node.isMesh && node.material) {
-          const mats = Array.isArray(node.material) ? node.material : [node.material];
-          mats.forEach((mat) => {
-            if (updates.color !== undefined && mat.color) mat.color.set(updates.color);
-            if (updates.metalness !== undefined && mat.metalness !== undefined) mat.metalness = updates.metalness;
-            if (updates.roughness !== undefined && mat.roughness !== undefined) mat.roughness = updates.roughness;
-            if (updates.emissive !== undefined && mat.emissive) mat.emissive.set(updates.emissive);
-            if (updates.emissiveIntensity !== undefined && mat.emissiveIntensity !== undefined) mat.emissiveIntensity = updates.emissiveIntensity;
-            if (updates.opacity !== undefined) {
-              mat.opacity = updates.opacity;
-              if (updates.opacity < 1.0) mat.transparent = true;
+          const isMulti = Array.isArray(node.material);
+          const mats = isMulti ? node.material : [node.material];
+          const needsPhysicalUpgrade = (
+            (updates.transmission !== undefined && Number(updates.transmission) > 0) ||
+            (updates.clearcoat !== undefined && Number(updates.clearcoat) > 0) ||
+            (updates.sheen !== undefined && Number(updates.sheen) > 0)
+          );
+
+          mats.forEach((mat, idx) => {
+            let currentMat = mat;
+            if (needsPhysicalUpgrade && !currentMat.isMeshPhysicalMaterial) {
+              const physMat = new THREE.MeshPhysicalMaterial().copy(currentMat);
+              currentMat = physMat;
+              if (isMulti) {
+                node.material[idx] = currentMat;
+              } else {
+                node.material = currentMat;
+              }
             }
-            if (updates.wireframe !== undefined) mat.wireframe = !!updates.wireframe;
-            mat.needsUpdate = true;
+
+            if (updates.color !== undefined && currentMat.color) currentMat.color.set(updates.color);
+            if (updates.metalness !== undefined && currentMat.metalness !== undefined) currentMat.metalness = updates.metalness;
+            if (updates.roughness !== undefined && currentMat.roughness !== undefined) currentMat.roughness = updates.roughness;
+            if (updates.emissive !== undefined && currentMat.emissive) currentMat.emissive.set(updates.emissive);
+            if (updates.emissiveIntensity !== undefined && currentMat.emissiveIntensity !== undefined) currentMat.emissiveIntensity = updates.emissiveIntensity;
+            if (updates.opacity !== undefined) {
+              currentMat.opacity = updates.opacity;
+            }
+            if (updates.wireframe !== undefined) currentMat.wireframe = !!updates.wireframe;
+            if (updates.transmission !== undefined && currentMat.transmission !== undefined) {
+              currentMat.transmission = Number(updates.transmission);
+            }
+            if (updates.ior !== undefined && currentMat.ior !== undefined) {
+              currentMat.ior = Number(updates.ior);
+            }
+            if (updates.thickness !== undefined && currentMat.thickness !== undefined) {
+              currentMat.thickness = Number(updates.thickness);
+            }
+            if (updates.clearcoat !== undefined && currentMat.clearcoat !== undefined) {
+              currentMat.clearcoat = Number(updates.clearcoat);
+            }
+            if (updates.clearcoatRoughness !== undefined && currentMat.clearcoatRoughness !== undefined) {
+              currentMat.clearcoatRoughness = Number(updates.clearcoatRoughness);
+            }
+            if (updates.sheen !== undefined && currentMat.sheen !== undefined) {
+              currentMat.sheen = Number(updates.sheen);
+            }
+            if (updates.sheenRoughness !== undefined && currentMat.sheenRoughness !== undefined) {
+              currentMat.sheenRoughness = Number(updates.sheenRoughness);
+            }
+            if (updates.sheenColor && currentMat.sheenColor) {
+              currentMat.sheenColor.set(updates.sheenColor);
+            }
+            if (updates.normalScale !== undefined && currentMat.normalScale) {
+              currentMat.normalScale.set(Number(updates.normalScale), Number(updates.normalScale));
+            }
+            if (updates.displacementScale !== undefined && currentMat.displacementScale !== undefined) {
+              currentMat.displacementScale = Number(updates.displacementScale);
+            }
+            if (updates.displacementBias !== undefined && currentMat.displacementBias !== undefined) {
+              currentMat.displacementBias = Number(updates.displacementBias);
+            }
+            if (updates.envMapIntensity !== undefined && currentMat.envMapIntensity !== undefined) {
+              currentMat.envMapIntensity = Number(updates.envMapIntensity);
+              if (!currentMat.userData) currentMat.userData = {};
+              currentMat.userData.envMapIntensity = Number(updates.envMapIntensity);
+            }
+            if (Number(currentMat.opacity ?? 1.0) < 1.0 || Number(currentMat.transmission ?? 0) > 0) {
+              currentMat.transparent = true;
+            }
+            currentMat.needsUpdate = true;
           });
 
           if (isTextureProp) {
@@ -7177,6 +8044,342 @@ const ARTest = () => {
     setTimeout(() => setSaveSuccessMsg(''), 6000);
   };
 
+  // Dedicated helper to apply specific texture maps (normalMap, displacementMap, emissiveMap) to a mesh
+  const handleApplyMeshMap = async (mesh, mapSlot, file) => {
+    if (!mesh || !file || !mapSlot) return;
+    const uploadKey = `mesh-${mesh.uuid}-${mapSlot}`;
+    setMapUploadingSlot(uploadKey);
+    setUploadProgress(`Loading ${file.name}...`);
+
+    try {
+      const previewUrl = URL.createObjectURL(file);
+      const cleanMeshName = (mesh.name || 'mesh').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      let finalMapUrl = previewUrl;
+      let storagePath = '';
+
+      const bId = (batchId || '').trim();
+      if (bId) {
+        setUploadProgress(`Uploading ${file.name} to Cloud Storage...`);
+        storagePath = `assets/${bId}/textures/maps/${cleanMeshName}_${mapSlot}_${Date.now()}_${cleanFileName}`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, file);
+        finalMapUrl = await getDownloadURL(storageRef);
+      }
+
+      // Load texture into Three.js
+      const loader = new THREE.TextureLoader();
+      const texture = await new Promise((resolve, reject) => {
+        loader.load(
+          previewUrl,
+          (t) => resolve(t),
+          undefined,
+          (err) => reject(new Error('Failed to load map image: ' + (err?.message || 'Invalid image file')))
+        );
+      });
+
+      if (mapSlot === 'emissiveMap' && THREE.SRGBColorSpace !== undefined) {
+        texture.colorSpace = THREE.SRGBColorSpace;
+      }
+      texture.wrapS = THREE.RepeatWrapping;
+      texture.wrapT = THREE.RepeatWrapping;
+      texture.flipY = false;
+
+      // Apply to Three.js mesh
+      const modelEl = document.getElementById('ar-model');
+      const model3D = modelEl?.getObject3D('mesh');
+      if (model3D) {
+        model3D.traverse((node) => {
+          if ((node.uuid === mesh.uuid || node.name === mesh.name) && node.isMesh && node.material) {
+            const mats = Array.isArray(node.material) ? node.material : [node.material];
+            mats.forEach((m) => {
+              if (m[mapSlot] && typeof m[mapSlot].dispose === 'function') {
+                try { m[mapSlot].dispose(); } catch {}
+              }
+              m[mapSlot] = texture;
+              if (mapSlot === 'normalMap' && !m.normalScale) {
+                m.normalScale = new THREE.Vector2(1, 1);
+              }
+              m.needsUpdate = true;
+            });
+            node.userData[`__custom${mapSlot.charAt(0).toUpperCase() + mapSlot.slice(1)}Url`] = finalMapUrl;
+          }
+        });
+      }
+
+      const urlKey = `${mapSlot}Url`;
+      const storageKey = `${mapSlot}StoragePath`;
+      const fileKey = `${mapSlot}FileName`;
+
+      // Update meshList
+      setMeshList((prev) =>
+        prev.map((m) =>
+          (m.uuid === mesh.uuid || m.name === mesh.name)
+            ? {
+                ...m,
+                material: {
+                  ...m.material,
+                  [urlKey]: finalMapUrl,
+                  [storageKey]: storagePath,
+                  [fileKey]: file.name
+                }
+              }
+            : m
+        )
+      );
+
+      // Update arData meshOverrides
+      setArData((prev) => {
+        if (!prev) return prev;
+        const currentOverrides = prev.config?.meshOverrides || {};
+        return {
+          ...prev,
+          config: {
+            ...(prev.config || {}),
+            meshOverrides: {
+              ...currentOverrides,
+              [mesh.name]: {
+                ...(currentOverrides[mesh.name] || {}),
+                material: {
+                  ...(currentOverrides[mesh.name]?.material || {}),
+                  [urlKey]: finalMapUrl,
+                  [storageKey]: storagePath,
+                  [fileKey]: file.name
+                }
+              }
+            }
+          }
+        };
+      });
+
+      const slotLabel = mapSlot === 'normalMap' ? 'Normal map' : (mapSlot === 'displacementMap' ? 'Displacement map' : 'Emissive map');
+      const timeStr = new Date().toLocaleTimeString();
+      setSaveSuccessMsg(`${slotLabel} applied to ${mesh.name} at ${timeStr}`);
+      setTimeout(() => setSaveSuccessMsg(''), 5000);
+    } catch (err) {
+      console.error(`[ARTest] Failed to apply ${mapSlot}:`, err);
+      setError(`Failed to apply ${mapSlot}: ${err.message || err}`);
+    } finally {
+      setMapUploadingSlot(null);
+      setUploadProgress('');
+    }
+  };
+
+  const handleRemoveMeshMap = async (uuid, meshName, mapSlot) => {
+    const targetMeshItem = meshList.find((m) => m.uuid === uuid || m.name === meshName);
+    const targetName = meshName || targetMeshItem?.name || '';
+    const urlKey = `${mapSlot}Url`;
+    const storageKey = `${mapSlot}StoragePath`;
+    const fileKey = `${mapSlot}FileName`;
+
+    const modelEl = document.getElementById('ar-model');
+    const model3D = modelEl?.getObject3D('mesh');
+    if (model3D) {
+      model3D.traverse((node) => {
+        if ((node.uuid === uuid || node.name === targetName) && node.isMesh && node.material) {
+          const mats = Array.isArray(node.material) ? node.material : [node.material];
+          mats.forEach((m) => {
+            if (m[mapSlot] && typeof m[mapSlot].dispose === 'function') {
+              try { m[mapSlot].dispose(); } catch {}
+            }
+            m[mapSlot] = null;
+            m.needsUpdate = true;
+          });
+          node.userData[`__custom${mapSlot.charAt(0).toUpperCase() + mapSlot.slice(1)}Url`] = null;
+        }
+      });
+    }
+
+    setMeshList((prev) =>
+      prev.map((m) =>
+        (m.uuid === uuid || m.name === targetName)
+          ? {
+              ...m,
+              material: {
+                ...m.material,
+                [urlKey]: null,
+                [storageKey]: null,
+                [fileKey]: null
+              }
+            }
+          : m
+      )
+    );
+
+    setArData((prev) => {
+      if (!prev) return prev;
+      const currentOverrides = { ...(prev.config?.meshOverrides || {}) };
+      if (currentOverrides[targetName]) {
+        currentOverrides[targetName] = {
+          ...currentOverrides[targetName],
+          material: {
+            ...(currentOverrides[targetName].material || {}),
+            [urlKey]: null,
+            [storageKey]: null,
+            [fileKey]: null
+          }
+        };
+      }
+      return {
+        ...prev,
+        config: {
+          ...(prev.config || {}),
+          meshOverrides: currentOverrides
+        }
+      };
+    });
+
+    const slotLabel = mapSlot === 'normalMap' ? 'Normal map' : (mapSlot === 'displacementMap' ? 'Displacement map' : 'Emissive map');
+    setSaveSuccessMsg(`${slotLabel} removed from ${targetName}`);
+    setTimeout(() => setSaveSuccessMsg(''), 4000);
+  };
+
+  // Helper for Global Model Map Upload
+  const handleApplyGlobalMap = async (mapSlot, file) => {
+    if (!file || !mapSlot) return;
+    const uploadKey = `global-${mapSlot}`;
+    setMapUploadingSlot(uploadKey);
+    setUploadProgress(`Loading ${file.name}...`);
+
+    try {
+      const previewUrl = URL.createObjectURL(file);
+      const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      let finalMapUrl = previewUrl;
+
+      const bId = (batchId || '').trim();
+      if (bId) {
+        setUploadProgress(`Uploading ${file.name} to Cloud Storage...`);
+        const storagePath = `assets/${bId}/textures/maps/global_${mapSlot}_${Date.now()}_${cleanFileName}`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, file);
+        finalMapUrl = await getDownloadURL(storageRef);
+      }
+
+      if (mapSlot === 'normalMap') setMatNormalMapUrl(finalMapUrl);
+      else if (mapSlot === 'displacementMap') setMatDisplacementMapUrl(finalMapUrl);
+      else if (mapSlot === 'emissiveMap') setMatEmissiveMapUrl(finalMapUrl);
+
+      // Apply to Three.js materials on #ar-model
+      const modelEl = document.getElementById('ar-model');
+      const model3D = modelEl?.getObject3D('mesh');
+      if (model3D) {
+        const loader = new THREE.TextureLoader();
+        loader.load(previewUrl, (texture) => {
+          if (mapSlot === 'emissiveMap' && THREE.SRGBColorSpace !== undefined) {
+            texture.colorSpace = THREE.SRGBColorSpace;
+          }
+          texture.wrapS = THREE.RepeatWrapping;
+          texture.wrapT = THREE.RepeatWrapping;
+          texture.flipY = false;
+
+          model3D.traverse((node) => {
+            if (node.isMesh && node.material) {
+              const mats = Array.isArray(node.material) ? node.material : [node.material];
+              mats.forEach((m) => {
+                m[mapSlot] = texture;
+                if (mapSlot === 'normalMap' && !m.normalScale) {
+                  m.normalScale = new THREE.Vector2(matNormalScale || 1, matNormalScale || 1);
+                }
+                m.needsUpdate = true;
+              });
+            }
+          });
+        });
+      }
+
+      const slotLabel = mapSlot === 'normalMap' ? 'Normal map' : (mapSlot === 'displacementMap' ? 'Displacement map' : 'Emissive map');
+      const timeStr = new Date().toLocaleTimeString();
+      setSaveSuccessMsg(`Global model ${slotLabel} updated at ${timeStr}`);
+      setTimeout(() => setSaveSuccessMsg(''), 5000);
+    } catch (err) {
+      console.error(`[ARTest] Failed to apply global ${mapSlot}:`, err);
+      setError(`Failed to apply global ${mapSlot}: ${err.message || err}`);
+    } finally {
+      setMapUploadingSlot(null);
+      setUploadProgress('');
+    }
+  };
+
+  const handleRemoveGlobalMap = (mapSlot) => {
+    if (mapSlot === 'normalMap') setMatNormalMapUrl('');
+    else if (mapSlot === 'displacementMap') setMatDisplacementMapUrl('');
+    else if (mapSlot === 'emissiveMap') setMatEmissiveMapUrl('');
+
+    const modelEl = document.getElementById('ar-model');
+    const model3D = modelEl?.getObject3D('mesh');
+    if (model3D) {
+      model3D.traverse((node) => {
+        if (node.isMesh && node.material) {
+          const mats = Array.isArray(node.material) ? node.material : [node.material];
+          mats.forEach((m) => {
+            if (m[mapSlot] && typeof m[mapSlot].dispose === 'function') {
+              try { m[mapSlot].dispose(); } catch {}
+            }
+            m[mapSlot] = null;
+            m.needsUpdate = true;
+          });
+        }
+      });
+    }
+
+    const slotLabel = mapSlot === 'normalMap' ? 'Normal map' : (mapSlot === 'displacementMap' ? 'Displacement map' : 'Emissive map');
+    setSaveSuccessMsg(`Global model ${slotLabel} removed`);
+    setTimeout(() => setSaveSuccessMsg(''), 4000);
+  };
+
+  // Helper for Shape / Geometry Map Upload
+  const handleApplyShapeMap = async (geomId, mapSlot, file) => {
+    if (!geomId || !file || !mapSlot) return;
+    const uploadKey = `shape-${geomId}-${mapSlot}`;
+    setMapUploadingSlot(uploadKey);
+    setUploadProgress(`Loading ${file.name}...`);
+
+    try {
+      const previewUrl = URL.createObjectURL(file);
+      const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      let finalMapUrl = previewUrl;
+      let storagePath = '';
+
+      const bId = (batchId || '').trim();
+      if (bId) {
+        setUploadProgress(`Uploading ${file.name} to Cloud Storage...`);
+        storagePath = `assets/${bId}/textures/shapes/${geomId}_${mapSlot}_${Date.now()}_${cleanFileName}`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, file);
+        finalMapUrl = await getDownloadURL(storageRef);
+      }
+
+      handleUpdateGeometry(geomId, {
+        [mapSlot]: finalMapUrl,
+        [`${mapSlot}StoragePath`]: storagePath,
+        [`${mapSlot}FileName`]: file.name
+      });
+
+      const slotLabel = mapSlot === 'normalMap' ? 'Normal map' : (mapSlot === 'displacementMap' ? 'Displacement map' : 'Emissive map');
+      const timeStr = new Date().toLocaleTimeString();
+      setSaveSuccessMsg(`${slotLabel} applied to shape at ${timeStr}`);
+      setTimeout(() => setSaveSuccessMsg(''), 5000);
+    } catch (err) {
+      console.error(`[ARTest] Failed to apply shape ${mapSlot}:`, err);
+      setError(`Failed to apply shape ${mapSlot}: ${err.message || err}`);
+    } finally {
+      setMapUploadingSlot(null);
+      setUploadProgress('');
+    }
+  };
+
+  const handleRemoveShapeMap = (geomId, mapSlot) => {
+    handleUpdateGeometry(geomId, {
+      [mapSlot]: null,
+      [`${mapSlot}StoragePath`]: null,
+      [`${mapSlot}FileName`]: null
+    });
+
+    const slotLabel = mapSlot === 'normalMap' ? 'Normal map' : (mapSlot === 'displacementMap' ? 'Displacement map' : 'Emissive map');
+    setSaveSuccessMsg(`${slotLabel} removed from shape`);
+    setTimeout(() => setSaveSuccessMsg(''), 4000);
+  };
+
   const resetCurrentTargetTransform = () => {
     if (!selectedMeshUuid) {
       setModelRotX(90);
@@ -7612,11 +8815,30 @@ const ARTest = () => {
       if (cfg.matEmissiveIntensity !== undefined) setMatEmissiveIntensity(cfg.matEmissiveIntensity);
       if (cfg.matWireframe !== undefined) setMatWireframe(cfg.matWireframe);
       if (cfg.matOpacity !== undefined) setMatOpacity(cfg.matOpacity);
+      if (cfg.matTransmission !== undefined) setMatTransmission(Number(cfg.matTransmission));
+      if (cfg.matIor !== undefined) setMatIor(Number(cfg.matIor));
+      if (cfg.matThickness !== undefined) setMatThickness(Number(cfg.matThickness));
+      if (cfg.matClearcoat !== undefined) setMatClearcoat(Number(cfg.matClearcoat));
+      if (cfg.matClearcoatRoughness !== undefined) setMatClearcoatRoughness(Number(cfg.matClearcoatRoughness));
+      if (cfg.matSheen !== undefined) setMatSheen(Number(cfg.matSheen));
+      if (cfg.matSheenRoughness !== undefined) setMatSheenRoughness(Number(cfg.matSheenRoughness));
+      if (cfg.matSheenColor) setMatSheenColor(cfg.matSheenColor);
+      if (cfg.matNormalScale !== undefined) setMatNormalScale(Number(cfg.matNormalScale));
+      if (cfg.matNormalMapUrl) setMatNormalMapUrl(cfg.matNormalMapUrl);
+      if (cfg.matDisplacementScale !== undefined) setMatDisplacementScale(Number(cfg.matDisplacementScale));
+      if (cfg.matDisplacementBias !== undefined) setMatDisplacementBias(Number(cfg.matDisplacementBias));
+      if (cfg.matDisplacementMapUrl) setMatDisplacementMapUrl(cfg.matDisplacementMapUrl);
+      if (cfg.matEmissiveMapUrl) setMatEmissiveMapUrl(cfg.matEmissiveMapUrl);
       if (cfg.fogColor !== undefined) setFogColor(cfg.fogColor);
       if (cfg.fogDensity !== undefined) setFogDensity(cfg.fogDensity);
       if (cfg.exposure !== undefined) setExposure(Number(cfg.exposure));
       if (cfg.envPreset !== undefined) setEnvPreset(cfg.envPreset || 'none');
       if (cfg.envIntensity !== undefined) setEnvIntensity(Number(cfg.envIntensity));
+      if (cfg.envImage !== undefined) setEnvImage(cfg.envImage || '');
+      if (cfg.envRotation !== undefined) setEnvRotation(Number(cfg.envRotation));
+      if (cfg.envShowBackground !== undefined) setEnvShowBackground(Boolean(cfg.envShowBackground));
+      if (cfg.envBackgroundBlur !== undefined) setEnvBackgroundBlur(Number(cfg.envBackgroundBlur));
+      if (cfg.matEnvMapIntensity !== undefined) setMatEnvMapIntensity(Number(cfg.matEnvMapIntensity));
       if (cfg.showBuyButton !== undefined) setShowBuyButton(cfg.showBuyButton);
       if (cfg.buyButtonColor !== undefined) setBuyButtonColor(cfg.buyButtonColor);
       if (cfg.mediaPlaying !== undefined) setMediaPlaying(cfg.mediaPlaying);
@@ -7985,11 +9207,30 @@ const ARTest = () => {
       matEmissiveIntensity,
       matWireframe,
       matOpacity,
+      matTransmission,
+      matIor,
+      matThickness,
+      matClearcoat,
+      matClearcoatRoughness,
+      matSheen,
+      matSheenRoughness,
+      matSheenColor,
+      matNormalScale,
+      matNormalMapUrl,
+      matDisplacementScale,
+      matDisplacementBias,
+      matDisplacementMapUrl,
+      matEmissiveMapUrl,
       useNativePBR,
       fogColor,
       fogDensity,
       envPreset: envPreset || 'none',
       envIntensity: Number(envIntensity),
+      envImage: envImage || '',
+      envRotation: Number(envRotation),
+      envShowBackground: Boolean(envShowBackground),
+      envBackgroundBlur: Number(envBackgroundBlur),
+      matEnvMapIntensity: Number(matEnvMapIntensity),
       exposure: Number(exposure),
       showBuyButton,
       buyButtonColor,
@@ -8437,12 +9678,31 @@ const ARTest = () => {
         matEmissiveIntensity,
         matWireframe,
         matOpacity,
+        matTransmission,
+        matIor,
+        matThickness,
+        matClearcoat,
+        matClearcoatRoughness,
+        matSheen,
+        matSheenRoughness,
+        matSheenColor,
+        matNormalScale,
+        matNormalMapUrl,
+        matDisplacementScale,
+        matDisplacementBias,
+        matDisplacementMapUrl,
+        matEmissiveMapUrl,
         useNativePBR,
         fogColor,
         fogDensity,
         exposure: Number(exposure),
         envPreset: envPreset || 'none',
         envIntensity: Number(envIntensity),
+        envImage: envImage || '',
+        envRotation: Number(envRotation),
+        envShowBackground: Boolean(envShowBackground),
+        envBackgroundBlur: Number(envBackgroundBlur),
+        matEnvMapIntensity: Number(matEnvMapIntensity),
         showBuyButton,
         buyButtonColor,
         mediaPlaying,
@@ -9445,12 +10705,31 @@ const ARTest = () => {
         matEmissiveIntensity,
         matWireframe,
         matOpacity,
+        matTransmission,
+        matIor,
+        matThickness,
+        matClearcoat,
+        matClearcoatRoughness,
+        matSheen,
+        matSheenRoughness,
+        matSheenColor,
+        matNormalScale,
+        matNormalMapUrl,
+        matDisplacementScale,
+        matDisplacementBias,
+        matDisplacementMapUrl,
+        matEmissiveMapUrl,
         useNativePBR,
         fogColor,
         fogDensity,
         exposure: Number(exposure),
         envPreset: envPreset || 'none',
         envIntensity: Number(envIntensity),
+        envImage: envImage || '',
+        envRotation: Number(envRotation),
+        envShowBackground: Boolean(envShowBackground),
+        envBackgroundBlur: Number(envBackgroundBlur),
+        matEnvMapIntensity: Number(matEnvMapIntensity),
         showBuyButton,
         buyButtonColor,
         mediaPlaying,
@@ -10148,6 +11427,11 @@ const ARTest = () => {
       exposure: Number(exposure),
       envPreset: envPreset || 'none',
       envIntensity: Number(envIntensity),
+      envImage: envImage || '',
+      envRotation: Number(envRotation),
+      envShowBackground: Boolean(envShowBackground),
+      envBackgroundBlur: Number(envBackgroundBlur),
+      matEnvMapIntensity: Number(matEnvMapIntensity),
       fogColor,
       fogDensity,
       modelScale,
@@ -10166,6 +11450,20 @@ const ARTest = () => {
       matEmissiveIntensity,
       matWireframe,
       matOpacity,
+      matTransmission,
+      matIor,
+      matThickness,
+      matClearcoat,
+      matClearcoatRoughness,
+      matSheen,
+      matSheenRoughness,
+      matSheenColor,
+      matNormalScale,
+      matNormalMapUrl,
+      matDisplacementScale,
+      matDisplacementBias,
+      matDisplacementMapUrl,
+      matEmissiveMapUrl,
       useNativePBR,
       showBuyButton,
       buyButtonColor,
@@ -10513,6 +11811,30 @@ const ARTest = () => {
                 <input type="file" accept=".glb,.gltf" onChange={pickLocalModel} className="hidden" />
               </label>
 
+              {/* Undo & Redo Dual-Action Control Group */}
+              <div className="flex items-stretch bg-neutral-900 border border-neutral-700 rounded-lg p-0.5 shrink-0 shadow-sm shadow-black/30">
+                <button
+                  type="button"
+                  onClick={handleUndo}
+                  disabled={!canUndo}
+                  className="px-2 py-1.5 rounded-md hover:bg-neutral-800 active:scale-95 disabled:opacity-25 disabled:hover:bg-transparent text-neutral-200 hover:text-white disabled:cursor-not-allowed transition-all flex items-center gap-1 text-xs font-semibold cursor-pointer"
+                  title="Undo last action (Ctrl+Z / Cmd+Z)"
+                >
+                  <span className="material-symbols-outlined text-[15px]">undo</span>
+                  <span className="hidden sm:inline">Undo</span>
+                </button>
+                <div className="w-[1px] my-1 bg-neutral-700/60" />
+                <button
+                  type="button"
+                  onClick={handleRedo}
+                  disabled={!canRedo}
+                  className="px-1.5 py-1.5 rounded-md hover:bg-neutral-800 active:scale-95 disabled:opacity-25 disabled:hover:bg-transparent text-neutral-200 hover:text-white disabled:cursor-not-allowed transition-all flex items-center justify-center text-xs font-semibold cursor-pointer"
+                  title="Redo action (Ctrl+Shift+Z / Cmd+Shift+Z)"
+                >
+                  <span className="material-symbols-outlined text-[15px]">redo</span>
+                </button>
+              </div>
+
               <button
                 type="button"
                 onClick={() =>
@@ -10800,18 +12122,18 @@ const ARTest = () => {
             type="button"
             onClick={() => setActiveTab('transform')}
             className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'transform'
-              ? 'bg-neutral-800 text-white shadow border border-neutral-700'
+              ? 'bg-neutral-800 text-rose-300 shadow border border-rose-500/50'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
-            <span className="material-symbols-outlined text-sm text-indigo-400">transform</span>
+            <span className="material-symbols-outlined text-sm text-rose-400">transform</span>
             <span>Transform</span>
           </button>
           <button
             type="button"
             onClick={() => setActiveTab('hierarchy')}
             className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'hierarchy'
-              ? 'bg-neutral-800 text-white shadow border border-neutral-700'
+              ? 'bg-neutral-800 text-purple-300 shadow border border-purple-500/50'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
@@ -10870,7 +12192,7 @@ const ARTest = () => {
             type="button"
             onClick={() => setActiveTab('materials')}
             className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'materials'
-              ? 'bg-neutral-800 text-white shadow border border-neutral-700'
+              ? 'bg-neutral-800 text-emerald-300 shadow border border-emerald-500/50'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
@@ -10881,7 +12203,7 @@ const ARTest = () => {
             type="button"
             onClick={() => setActiveTab('scene')}
             className={`shrink-0 py-1.5 px-3 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer ${activeTab === 'scene'
-              ? 'bg-neutral-800 text-white shadow border border-neutral-700'
+              ? 'bg-neutral-800 text-sky-300 shadow border border-sky-500/50'
               : 'text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900/50'
               }`}
           >
@@ -10963,11 +12285,11 @@ const ARTest = () => {
           {/* TAB 1: TRANSFORM & ORIENTATION / POSITION CONTROLS                         */}
           {/* ========================================================================= */}
           {activeTab === 'transform' && (
-            <div className="space-y-5">
+            <div className="space-y-4">
               {/* Orientation & Rotation Section */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+              <div className="p-3.5 rounded-xl bg-rose-950/20 border border-rose-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-rose-500/20 pb-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-rose-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-rose-400">3d_rotation</span>
                     {selectedMesh ? `Rotation: ${selectedMesh.name}` : 'Root Model Orientation'}
                   </h2>
@@ -11008,9 +12330,9 @@ const ARTest = () => {
               </div>
 
               {/* Object 3D Positioning Section */}
-              <div className="space-y-3 pt-3 border-t border-neutral-800/80">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+              <div className="p-3.5 rounded-xl bg-emerald-950/20 border border-emerald-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-emerald-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-emerald-400">open_with</span>
                     {selectedMesh ? `Position: ${selectedMesh.name}` : 'Object Positioning (X, Y, Z)'}
                   </h2>
@@ -11087,7 +12409,7 @@ const ARTest = () => {
                 />
 
                 {/* Target Marker Snapping & 9-Point Placement Matrix */}
-                <div className="p-3 rounded-xl bg-neutral-900/90 border border-emerald-500/30 space-y-2.5">
+                <div className="p-3 rounded-xl bg-neutral-900/90 border border-emerald-500/40 space-y-2.5">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
                       <span className="material-symbols-outlined text-sm text-emerald-400">qr_code_2</span>
@@ -11180,9 +12502,9 @@ const ARTest = () => {
               </div>
 
               {/* Scale & Auto-Spin Animation */}
-              <div className="space-y-3 pt-3 border-t border-neutral-800/80">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+              <div className="p-3.5 rounded-xl bg-purple-950/20 border border-purple-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-purple-500/20 pb-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-purple-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-purple-400">aspect_ratio</span>
                     Scale & Animation
                   </h2>
@@ -11227,23 +12549,23 @@ const ARTest = () => {
           {/* ========================================================================= */}
           {activeTab === 'hierarchy' && (
             <div className="space-y-4">
-              <div className="flex flex-col gap-2 border-b border-neutral-800 pb-2.5">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+              <div className="p-3.5 bg-purple-950/20 border border-purple-500/30 rounded-xl space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-purple-500/20 pb-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-purple-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-purple-400">view_in_ar</span>
                     Detected 3D Objects ({meshList.length})
                   </h2>
                   <button
                     type="button"
                     onClick={scanMeshes}
-                    className="px-2 py-0.5 bg-neutral-800 hover:bg-neutral-700 rounded text-[10px] font-medium text-neutral-300 flex items-center gap-1 cursor-pointer transition-colors"
+                    className="px-2 py-0.5 bg-purple-900/40 hover:bg-purple-800/60 border border-purple-500/30 rounded text-[10px] font-medium text-purple-200 flex items-center gap-1 cursor-pointer transition-colors"
                     title="Rescan model meshes"
                   >
                     <span className="material-symbols-outlined text-xs">refresh</span> Rescan
                   </button>
                 </div>
                 <div className="flex items-center justify-between gap-1.5 flex-wrap">
-                  <p className="text-[10px] text-neutral-500">Click mesh below or in 3D scene to inspect</p>
+                  <p className="text-[10px] text-neutral-400">Click mesh below or in 3D scene to inspect</p>
                   <div className="flex items-center gap-1.5 flex-wrap">
                     {deletedMeshNames.length > 0 && (
                       <button
@@ -11258,7 +12580,7 @@ const ARTest = () => {
                     <button
                       type="button"
                       onClick={() => setIsAddModelModalOpen(true)}
-                      className="px-2 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shadow-xs border border-purple-500 transition-colors"
+                      className="px-2 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shadow-xs border border-purple-400 transition-colors"
                       title="Add External 3D Model (.glb / .gltf from file, URL, or sample library)"
                     >
                       <span className="material-symbols-outlined text-xs">view_in_ar</span>
@@ -11267,7 +12589,7 @@ const ARTest = () => {
                     <button
                       type="button"
                       onClick={() => setGeometryModalOpen(true)}
-                      className="px-2 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shadow-xs border border-sky-500 transition-colors"
+                      className="px-2 py-1 bg-sky-600 hover:bg-sky-500 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shadow-xs border border-sky-400 transition-colors"
                       title="Add 3D Primitives (Cube, Sphere, Cylinder, Torus, etc.)"
                     >
                       <span className="material-symbols-outlined text-xs">deployed_code</span>
@@ -11278,12 +12600,12 @@ const ARTest = () => {
               </div>
 
               {/* Scene Groups & Multi-Select Management Section */}
-              <div className="p-3 bg-neutral-900/70 border border-neutral-800 rounded-xl space-y-3 shadow-xs">
+              <div className="p-3.5 bg-amber-950/20 border border-amber-500/30 rounded-xl space-y-3 shadow-sm">
                 {/* Header with Mode Toggles and New Group Action */}
-                <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center justify-between gap-2 flex-wrap border-b border-amber-500/20 pb-2">
                   <div className="flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-base text-amber-400">folder_copy</span>
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-200">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-amber-200">
                       Scene Groups ({sceneGroups.length})
                     </h3>
                   </div>
@@ -12339,16 +13661,16 @@ const ARTest = () => {
               )}
 
               {/* Additional 3D Primitive Geometries Section */}
-              <div className="pt-2 border-t border-neutral-800">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
+              <div className="p-3.5 bg-teal-950/20 border border-teal-500/30 rounded-xl space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-teal-500/20 pb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-teal-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-teal-400">deployed_code</span>
                     Additional Shapes ({additionalGeometries.length})
                   </h3>
                   <button
                     type="button"
                     onClick={() => setGeometryModalOpen(true)}
-                    className="text-[10px] bg-teal-600/30 hover:bg-teal-600/50 text-teal-300 border border-teal-500/40 rounded px-2 py-0.5 font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                    className="text-[10px] bg-teal-600/30 hover:bg-teal-600/50 text-teal-200 border border-teal-500/40 rounded px-2 py-0.5 font-semibold flex items-center gap-1 cursor-pointer transition-colors"
                   >
                     <span className="material-symbols-outlined text-xs">add</span>
                     Add Shape
@@ -12502,16 +13824,16 @@ const ARTest = () => {
               </div>
 
               {/* External 3D Models Section */}
-              <div className="pt-3 border-t border-neutral-800">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-purple-300 flex items-center gap-1.5">
+              <div className="p-3.5 bg-purple-950/20 border border-purple-500/30 rounded-xl space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-purple-500/20 pb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-purple-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-purple-400">view_in_ar</span>
                     External 3D Models ({customModels.length})
                   </h3>
                   <button
                     type="button"
                     onClick={() => setIsAddModelModalOpen(true)}
-                    className="text-[10px] bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 border border-purple-500/40 rounded px-2 py-0.5 font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                    className="text-[10px] bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-500/40 rounded px-2 py-0.5 font-semibold flex items-center gap-1 cursor-pointer transition-colors"
                   >
                     <span className="material-symbols-outlined text-xs">add</span>
                     Add Model
@@ -12907,15 +14229,15 @@ const ARTest = () => {
           {/* TAB: ADDITIONAL 3D GEOMETRIES (Studio4D4 primitives parity)               */}
           {/* ========================================================================= */}
           {activeTab === 'shapes' && (
-            <div className="space-y-5">
+            <div className="space-y-4">
               {/* Header with Quick Add Action */}
-              <div className="flex flex-col gap-2.5 border-b border-neutral-800 pb-3">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-teal-300 flex items-center gap-1.5">
+              <div className="p-3.5 bg-teal-950/25 border border-teal-500/35 rounded-xl space-y-3 shadow-md">
+                <div className="flex items-center justify-between border-b border-teal-500/20 pb-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-teal-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-teal-400">deployed_code</span>
                     3D Shapes & Geometries ({additionalGeometries.length})
                   </h2>
-                  <span className="text-[10px] text-neutral-500 font-mono">
+                  <span className="text-[10px] text-teal-300 font-mono">
                     {additionalGeometries.length} In Scene
                   </span>
                 </div>
@@ -13039,10 +14361,12 @@ const ARTest = () => {
               ) : (
                 <>
                   {/* Horizontal Shape Selector Chips */}
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] uppercase font-bold text-neutral-400 tracking-wider">
-                      Active Shapes in Scene ({additionalGeometries.length})
-                    </span>
+                  <div className="p-3.5 bg-teal-950/20 border border-teal-500/30 rounded-xl space-y-2.5 shadow-sm">
+                    <div className="flex items-center justify-between border-b border-teal-500/20 pb-2">
+                      <span className="text-[10px] uppercase font-bold text-teal-200 tracking-wider">
+                        Active Shapes in Scene ({additionalGeometries.length})
+                      </span>
+                    </div>
                     <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto pr-1">
                       {additionalGeometries.map((g) => {
                         const isSelected = selectedGeometryId === g.id && selectedTargetType === 'geometry';
@@ -13145,9 +14469,9 @@ const ARTest = () => {
                     const def = GEOMETRY_DEFINITIONS.find((d) => d.id === currentGeom.type);
 
                     return (
-                      <div className="p-3.5 bg-neutral-900/80 rounded-xl border border-teal-500/30 space-y-4 shadow-sm">
+                      <div className="p-3.5 bg-teal-950/20 rounded-xl border border-teal-500/35 space-y-4 shadow-sm">
                         {/* Selected Shape Title & Actions */}
-                        <div className="flex items-center justify-between pb-2 border-b border-neutral-800 gap-2">
+                        <div className="flex items-center justify-between pb-2 border-b border-teal-500/20 gap-2">
                           <div className="flex items-center gap-2 flex-1 min-w-0">
                             <span className="material-symbols-outlined text-lg text-teal-400 shrink-0">
                               {def?.icon || 'deployed_code'}
@@ -14314,7 +15638,7 @@ const ARTest = () => {
                             max={1.0}
                             step={0.05}
                             color="teal"
-                            description="0 = Mirror Gloss, 1 = Matte Chalk"
+                            tooltip={MATERIAL_TOOLTIPS.roughness}
                           />
                           <NumberSliderInput
                             label="Metalness"
@@ -14324,8 +15648,365 @@ const ARTest = () => {
                             max={1.0}
                             step={0.05}
                             color="indigo"
-                            description="0 = Dielectric plastic/wood, 1 = Metallic chrome"
+                            tooltip={MATERIAL_TOOLTIPS.metalness}
                           />
+                          <NumberSliderInput
+                            label="Opacity"
+                            value={currentGeom.opacity ?? 1.0}
+                            onChange={(val) => handleUpdateGeometry(currentGeom.id, { opacity: val, transparent: val < 1.0 })}
+                            min={0.0}
+                            max={1.0}
+                            step={0.05}
+                            color="sky"
+                            precision={2}
+                            tooltip={MATERIAL_TOOLTIPS.opacity}
+                          />
+
+                          {/* Shape HDRI Reflection */}
+                          <NumberSliderInput
+                            label="Environment Reflection (HDRI)"
+                            value={currentGeom.envMapIntensity ?? 1.0}
+                            onChange={(val) => handleUpdateGeometry(currentGeom.id, { envMapIntensity: val })}
+                            min={0.0}
+                            max={3.0}
+                            step={0.1}
+                            color="amber"
+                            precision={2}
+                            tooltip={MATERIAL_TOOLTIPS.hdriIntensity}
+                          />
+
+                          {/* Transmission & Glass Refraction */}
+                          <div className="space-y-2 p-2.5 rounded-lg bg-sky-950/20 border border-sky-500/30">
+                            <span className="text-[10px] uppercase font-bold tracking-wider text-sky-300 flex items-center justify-between">
+                              <span className="flex items-center gap-1.5">
+                                <span className="material-symbols-outlined text-xs">lens_blur</span>
+                                Transmission &amp; Glass
+                              </span>
+                              <InfoTooltip title="Transmission & Glass" text={MATERIAL_TOOLTIPS.transmission} />
+                            </span>
+                            <NumberSliderInput
+                              label="Transmission"
+                              value={currentGeom.transmission ?? 0.0}
+                              onChange={(val) => handleUpdateGeometry(currentGeom.id, { transmission: val, transparent: val > 0 || (currentGeom.opacity ?? 1.0) < 1.0 })}
+                              min={0.0}
+                              max={1.0}
+                              step={0.05}
+                              color="sky"
+                              precision={2}
+                              tooltip={MATERIAL_TOOLTIPS.transmission}
+                            />
+                            {Number(currentGeom.transmission || 0) > 0 && (
+                              <div className="grid grid-cols-2 gap-2 pt-1">
+                                <NumberSliderInput
+                                  label="IOR"
+                                  value={currentGeom.ior ?? 1.5}
+                                  onChange={(val) => handleUpdateGeometry(currentGeom.id, { ior: val })}
+                                  min={1.0}
+                                  max={2.5}
+                                  step={0.05}
+                                  color="sky"
+                                  precision={2}
+                                  tooltip={MATERIAL_TOOLTIPS.ior}
+                                />
+                                <NumberSliderInput
+                                  label="Thickness"
+                                  value={currentGeom.thickness ?? 0.5}
+                                  onChange={(val) => handleUpdateGeometry(currentGeom.id, { thickness: val })}
+                                  min={0.0}
+                                  max={5.0}
+                                  step={0.1}
+                                  color="sky"
+                                  precision={2}
+                                  tooltip={MATERIAL_TOOLTIPS.thickness}
+                                />
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Clearcoat */}
+                          <div className="space-y-2 p-2.5 rounded-lg bg-rose-950/20 border border-rose-500/30">
+                            <span className="text-[10px] uppercase font-bold tracking-wider text-rose-300 flex items-center justify-between">
+                              <span className="flex items-center gap-1.5">
+                                <span className="material-symbols-outlined text-xs">format_paint</span>
+                                Clearcoat Layer
+                              </span>
+                              <InfoTooltip title="Clearcoat Lacquer" text={MATERIAL_TOOLTIPS.clearcoat} />
+                            </span>
+                            <NumberSliderInput
+                              label="Clearcoat"
+                              value={currentGeom.clearcoat ?? 0.0}
+                              onChange={(val) => handleUpdateGeometry(currentGeom.id, { clearcoat: val })}
+                              min={0.0}
+                              max={1.0}
+                              step={0.05}
+                              color="rose"
+                              precision={2}
+                              tooltip={MATERIAL_TOOLTIPS.clearcoat}
+                            />
+                            {Number(currentGeom.clearcoat || 0) > 0 && (
+                              <NumberSliderInput
+                                label="Clearcoat Roughness"
+                                value={currentGeom.clearcoatRoughness ?? 0.1}
+                                onChange={(val) => handleUpdateGeometry(currentGeom.id, { clearcoatRoughness: val })}
+                                min={0.0}
+                                max={1.0}
+                                step={0.05}
+                                color="rose"
+                                precision={2}
+                                tooltip={MATERIAL_TOOLTIPS.clearcoatRoughness}
+                              />
+                            )}
+                          </div>
+
+                          {/* Sheen */}
+                          <div className="space-y-2 p-2.5 rounded-lg bg-emerald-950/20 border border-emerald-500/30">
+                            <span className="text-[10px] uppercase font-bold tracking-wider text-emerald-300 flex items-center justify-between">
+                              <span className="flex items-center gap-1.5">
+                                <span className="material-symbols-outlined text-xs">styler</span>
+                                Sheen (Cloth / Velvet)
+                              </span>
+                              <InfoTooltip title="Sheen Microfibers" text={MATERIAL_TOOLTIPS.sheen} />
+                            </span>
+                            <NumberSliderInput
+                              label="Sheen Intensity"
+                              value={currentGeom.sheen ?? 0.0}
+                              onChange={(val) => handleUpdateGeometry(currentGeom.id, { sheen: val })}
+                              min={0.0}
+                              max={1.0}
+                              step={0.05}
+                              color="emerald"
+                              precision={2}
+                              tooltip={MATERIAL_TOOLTIPS.sheen}
+                            />
+                            {Number(currentGeom.sheen || 0) > 0 && (
+                              <div className="space-y-2 pt-1">
+                                <NumberSliderInput
+                                  label="Sheen Roughness"
+                                  value={currentGeom.sheenRoughness ?? 0.5}
+                                  onChange={(val) => handleUpdateGeometry(currentGeom.id, { sheenRoughness: val })}
+                                  min={0.0}
+                                  max={1.0}
+                                  step={0.05}
+                                  color="emerald"
+                                  precision={2}
+                                  tooltip={MATERIAL_TOOLTIPS.sheenRoughness}
+                                />
+                                <div className="flex items-center justify-between p-2 rounded bg-neutral-900 border border-neutral-800">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-xs font-semibold text-neutral-300">Sheen Tint Color</span>
+                                    <InfoTooltip title="Sheen Color" text={MATERIAL_TOOLTIPS.sheenColor} />
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-mono text-neutral-400">{currentGeom.sheenColor || '#ffffff'}</span>
+                                    <input
+                                      type="color"
+                                      value={currentGeom.sheenColor || '#ffffff'}
+                                      onChange={(e) => handleUpdateGeometry(currentGeom.id, { sheenColor: e.target.value })}
+                                      className="w-8 h-6 bg-transparent cursor-pointer rounded border border-neutral-700"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Normal Map */}
+                          <div className="space-y-2 p-2.5 rounded-lg bg-cyan-950/20 border border-cyan-500/30">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] uppercase font-bold tracking-wider text-cyan-300 flex items-center gap-1.5">
+                                <span className="material-symbols-outlined text-xs">waves</span>
+                                Shape Normal Map
+                                <InfoTooltip title="Normal Map" text={MATERIAL_TOOLTIPS.normalMap} />
+                              </span>
+                              {currentGeom.normalMap && (
+                                <span className="text-[9px] bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
+                                  ACTIVE
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/40 rounded text-xs text-cyan-200 font-medium cursor-pointer transition-colors">
+                                {mapUploadingSlot === `shape-${currentGeom.id}-normalMap` ? (
+                                  <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                                ) : (
+                                  <span className="material-symbols-outlined text-sm">upload_file</span>
+                                )}
+                                <span>{currentGeom.normalMap ? 'Replace Normal Map' : 'Upload Normal Map'}</span>
+                                <input
+                                  type="file"
+                                  accept="image/png,image/jpeg,image/webp,image/jpg"
+                                  onChange={(e) => {
+                                    if (e.target.files && e.target.files[0]) {
+                                      handleApplyShapeMap(currentGeom.id, 'normalMap', e.target.files[0]);
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                  className="hidden"
+                                />
+                              </label>
+                              {currentGeom.normalMap && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveShapeMap(currentGeom.id, 'normalMap')}
+                                  className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                                  title="Remove Normal Map"
+                                >
+                                  <span className="material-symbols-outlined text-sm">close</span>
+                                  <span>Clear</span>
+                                </button>
+                              )}
+                            </div>
+                            <NumberSliderInput
+                              label="Normal Scale (Depth)"
+                              value={currentGeom.normalScale ?? 1.0}
+                              onChange={(val) => handleUpdateGeometry(currentGeom.id, { normalScale: val })}
+                              min={0.0}
+                              max={3.0}
+                              step={0.05}
+                              color="cyan"
+                              precision={2}
+                              tooltip={MATERIAL_TOOLTIPS.normalScale}
+                            />
+                          </div>
+
+                          {/* Displacement Map */}
+                          <div className="space-y-2 p-2.5 rounded-lg bg-amber-950/20 border border-amber-500/30">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] uppercase font-bold tracking-wider text-amber-300 flex items-center gap-1.5">
+                                <span className="material-symbols-outlined text-xs">terrain</span>
+                                Shape Displacement Map
+                                <InfoTooltip title="Displacement Map" text={MATERIAL_TOOLTIPS.displacementMap} />
+                              </span>
+                              {currentGeom.displacementMap && (
+                                <span className="text-[9px] bg-amber-500/30 text-amber-300 border border-amber-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
+                                  ACTIVE
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-amber-950/50 hover:bg-amber-900/60 border border-amber-500/40 rounded text-xs text-amber-200 font-medium cursor-pointer transition-colors">
+                                {mapUploadingSlot === `shape-${currentGeom.id}-displacementMap` ? (
+                                  <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                                ) : (
+                                  <span className="material-symbols-outlined text-sm">upload_file</span>
+                                )}
+                                <span>{currentGeom.displacementMap ? 'Replace Displacement Map' : 'Upload Displacement Map'}</span>
+                                <input
+                                  type="file"
+                                  accept="image/png,image/jpeg,image/webp,image/jpg"
+                                  onChange={(e) => {
+                                    if (e.target.files && e.target.files[0]) {
+                                      handleApplyShapeMap(currentGeom.id, 'displacementMap', e.target.files[0]);
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                  className="hidden"
+                                />
+                              </label>
+                              {currentGeom.displacementMap && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveShapeMap(currentGeom.id, 'displacementMap')}
+                                  className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                                  title="Remove Displacement Map"
+                                >
+                                  <span className="material-symbols-outlined text-sm">close</span>
+                                  <span>Clear</span>
+                                </button>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 pt-1">
+                              <NumberSliderInput
+                                label="Displacement Scale"
+                                value={currentGeom.displacementScale ?? 0.0}
+                                onChange={(val) => handleUpdateGeometry(currentGeom.id, { displacementScale: val })}
+                                min={0.0}
+                                max={1.0}
+                                step={0.01}
+                                color="amber"
+                                precision={2}
+                                tooltip={MATERIAL_TOOLTIPS.displacementScale}
+                              />
+                              <NumberSliderInput
+                                label="Displacement Bias"
+                                value={currentGeom.displacementBias ?? 0.0}
+                                onChange={(val) => handleUpdateGeometry(currentGeom.id, { displacementBias: val })}
+                                min={-0.5}
+                                max={0.5}
+                                step={0.01}
+                                color="amber"
+                                precision={2}
+                                tooltip={MATERIAL_TOOLTIPS.displacementBias}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Emissive Map & Glow */}
+                          <div className="space-y-2 p-2.5 rounded-lg bg-purple-950/20 border border-purple-500/30">
+                            <span className="text-[10px] uppercase font-bold tracking-wider text-purple-300 flex items-center justify-between">
+                              <span className="flex items-center gap-1.5">
+                                <span className="material-symbols-outlined text-xs">wb_incandescent</span>
+                                Emissive Map &amp; Glow
+                              </span>
+                              <InfoTooltip title="Emissive Glow & Maps" text={MATERIAL_TOOLTIPS.emissiveMap} />
+                            </span>
+                            <div className="flex items-center justify-between p-2 rounded bg-neutral-900 border border-neutral-800">
+                              <span className="text-xs font-semibold text-neutral-300">Emissive Color</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-mono text-neutral-400">{currentGeom.emissive || '#000000'}</span>
+                                <input
+                                  type="color"
+                                  value={currentGeom.emissive || '#000000'}
+                                  onChange={(e) => handleUpdateGeometry(currentGeom.id, { emissive: e.target.value })}
+                                  className="w-8 h-6 bg-transparent cursor-pointer rounded border border-neutral-700"
+                                />
+                              </div>
+                            </div>
+                            <NumberSliderInput
+                              label="Emissive Intensity"
+                              value={currentGeom.emissiveIntensity ?? 0.0}
+                              onChange={(val) => handleUpdateGeometry(currentGeom.id, { emissiveIntensity: val })}
+                              min={0.0}
+                              max={5.0}
+                              step={0.1}
+                              color="purple"
+                              precision={1}
+                              tooltip={MATERIAL_TOOLTIPS.emissiveIntensity}
+                            />
+                            <div className="flex items-center gap-2 pt-1">
+                              <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-purple-950/50 hover:bg-purple-900/60 border border-purple-500/40 rounded text-xs text-purple-200 font-medium cursor-pointer transition-colors">
+                                {mapUploadingSlot === `shape-${currentGeom.id}-emissiveMap` ? (
+                                  <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                                ) : (
+                                  <span className="material-symbols-outlined text-sm">upload_file</span>
+                                )}
+                                <span>{currentGeom.emissiveMap ? 'Replace Emissive Map' : 'Upload Emissive Map'}</span>
+                                <input
+                                  type="file"
+                                  accept="image/png,image/jpeg,image/webp,image/jpg"
+                                  onChange={(e) => {
+                                    if (e.target.files && e.target.files[0]) {
+                                      handleApplyShapeMap(currentGeom.id, 'emissiveMap', e.target.files[0]);
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                  className="hidden"
+                                />
+                              </label>
+                              {currentGeom.emissiveMap && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveShapeMap(currentGeom.id, 'emissiveMap')}
+                                  className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                                  title="Remove Emissive Map"
+                                >
+                                  <span className="material-symbols-outlined text-sm">close</span>
+                                  <span>Clear</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
                           <div className="grid grid-cols-2 gap-2 pt-1">
                             <label className="flex items-center gap-2 p-2 rounded bg-neutral-900 border border-neutral-800 text-xs text-neutral-300 cursor-pointer hover:bg-neutral-800/80">
                               <input
@@ -14518,108 +16199,112 @@ const ARTest = () => {
           {activeTab === 'text3d' && (
             <div className="space-y-4">
               {/* Header & Add Button */}
-              <div className="flex items-center justify-between pb-1 border-b border-neutral-800">
-                <div className="flex items-center gap-2">
-                  <span className="material-symbols-outlined text-pink-400 text-base">title</span>
-                  <div>
-                    <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-200">
-                      3D Typography ({custom3DTexts.length})
-                    </h2>
-                    <p className="text-[10px] text-neutral-400">
-                      Extruded 3D WebGL text with custom fonts, bevels, & lighting shaders.
-                    </p>
+              <div className="p-3.5 bg-pink-950/25 border border-pink-500/40 rounded-xl space-y-3 shadow-md">
+                <div className="flex items-center justify-between border-b border-pink-500/20 pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-pink-400 text-base">title</span>
+                    <div>
+                      <h2 className="text-xs font-bold uppercase tracking-wider text-pink-200">
+                        3D Typography ({custom3DTexts.length})
+                      </h2>
+                      <p className="text-[10px] text-neutral-400">
+                        Extruded 3D WebGL text with custom fonts, bevels, & lighting shaders.
+                      </p>
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddTextModalOpen(true)}
+                    className="px-2.5 py-1.5 rounded-lg bg-pink-600 hover:bg-pink-500 text-white text-xs font-bold flex items-center gap-1 shadow-sm transition-all cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-xs">add</span>
+                    Add 3D Text
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setIsAddTextModalOpen(true)}
-                  className="px-2.5 py-1.5 rounded-lg bg-pink-600 hover:bg-pink-500 text-white text-xs font-bold flex items-center gap-1 shadow-sm transition-all"
-                >
-                  <span className="material-symbols-outlined text-xs">add</span>
-                  Add 3D Text
-                </button>
-              </div>
 
-              {/* Quick Preset Buttons */}
-              <div className="grid grid-cols-3 gap-1.5 bg-neutral-950/60 p-1.5 rounded-xl border border-neutral-800/80">
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleAdd3DText({
-                      text: 'STAR weAR',
-                      fontFamily: 'gf:Orbitron:700',
-                      googleFontFamily: 'Orbitron',
-                      googleFontVariant: '700',
-                      fontUrl: buildDeterministicFontsourceTTFUrl('Orbitron', '700'),
-                      color: '#38bdf8',
-                      emissive: '#0284c7',
-                      emissiveIntensity: 0.6,
-                      metalness: 0.8,
-                      roughness: 0.2
-                    })
-                  }
-                  className="p-1.5 rounded bg-neutral-900 hover:bg-pink-950/50 border border-neutral-800 hover:border-pink-500/50 text-[11px] font-semibold text-neutral-300 hover:text-pink-300 text-center transition-all truncate"
-                >
-                  + Cyber Orbitron
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleAdd3DText({
-                      text: '24K GOLD',
-                      fontFamily: 'gf:Cinzel:700',
-                      googleFontFamily: 'Cinzel',
-                      googleFontVariant: '700',
-                      fontUrl: buildDeterministicFontsourceTTFUrl('Cinzel', '700'),
-                      color: '#f59e0b',
-                      emissive: '#78350f',
-                      emissiveIntensity: 0.3,
-                      metalness: 0.95,
-                      roughness: 0.15
-                    })
-                  }
-                  className="p-1.5 rounded bg-neutral-900 hover:bg-amber-950/50 border border-neutral-800 hover:border-amber-500/50 text-[11px] font-semibold text-neutral-300 hover:text-amber-300 text-center transition-all truncate"
-                >
-                  + 24K Cinzel Gold
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleAdd3DText({
-                      text: 'LIMITED EDITION',
-                      fontFamily: 'gf:Bebas Neue:400',
-                      googleFontFamily: 'Bebas Neue',
-                      googleFontVariant: '400',
-                      fontUrl: buildDeterministicFontsourceTTFUrl('Bebas Neue', '400'),
-                      color: '#f8fafc',
-                      emissive: '#000000',
-                      emissiveIntensity: 0.0,
-                      metalness: 0.3,
-                      roughness: 0.3,
-                      size: 0.28,
-                      depth: 0.05
-                    })
-                  }
-                  className="p-1.5 rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-600 text-[11px] font-semibold text-neutral-300 hover:text-white text-center transition-all truncate"
-                >
-                  + Bebas Label
-                </button>
+                {/* Quick Preset Buttons */}
+                <div className="grid grid-cols-3 gap-1.5 bg-neutral-950/60 p-1.5 rounded-xl border border-pink-500/20">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleAdd3DText({
+                        text: 'STAR weAR',
+                        fontFamily: 'gf:Orbitron:700',
+                        googleFontFamily: 'Orbitron',
+                        googleFontVariant: '700',
+                        fontUrl: buildDeterministicFontsourceTTFUrl('Orbitron', '700'),
+                        color: '#38bdf8',
+                        emissive: '#0284c7',
+                        emissiveIntensity: 0.6,
+                        metalness: 0.8,
+                        roughness: 0.2
+                      })
+                    }
+                    className="p-1.5 rounded bg-neutral-900 hover:bg-pink-950/50 border border-neutral-800 hover:border-pink-500/50 text-[11px] font-semibold text-neutral-300 hover:text-pink-300 text-center transition-all truncate"
+                  >
+                    + Cyber Orbitron
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleAdd3DText({
+                        text: '24K GOLD',
+                        fontFamily: 'gf:Cinzel:700',
+                        googleFontFamily: 'Cinzel',
+                        googleFontVariant: '700',
+                        fontUrl: buildDeterministicFontsourceTTFUrl('Cinzel', '700'),
+                        color: '#f59e0b',
+                        emissive: '#78350f',
+                        emissiveIntensity: 0.3,
+                        metalness: 0.95,
+                        roughness: 0.15
+                      })
+                    }
+                    className="p-1.5 rounded bg-neutral-900 hover:bg-amber-950/50 border border-neutral-800 hover:border-amber-500/50 text-[11px] font-semibold text-neutral-300 hover:text-amber-300 text-center transition-all truncate"
+                  >
+                    + 24K Cinzel Gold
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleAdd3DText({
+                        text: 'LIMITED EDITION',
+                        fontFamily: 'gf:Bebas Neue:400',
+                        googleFontFamily: 'Bebas Neue',
+                        googleFontVariant: '400',
+                        fontUrl: buildDeterministicFontsourceTTFUrl('Bebas Neue', '400'),
+                        color: '#f8fafc',
+                        emissive: '#000000',
+                        emissiveIntensity: 0.0,
+                        metalness: 0.3,
+                        roughness: 0.3,
+                        size: 0.28,
+                        depth: 0.05
+                      })
+                    }
+                    className="p-1.5 rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-600 text-[11px] font-semibold text-neutral-300 hover:text-white text-center transition-all truncate"
+                  >
+                    + Bebas Label
+                  </button>
+                </div>
               </div>
 
               {/* 3D Texts List */}
               {custom3DTexts.length === 0 ? (
-                <div className="p-6 text-center rounded-xl bg-neutral-950/50 border border-neutral-800/80 space-y-2">
+                <div className="p-6 text-center rounded-xl bg-pink-950/10 border border-pink-500/20 space-y-2">
                   <span className="material-symbols-outlined text-2xl text-pink-400">text_fields</span>
                   <p className="text-xs font-semibold text-neutral-300">No 3D text in this scene yet</p>
-                  <p className="text-[11px] text-neutral-500 max-w-xs mx-auto">
+                  <p className="text-[11px] text-neutral-400 max-w-xs mx-auto">
                     Click '+ Add 3D Text' to insert extruded 3D typography into your scene or directly on your target marker.
                   </p>
                 </div>
               ) : (
-                <div className="space-y-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 px-0.5">
-                    Scene 3D Text Layers ({custom3DTexts.length})
-                  </span>
+                <div className="p-3.5 bg-pink-950/20 border border-pink-500/30 rounded-xl space-y-2.5 shadow-sm">
+                  <div className="flex items-center justify-between border-b border-pink-500/20 pb-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-pink-200">
+                      Scene 3D Text Layers ({custom3DTexts.length})
+                    </span>
+                  </div>
                   <div className="space-y-1 max-h-48 overflow-y-auto pr-0.5">
                     {custom3DTexts.map((textItem) => {
                       const isSelected = selectedText3DId === textItem.id && selectedTargetType === 'text3d';
@@ -14734,8 +16419,8 @@ const ARTest = () => {
                 if (!selectedText) return null;
 
                 return (
-                  <div className="space-y-4 pt-3 border-t border-neutral-800/80">
-                    <div className="flex items-center justify-between pb-1 border-b border-pink-500/30">
+                  <div className="p-3.5 bg-pink-950/20 border border-pink-500/35 rounded-xl space-y-4 shadow-sm">
+                    <div className="flex items-center justify-between pb-2 border-b border-pink-500/20">
                       <div className="flex items-center gap-1.5">
                         <span className="material-symbols-outlined text-pink-400 text-sm">edit_note</span>
                         <span className="text-xs font-bold uppercase tracking-wider text-pink-200">
@@ -15176,17 +16861,17 @@ const ARTest = () => {
           {/* TAB 3: LIGHTING CONTROLS                                                  */}
           {/* ========================================================================= */}
           {activeTab === 'lighting' && (
-            <div className="space-y-5">
+            <div className="space-y-4">
               {/* Live Render Lighting Parity Switcher & Exposure Calibration Card */}
-              <div className="p-3 rounded-xl bg-gradient-to-br from-neutral-900 via-indigo-950/30 to-amber-950/20 border border-indigo-500/40 space-y-3 shadow-lg">
-                <div className="flex items-center justify-between gap-2">
+              <div className="p-3.5 rounded-xl bg-indigo-950/25 border border-indigo-500/40 space-y-3 shadow-md">
+                <div className="flex items-center justify-between gap-2 border-b border-indigo-500/20 pb-2">
                   <div className="flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-amber-400">visibility</span>
-                    <span className="text-xs font-bold uppercase tracking-wider text-white">
+                    <span className="text-xs font-bold uppercase tracking-wider text-indigo-200">
                       Render Lighting Preview
                     </span>
                   </div>
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/60 border border-neutral-700 text-neutral-300">
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/60 border border-indigo-500/30 text-indigo-300">
                     ACES Filmic • {Number(exposure).toFixed(2)}x
                   </span>
                 </div>
@@ -15295,11 +16980,11 @@ const ARTest = () => {
               </div>
 
               {/* Custom Multi-Source Lighting Section */}
-              <div className="space-y-3 pb-4 border-b border-neutral-800">
-                <div className="flex items-center justify-between pb-1 border-b border-neutral-800">
+              <div className="p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between pb-2 border-b border-amber-500/20">
                   <div className="flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-amber-400">light</span>
-                    <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-200">
+                    <h2 className="text-xs font-bold uppercase tracking-wider text-amber-200">
                       Dynamic Light Sources ({customLights.length})
                     </h2>
                   </div>
@@ -15746,8 +17431,8 @@ const ARTest = () => {
               </div>
 
               {/* Ambient Environment Light */}
-              <div className="space-y-3">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
+              <div className="p-3.5 rounded-xl bg-yellow-950/20 border border-amber-400/30 space-y-3 shadow-sm">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-amber-200 border-b border-amber-400/20 pb-2 flex items-center gap-1.5">
                   <span className="material-symbols-outlined text-sm text-amber-400">wb_sunny</span>
                   Ambient Environment Light
                 </h2>
@@ -15777,9 +17462,10 @@ const ARTest = () => {
                 />
               </div>
 
-              <div className="space-y-3 pt-3 border-t border-neutral-800/80">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-sm text-amber-400">flashlight_on</span>
+              {/* Directional Key Light (Source 1) */}
+              <div className="p-3.5 rounded-xl bg-orange-950/20 border border-orange-500/30 space-y-3 shadow-sm">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-orange-200 border-b border-orange-500/20 pb-2 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-orange-400">flashlight_on</span>
                   Directional Key Light (Source 1)
                 </h2>
                 <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
@@ -15817,8 +17503,9 @@ const ARTest = () => {
                 </div>
               </div>
 
-              <div className="space-y-3 pt-3 border-t border-neutral-800/80">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
+              {/* Directional Fill Light (Source 2) */}
+              <div className="p-3.5 rounded-xl bg-sky-950/20 border border-sky-500/30 space-y-3 shadow-sm">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-sky-200 border-b border-sky-500/20 pb-2 flex items-center gap-1.5">
                   <span className="material-symbols-outlined text-sm text-sky-400">highlight</span>
                   Directional Fill Light (Source 2)
                 </h2>
@@ -15857,8 +17544,9 @@ const ARTest = () => {
                 </div>
               </div>
 
-              <div className="space-y-3 pt-3 border-t border-neutral-800/80">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
+              {/* Specular Rim Light (Source 3) */}
+              <div className="p-3.5 rounded-xl bg-purple-950/20 border border-purple-500/30 space-y-3 shadow-sm">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-purple-200 border-b border-purple-500/20 pb-2 flex items-center gap-1.5">
                   <span className="material-symbols-outlined text-sm text-indigo-400">flare</span>
                   Specular Rim Light (Source 3)
                 </h2>
@@ -15923,8 +17611,8 @@ const ARTest = () => {
                 </div>
               )}
               {/* Target Object / Mesh Selector */}
-              <div className="flex items-center justify-between p-2.5 rounded-lg bg-neutral-900 border border-neutral-800">
-                <span className="text-xs font-semibold text-neutral-300 flex items-center gap-1.5">
+              <div className="flex items-center justify-between p-3.5 rounded-xl bg-indigo-950/20 border border-indigo-500/30 shadow-sm">
+                <span className="text-xs font-semibold text-indigo-200 flex items-center gap-1.5">
                   <span className="material-symbols-outlined text-sm text-indigo-400">category</span>
                   Target Object:
                 </span>
@@ -15943,18 +17631,21 @@ const ARTest = () => {
               </div>
 
               {selectedMesh ? (
-                <div className="p-3 bg-indigo-950/40 border border-indigo-500/40 rounded-lg space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+                <div className="p-3.5 bg-emerald-950/20 border border-emerald-500/30 rounded-xl space-y-3 shadow-sm">
+                  <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                    <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
                       <span className="material-symbols-outlined text-sm">texture</span>
                       Mesh Material: {selectedMesh.name}
                     </span>
-                    <span className="text-[10px] font-mono text-indigo-400">{selectedMesh.materialName}</span>
+                    <span className="text-[10px] font-mono text-emerald-400">{selectedMesh.materialName}</span>
                   </div>
 
                   {/* Individual Mesh Color Tint */}
                   <div className="flex items-center justify-between p-2 rounded bg-neutral-900 border border-neutral-800">
-                    <span className="text-xs font-semibold text-neutral-300">Color Tint</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-semibold text-neutral-300">Color Tint</span>
+                      <InfoTooltip title="Base Color Tint" text="Multiplier tint applied over the mesh's diffuse/albedo texture." />
+                    </div>
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-mono text-neutral-400">{selectedMesh.material.color}</span>
                       <input
@@ -15975,6 +17666,7 @@ const ARTest = () => {
                     step={0.05}
                     color="amber"
                     precision={2}
+                    tooltip={MATERIAL_TOOLTIPS.metalness}
                   />
 
                   <NumberSliderInput
@@ -15986,6 +17678,7 @@ const ARTest = () => {
                     step={0.05}
                     color="amber"
                     precision={2}
+                    tooltip={MATERIAL_TOOLTIPS.roughness}
                   />
 
                   <NumberSliderInput
@@ -15997,7 +17690,353 @@ const ARTest = () => {
                     step={0.05}
                     color="indigo"
                     precision={2}
+                    tooltip={MATERIAL_TOOLTIPS.opacity}
                   />
+
+                  {/* Mesh HDRI Environment Reflection */}
+                  <NumberSliderInput
+                    label="Mesh Environment Reflection (HDRI)"
+                    value={selectedMesh.material?.envMapIntensity ?? 1.0}
+                    onChange={(val) => handleMeshMaterialChange('envMapIntensity', val)}
+                    min={0.0}
+                    max={3.0}
+                    step={0.05}
+                    color="cyan"
+                    precision={2}
+                    tooltip={MATERIAL_TOOLTIPS.hdriIntensity}
+                  />
+
+                  {/* Transmission (Glass Refraction) */}
+                  <div className="space-y-2 p-2.5 rounded-lg bg-sky-950/20 border border-sky-500/30">
+                    <span className="text-[10px] uppercase font-bold tracking-wider text-sky-300 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-xs">lens_blur</span>
+                        Transmission &amp; Glass
+                      </span>
+                      <InfoTooltip title="Transmission & Glass" text={MATERIAL_TOOLTIPS.transmission} />
+                    </span>
+                    <NumberSliderInput
+                      label="Mesh Transmission"
+                      value={selectedMesh.material?.transmission ?? 0.0}
+                      onChange={(val) => handleMeshMaterialChange('transmission', val)}
+                      min={0.0}
+                      max={1.0}
+                      step={0.05}
+                      color="sky"
+                      precision={2}
+                      tooltip={MATERIAL_TOOLTIPS.transmission}
+                    />
+                    {(Number(selectedMesh.material?.transmission || 0) > 0) && (
+                      <div className="grid grid-cols-2 gap-2 pt-1">
+                        <NumberSliderInput
+                          label="Index of Refraction (IOR)"
+                          value={selectedMesh.material?.ior ?? 1.5}
+                          onChange={(val) => handleMeshMaterialChange('ior', val)}
+                          min={1.0}
+                          max={2.5}
+                          step={0.05}
+                          color="sky"
+                          precision={2}
+                          tooltip={MATERIAL_TOOLTIPS.ior}
+                        />
+                        <NumberSliderInput
+                          label="Thickness"
+                          value={selectedMesh.material?.thickness ?? 0.5}
+                          onChange={(val) => handleMeshMaterialChange('thickness', val)}
+                          min={0.0}
+                          max={5.0}
+                          step={0.1}
+                          color="sky"
+                          precision={2}
+                          tooltip={MATERIAL_TOOLTIPS.thickness}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Clearcoat (Car Paint / Lacquer) */}
+                  <div className="space-y-2 p-2.5 rounded-lg bg-rose-950/20 border border-rose-500/30">
+                    <span className="text-[10px] uppercase font-bold tracking-wider text-rose-300 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-xs">format_paint</span>
+                        Clearcoat
+                      </span>
+                      <InfoTooltip title="Clearcoat Lacquer" text={MATERIAL_TOOLTIPS.clearcoat} />
+                    </span>
+                    <NumberSliderInput
+                      label="Clearcoat Intensity"
+                      value={selectedMesh.material?.clearcoat ?? 0.0}
+                      onChange={(val) => handleMeshMaterialChange('clearcoat', val)}
+                      min={0.0}
+                      max={1.0}
+                      step={0.05}
+                      color="rose"
+                      precision={2}
+                      tooltip={MATERIAL_TOOLTIPS.clearcoat}
+                    />
+                    {(Number(selectedMesh.material?.clearcoat || 0) > 0) && (
+                      <NumberSliderInput
+                        label="Clearcoat Roughness"
+                        value={selectedMesh.material?.clearcoatRoughness ?? 0.1}
+                        onChange={(val) => handleMeshMaterialChange('clearcoatRoughness', val)}
+                        min={0.0}
+                        max={1.0}
+                        step={0.05}
+                        color="rose"
+                        precision={2}
+                        tooltip={MATERIAL_TOOLTIPS.clearcoatRoughness}
+                      />
+                    )}
+                  </div>
+
+                  {/* Sheen (Cloth / Velvet Microfibers) */}
+                  <div className="space-y-2 p-2.5 rounded-lg bg-emerald-950/20 border border-emerald-500/30">
+                    <span className="text-[10px] uppercase font-bold tracking-wider text-emerald-300 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-xs">styler</span>
+                        Sheen
+                      </span>
+                      <InfoTooltip title="Sheen Microfibers" text={MATERIAL_TOOLTIPS.sheen} />
+                    </span>
+                    <NumberSliderInput
+                      label="Sheen Intensity"
+                      value={selectedMesh.material?.sheen ?? 0.0}
+                      onChange={(val) => handleMeshMaterialChange('sheen', val)}
+                      min={0.0}
+                      max={1.0}
+                      step={0.05}
+                      color="emerald"
+                      precision={2}
+                      tooltip={MATERIAL_TOOLTIPS.sheen}
+                    />
+                    {(Number(selectedMesh.material?.sheen || 0) > 0) && (
+                      <div className="space-y-2 pt-1">
+                        <NumberSliderInput
+                          label="Sheen Roughness"
+                          value={selectedMesh.material?.sheenRoughness ?? 0.5}
+                          onChange={(val) => handleMeshMaterialChange('sheenRoughness', val)}
+                          min={0.0}
+                          max={1.0}
+                          step={0.05}
+                          color="emerald"
+                          precision={2}
+                          tooltip={MATERIAL_TOOLTIPS.sheenRoughness}
+                        />
+                        <div className="flex items-center justify-between p-2 rounded bg-neutral-900 border border-neutral-800">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-semibold text-neutral-300">Sheen Tint Color</span>
+                            <InfoTooltip title="Sheen Color" text={MATERIAL_TOOLTIPS.sheenColor} />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-mono text-neutral-400">{selectedMesh.material?.sheenColor || '#ffffff'}</span>
+                            <input
+                              type="color"
+                              value={selectedMesh.material?.sheenColor || '#ffffff'}
+                              onChange={(e) => handleMeshMaterialChange('sheenColor', e.target.value)}
+                              className="w-8 h-6 bg-transparent cursor-pointer rounded border border-neutral-700"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Normal Map */}
+                  <div className="space-y-2 p-2.5 rounded-lg bg-cyan-950/20 border border-cyan-500/30">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-cyan-300 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-xs">waves</span>
+                        Normal Map
+                        <InfoTooltip title="Normal Map" text={MATERIAL_TOOLTIPS.normalMap} />
+                      </span>
+                      {selectedMesh.material?.normalMapUrl && (
+                        <span className="text-[9px] bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
+                          ACTIVE
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/40 rounded text-xs text-cyan-200 font-medium cursor-pointer transition-colors">
+                        {mapUploadingSlot === `mesh-${selectedMesh.uuid}-normalMap` ? (
+                          <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                        ) : (
+                          <span className="material-symbols-outlined text-sm">upload_file</span>
+                        )}
+                        <span>{selectedMesh.material?.normalMapUrl ? 'Replace Normal Map' : 'Upload Normal Map'}</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/jpg"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleApplyMeshMap(selectedMesh, 'normalMap', e.target.files[0]);
+                              e.target.value = '';
+                            }
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+                      {selectedMesh.material?.normalMapUrl && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveMeshMap(selectedMesh.uuid, selectedMesh.name, 'normalMap')}
+                          className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                          title="Remove Normal Map"
+                        >
+                          <span className="material-symbols-outlined text-sm">close</span>
+                          <span>Clear</span>
+                        </button>
+                      )}
+                    </div>
+                    <NumberSliderInput
+                      label="Normal Map Scale (Depth)"
+                      value={selectedMesh.material?.normalScale ?? 1.0}
+                      onChange={(val) => handleMeshMaterialChange('normalScale', val)}
+                      min={0.0}
+                      max={3.0}
+                      step={0.05}
+                      color="cyan"
+                      precision={2}
+                      tooltip={MATERIAL_TOOLTIPS.normalScale}
+                    />
+                  </div>
+
+                  {/* Displacement Map */}
+                  <div className="space-y-2 p-2.5 rounded-lg bg-amber-950/20 border border-amber-500/30">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-amber-300 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-xs">terrain</span>
+                        Displacement Map
+                        <InfoTooltip title="Displacement Map" text={MATERIAL_TOOLTIPS.displacementMap} />
+                      </span>
+                      {selectedMesh.material?.displacementMapUrl && (
+                        <span className="text-[9px] bg-amber-500/30 text-amber-300 border border-amber-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
+                          ACTIVE
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-amber-950/50 hover:bg-amber-900/60 border border-amber-500/40 rounded text-xs text-amber-200 font-medium cursor-pointer transition-colors">
+                        {mapUploadingSlot === `mesh-${selectedMesh.uuid}-displacementMap` ? (
+                          <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                        ) : (
+                          <span className="material-symbols-outlined text-sm">upload_file</span>
+                        )}
+                        <span>{selectedMesh.material?.displacementMapUrl ? 'Replace Displacement Map' : 'Upload Displacement Map'}</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/jpg"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleApplyMeshMap(selectedMesh, 'displacementMap', e.target.files[0]);
+                              e.target.value = '';
+                            }
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+                      {selectedMesh.material?.displacementMapUrl && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveMeshMap(selectedMesh.uuid, selectedMesh.name, 'displacementMap')}
+                          className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                          title="Remove Displacement Map"
+                        >
+                          <span className="material-symbols-outlined text-sm">close</span>
+                          <span>Clear</span>
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <NumberSliderInput
+                        label="Displacement Scale"
+                        value={selectedMesh.material?.displacementScale ?? 0.0}
+                        onChange={(val) => handleMeshMaterialChange('displacementScale', val)}
+                        min={0.0}
+                        max={1.0}
+                        step={0.01}
+                        color="amber"
+                        precision={2}
+                        tooltip={MATERIAL_TOOLTIPS.displacementScale}
+                      />
+                      <NumberSliderInput
+                        label="Displacement Bias"
+                        value={selectedMesh.material?.displacementBias ?? 0.0}
+                        onChange={(val) => handleMeshMaterialChange('displacementBias', val)}
+                        min={-0.5}
+                        max={0.5}
+                        step={0.01}
+                        color="amber"
+                        precision={2}
+                        tooltip={MATERIAL_TOOLTIPS.displacementBias}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Emissive Maps & Glow */}
+                  <div className="space-y-2 p-2.5 rounded-lg bg-purple-950/20 border border-purple-500/30">
+                    <span className="text-[10px] uppercase font-bold tracking-wider text-purple-300 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-xs">wb_incandescent</span>
+                        Emissive Map &amp; Glow
+                      </span>
+                      <InfoTooltip title="Emissive Glow & Maps" text={MATERIAL_TOOLTIPS.emissiveMap} />
+                    </span>
+                    <div className="flex items-center justify-between p-2 rounded bg-neutral-900 border border-neutral-800">
+                      <span className="text-xs font-semibold text-neutral-300">Emissive Color</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono text-neutral-400">{selectedMesh.material?.emissive || '#000000'}</span>
+                        <input
+                          type="color"
+                          value={selectedMesh.material?.emissive || '#000000'}
+                          onChange={(e) => handleMeshMaterialChange('emissive', e.target.value)}
+                          className="w-8 h-6 bg-transparent cursor-pointer rounded border border-neutral-700"
+                        />
+                      </div>
+                    </div>
+                    <NumberSliderInput
+                      label="Emissive Intensity"
+                      value={selectedMesh.material?.emissiveIntensity ?? 0.0}
+                      onChange={(val) => handleMeshMaterialChange('emissiveIntensity', val)}
+                      min={0.0}
+                      max={5.0}
+                      step={0.1}
+                      color="purple"
+                      precision={1}
+                      tooltip={MATERIAL_TOOLTIPS.emissiveIntensity}
+                    />
+                    <div className="flex items-center gap-2 pt-1">
+                      <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-purple-950/50 hover:bg-purple-900/60 border border-purple-500/40 rounded text-xs text-purple-200 font-medium cursor-pointer transition-colors">
+                        {mapUploadingSlot === `mesh-${selectedMesh.uuid}-emissiveMap` ? (
+                          <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                        ) : (
+                          <span className="material-symbols-outlined text-sm">upload_file</span>
+                        )}
+                        <span>{selectedMesh.material?.emissiveMapUrl ? 'Replace Emissive Map' : 'Upload Emissive Map'}</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/jpg"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleApplyMeshMap(selectedMesh, 'emissiveMap', e.target.files[0]);
+                              e.target.value = '';
+                            }
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+                      {selectedMesh.material?.emissiveMapUrl && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveMeshMap(selectedMesh.uuid, selectedMesh.name, 'emissiveMap')}
+                          className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                          title="Remove Emissive Map"
+                        >
+                          <span className="material-symbols-outlined text-sm">close</span>
+                          <span>Clear</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
 
                   {/* UV Map / Image Texture Material */}
                   <div className="p-2.5 rounded bg-neutral-900 border border-neutral-800 space-y-2">
@@ -16047,10 +18086,10 @@ const ARTest = () => {
                   </div>
 
                   {/* Material Placement, Orientation & Size Controls */}
-                  <div className="p-3 rounded-lg bg-neutral-900/90 border border-indigo-500/40 space-y-3">
-                    <div className="flex items-center justify-between pb-1.5 border-b border-neutral-800">
-                      <span className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
-                        <span className="material-symbols-outlined text-sm text-indigo-400">transform</span>
+                  <div className="p-3.5 rounded-xl bg-purple-950/20 border border-purple-500/30 space-y-3 shadow-sm">
+                    <div className="flex items-center justify-between pb-2 border-b border-purple-500/20">
+                      <span className="text-xs font-bold text-purple-200 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-sm text-purple-400">transform</span>
                         Material Placement, Orientation & Size
                       </span>
                       <button
@@ -16220,10 +18259,170 @@ const ARTest = () => {
                   </div>
                 </div>
               ) : (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between p-3 rounded-lg bg-emerald-950/30 border border-emerald-500/40">
+                <div className="p-3.5 bg-emerald-950/20 border border-emerald-500/30 rounded-xl space-y-3.5 shadow-sm">
+                  {/* Dedicated HDRI Environment & Surface Reflections Control Card */}
+                  <div className="p-3.5 rounded-xl bg-gradient-to-b from-cyan-950/30 via-neutral-900/90 to-amber-950/20 border border-cyan-500/30 space-y-3.5 shadow-sm">
+                    <div className="flex items-center justify-between border-b border-cyan-500/20 pb-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-sm text-cyan-400">hdr_on</span>
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-200">HDRI Environment &amp; Surface Reflections</h3>
+                      </div>
+                      <InfoTooltip title="HDRI Environment Lighting" text={MATERIAL_TOOLTIPS.hdriPreset} />
+                    </div>
+
+                    {/* HDRI Environment Preset Dropdown */}
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/80 border border-neutral-800">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-semibold text-neutral-300">HDRI Preset</span>
+                        <InfoTooltip title="HDRI Environment Preset" text={MATERIAL_TOOLTIPS.hdriPreset} />
+                      </div>
+                      <select
+                        value={envPreset}
+                        onChange={(e) => setEnvPreset(e.target.value)}
+                        className="text-xs bg-neutral-950 border border-neutral-700 text-neutral-200 rounded px-2.5 py-1 outline-none focus:border-cyan-500 cursor-pointer"
+                      >
+                        <option value="none">None (Pure Direct Lights)</option>
+                        <option value="studio-chrome">Studio Chrome (Mirror)</option>
+                        <option value="city">City Skyline (Warm/Cyan)</option>
+                        <option value="sunset">Golden Sunset (Amber/Violet)</option>
+                        <option value="forest">Forest Canopy (Emerald/Earth)</option>
+                        <option value="cyber">Cyberpunk (Neon Magenta/Cyan)</option>
+                        <option value="night">Night City (Deep Glow)</option>
+                        <option value="neutral">Neutral Daylight</option>
+                      </select>
+                    </div>
+
+                    {/* Custom HDRI 360 Panorama Upload */}
+                    <div className="space-y-1.5 p-2 rounded-lg bg-black/40 border border-neutral-800">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] font-semibold text-neutral-300">Custom HDRI Panorama (.hdr/.exr/.jpg/.png)</span>
+                          <InfoTooltip title="Custom HDRI Panorama" text={MATERIAL_TOOLTIPS.customHdri} />
+                        </div>
+                        {envImage && (
+                          <span className="text-[9px] bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
+                            ACTIVE
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/40 rounded text-xs text-cyan-200 font-medium cursor-pointer transition-colors">
+                          {mapUploadingSlot === 'global-envImage' ? (
+                            <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                          ) : (
+                            <span className="material-symbols-outlined text-sm">upload_file</span>
+                          )}
+                          <span>{envImage ? 'Replace HDRI Panorama' : 'Upload Equirectangular HDRI'}</span>
+                          <input
+                            type="file"
+                            accept=".hdr,.exr,image/jpeg,image/png,image/webp"
+                            onChange={(e) => {
+                              if (e.target.files && e.target.files[0]) {
+                                handleApplyGlobalMap('envImage', e.target.files[0]);
+                                e.target.value = '';
+                              }
+                            }}
+                            className="hidden"
+                          />
+                        </label>
+                        {envImage && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEnvImage('');
+                              handleRemoveGlobalMap('envImage');
+                            }}
+                            className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                            title="Clear Custom HDRI"
+                          >
+                            <span className="material-symbols-outlined text-sm">close</span>
+                            <span>Clear</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Environment Reflection Intensity */}
+                    <NumberSliderInput
+                      label="HDRI Reflection Intensity"
+                      value={envIntensity}
+                      onChange={setEnvIntensity}
+                      min={0.0}
+                      max={3.0}
+                      step={0.05}
+                      color="cyan"
+                      precision={2}
+                      resetValue={1.0}
+                      tooltip={MATERIAL_TOOLTIPS.hdriIntensity}
+                    />
+
+                    {/* HDRI Turntable Rotation Slider (0 to 360 degrees) */}
+                    <NumberSliderInput
+                      label="HDRI Turntable Rotation (°)"
+                      value={envRotation}
+                      onChange={setEnvRotation}
+                      min={0}
+                      max={360}
+                      step={5}
+                      color="amber"
+                      precision={0}
+                      resetValue={0}
+                      tooltip={MATERIAL_TOOLTIPS.hdriRotation}
+                      description="Rotates the 360° environment map in real time across shiny & specular surfaces"
+                    />
+
+                    {/* 360 Background View Toggle & Blur */}
+                    <div className="space-y-2 p-2 rounded-lg bg-black/40 border border-neutral-800">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-semibold text-neutral-300">Show 360° Panorama as Background</span>
+                          <InfoTooltip title="360° Background Visibility" text={MATERIAL_TOOLTIPS.hdriBackground} />
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={envShowBackground}
+                          onChange={(e) => setEnvShowBackground(e.target.checked)}
+                          className="w-4 h-4 accent-cyan-500 cursor-pointer"
+                        />
+                      </div>
+                      {envShowBackground && (
+                        <NumberSliderInput
+                          label="Background Backdrop Blur"
+                          value={envBackgroundBlur}
+                          onChange={setEnvBackgroundBlur}
+                          min={0.0}
+                          max={1.0}
+                          step={0.05}
+                          color="sky"
+                          precision={2}
+                          resetValue={0.0}
+                          tooltip="Blurs the 360° background environment sphere so the product remains the focal point while still reflecting sharp highlights."
+                        />
+                      )}
+                    </div>
+
+                    {/* Global Surface HDRI Reflection Intensity */}
+                    <NumberSliderInput
+                      label="Global Material Env Reflection Intensity"
+                      value={matEnvMapIntensity}
+                      onChange={setMatEnvMapIntensity}
+                      min={0.0}
+                      max={3.0}
+                      step={0.05}
+                      color="amber"
+                      precision={2}
+                      resetValue={1.0}
+                      tooltip={MATERIAL_TOOLTIPS.hdriIntensity}
+                      description="Multiplies specular environment bounce across all model materials"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-emerald-950/40 border border-emerald-500/40">
                     <div className="flex flex-col">
-                      <span className="text-xs font-bold text-emerald-300">Preserve GLTF PBR Maps</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-emerald-300">Preserve GLTF PBR Maps</span>
+                        <InfoTooltip title="Native PBR Maps" text="When checked, textures, roughness, and metalness maps embedded in the GLTF file are respected without manual override." />
+                      </div>
                       <span className="text-[10px] text-emerald-400/80">Uses embedded textures, roughness, and metalness</span>
                     </div>
                     <input
@@ -16246,7 +18445,10 @@ const ARTest = () => {
 
                   {!useNativePBR ? (
                     <div className="space-y-3 p-3 bg-neutral-900/80 border border-neutral-800 rounded-lg">
-                      <span className="text-[10px] uppercase font-bold tracking-wider text-amber-400">Global PBR Overrides</span>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase font-bold tracking-wider text-amber-400">Global PBR Overrides</span>
+                        <InfoTooltip title="Global PBR Overrides" text="Force-overrides surface metalness and roughness uniformly across all model submeshes." />
+                      </div>
                       <NumberSliderInput
                         label="Surface Metalness"
                         value={matMetalness >= 0 ? matMetalness : 0.0}
@@ -16257,6 +18459,7 @@ const ARTest = () => {
                         color="amber"
                         precision={2}
                         resetValue={0.0}
+                        tooltip={MATERIAL_TOOLTIPS.metalness}
                       />
                       <NumberSliderInput
                         label="Surface Roughness"
@@ -16268,6 +18471,7 @@ const ARTest = () => {
                         color="amber"
                         precision={2}
                         resetValue={1.0}
+                        tooltip={MATERIAL_TOOLTIPS.roughness}
                       />
                     </div>
                   ) : (
@@ -16276,7 +18480,11 @@ const ARTest = () => {
                     </div>
                   )}
 
-                  <div className="space-y-3 pt-2">
+                  <div className="space-y-3 p-3 rounded-lg bg-purple-950/20 border border-purple-500/30">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-purple-300">Emissive Surface Glow &amp; Map</span>
+                      <InfoTooltip title="Emissive Glow & Maps" text={MATERIAL_TOOLTIPS.emissiveMap} />
+                    </div>
                     <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
                       <span className="text-xs font-semibold text-neutral-300">Emissive Glow Color</span>
                       <div className="flex items-center gap-2">
@@ -16299,10 +18507,323 @@ const ARTest = () => {
                       color="purple"
                       precision={1}
                       resetValue={0.0}
+                      tooltip={MATERIAL_TOOLTIPS.emissiveIntensity}
+                    />
+                    <div className="flex items-center gap-2 pt-1 border-t border-purple-500/20">
+                      <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-purple-950/50 hover:bg-purple-900/60 border border-purple-500/40 rounded text-xs text-purple-200 font-medium cursor-pointer transition-colors">
+                        {mapUploadingSlot === 'global-emissiveMap' ? (
+                          <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                        ) : (
+                          <span className="material-symbols-outlined text-sm">upload_file</span>
+                        )}
+                        <span>{matEmissiveMapUrl ? 'Replace Global Emissive Map' : 'Upload Global Emissive Map'}</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/jpg"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleApplyGlobalMap('emissiveMap', e.target.files[0]);
+                              e.target.value = '';
+                            }
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+                      {matEmissiveMapUrl && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveGlobalMap('emissiveMap')}
+                          className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                          title="Remove Global Emissive Map"
+                        >
+                          <span className="material-symbols-outlined text-sm">close</span>
+                          <span>Clear</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Global Transmission (Glass & Refraction) */}
+                  <div className="space-y-3 p-3 rounded-lg bg-sky-950/20 border border-sky-500/30">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-sky-300 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-xs">lens_blur</span>
+                        Transmission &amp; Glass
+                      </span>
+                      <InfoTooltip title="Transmission & Glass" text={MATERIAL_TOOLTIPS.transmission} />
+                    </div>
+                    <NumberSliderInput
+                      label="Global Transmission"
+                      value={matTransmission}
+                      onChange={setMatTransmission}
+                      min={0.0}
+                      max={1.0}
+                      step={0.05}
+                      color="sky"
+                      precision={2}
+                      resetValue={0.0}
+                      tooltip={MATERIAL_TOOLTIPS.transmission}
+                    />
+                    {matTransmission > 0 && (
+                      <div className="grid grid-cols-2 gap-2 pt-1 border-t border-sky-500/20">
+                        <NumberSliderInput
+                          label="Index of Refraction (IOR)"
+                          value={matIor}
+                          onChange={setMatIor}
+                          min={1.0}
+                          max={2.5}
+                          step={0.05}
+                          color="sky"
+                          precision={2}
+                          resetValue={1.5}
+                          tooltip={MATERIAL_TOOLTIPS.ior}
+                        />
+                        <NumberSliderInput
+                          label="Thickness"
+                          value={matThickness}
+                          onChange={setMatThickness}
+                          min={0.0}
+                          max={5.0}
+                          step={0.1}
+                          color="sky"
+                          precision={2}
+                          resetValue={0.5}
+                          tooltip={MATERIAL_TOOLTIPS.thickness}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Global Clearcoat */}
+                  <div className="space-y-3 p-3 rounded-lg bg-rose-950/20 border border-rose-500/30">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-rose-300 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-xs">format_paint</span>
+                        Clearcoat Layer
+                      </span>
+                      <InfoTooltip title="Clearcoat Lacquer" text={MATERIAL_TOOLTIPS.clearcoat} />
+                    </div>
+                    <NumberSliderInput
+                      label="Clearcoat Intensity"
+                      value={matClearcoat}
+                      onChange={setMatClearcoat}
+                      min={0.0}
+                      max={1.0}
+                      step={0.05}
+                      color="rose"
+                      precision={2}
+                      resetValue={0.0}
+                      tooltip={MATERIAL_TOOLTIPS.clearcoat}
+                    />
+                    {matClearcoat > 0 && (
+                      <NumberSliderInput
+                        label="Clearcoat Roughness"
+                        value={matClearcoatRoughness}
+                        onChange={setMatClearcoatRoughness}
+                        min={0.0}
+                        max={1.0}
+                        step={0.05}
+                        color="rose"
+                        precision={2}
+                        resetValue={0.1}
+                        tooltip={MATERIAL_TOOLTIPS.clearcoatRoughness}
+                      />
+                    )}
+                  </div>
+
+                  {/* Global Sheen */}
+                  <div className="space-y-3 p-3 rounded-lg bg-emerald-950/20 border border-emerald-500/30">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-emerald-300 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-xs">styler</span>
+                        Sheen (Cloth / Velvet)
+                      </span>
+                      <InfoTooltip title="Sheen Microfibers" text={MATERIAL_TOOLTIPS.sheen} />
+                    </div>
+                    <NumberSliderInput
+                      label="Sheen Intensity"
+                      value={matSheen}
+                      onChange={setMatSheen}
+                      min={0.0}
+                      max={1.0}
+                      step={0.05}
+                      color="emerald"
+                      precision={2}
+                      resetValue={0.0}
+                      tooltip={MATERIAL_TOOLTIPS.sheen}
+                    />
+                    {matSheen > 0 && (
+                      <div className="space-y-2 pt-1 border-t border-emerald-500/20">
+                        <NumberSliderInput
+                          label="Sheen Roughness"
+                          value={matSheenRoughness}
+                          onChange={setMatSheenRoughness}
+                          min={0.0}
+                          max={1.0}
+                          step={0.05}
+                          color="emerald"
+                          precision={2}
+                          resetValue={0.5}
+                          tooltip={MATERIAL_TOOLTIPS.sheenRoughness}
+                        />
+                        <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-semibold text-neutral-300">Sheen Tint Color</span>
+                            <InfoTooltip title="Sheen Color" text={MATERIAL_TOOLTIPS.sheenColor} />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-mono text-neutral-400">{matSheenColor}</span>
+                            <input
+                              type="color"
+                              value={matSheenColor}
+                              onChange={(e) => setMatSheenColor(e.target.value)}
+                              className="w-10 h-7 bg-transparent cursor-pointer rounded border border-neutral-700"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Global Normal Map */}
+                  <div className="space-y-3 p-3 rounded-lg bg-cyan-950/20 border border-cyan-500/30">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-cyan-300 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-xs">waves</span>
+                        Global Normal Map
+                        <InfoTooltip title="Normal Map" text={MATERIAL_TOOLTIPS.normalMap} />
+                      </span>
+                      {matNormalMapUrl && (
+                        <span className="text-[9px] bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
+                          ACTIVE
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/40 rounded text-xs text-cyan-200 font-medium cursor-pointer transition-colors">
+                        {mapUploadingSlot === 'global-normalMap' ? (
+                          <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                        ) : (
+                          <span className="material-symbols-outlined text-sm">upload_file</span>
+                        )}
+                        <span>{matNormalMapUrl ? 'Replace Normal Map' : 'Upload Normal Map'}</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/jpg"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleApplyGlobalMap('normalMap', e.target.files[0]);
+                              e.target.value = '';
+                            }
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+                      {matNormalMapUrl && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveGlobalMap('normalMap')}
+                          className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                          title="Remove Global Normal Map"
+                        >
+                          <span className="material-symbols-outlined text-sm">close</span>
+                          <span>Clear</span>
+                        </button>
+                      )}
+                    </div>
+                    <NumberSliderInput
+                      label="Normal Map Scale (Depth)"
+                      value={matNormalScale}
+                      onChange={setMatNormalScale}
+                      min={0.0}
+                      max={3.0}
+                      step={0.05}
+                      color="cyan"
+                      precision={2}
+                      resetValue={1.0}
+                      tooltip={MATERIAL_TOOLTIPS.normalScale}
                     />
                   </div>
 
-                  <div className="space-y-3 pt-2">
+                  {/* Global Displacement Map */}
+                  <div className="space-y-3 p-3 rounded-lg bg-amber-950/20 border border-amber-500/30">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-amber-300 flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-xs">terrain</span>
+                        Global Displacement Map
+                        <InfoTooltip title="Displacement Map" text={MATERIAL_TOOLTIPS.displacementMap} />
+                      </span>
+                      {matDisplacementMapUrl && (
+                        <span className="text-[9px] bg-amber-500/30 text-amber-300 border border-amber-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
+                          ACTIVE
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-amber-950/50 hover:bg-amber-900/60 border border-amber-500/40 rounded text-xs text-amber-200 font-medium cursor-pointer transition-colors">
+                        {mapUploadingSlot === 'global-displacementMap' ? (
+                          <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                        ) : (
+                          <span className="material-symbols-outlined text-sm">upload_file</span>
+                        )}
+                        <span>{matDisplacementMapUrl ? 'Replace Displacement Map' : 'Upload Displacement Map'}</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/jpg"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleApplyGlobalMap('displacementMap', e.target.files[0]);
+                              e.target.value = '';
+                            }
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+                      {matDisplacementMapUrl && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveGlobalMap('displacementMap')}
+                          className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                          title="Remove Global Displacement Map"
+                        >
+                          <span className="material-symbols-outlined text-sm">close</span>
+                          <span>Clear</span>
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-amber-500/20">
+                      <NumberSliderInput
+                        label="Displacement Scale"
+                        value={matDisplacementScale}
+                        onChange={setMatDisplacementScale}
+                        min={0.0}
+                        max={1.0}
+                        step={0.01}
+                        color="amber"
+                        precision={2}
+                        resetValue={0.0}
+                        tooltip={MATERIAL_TOOLTIPS.displacementScale}
+                      />
+                      <NumberSliderInput
+                        label="Displacement Bias"
+                        value={matDisplacementBias}
+                        onChange={setMatDisplacementBias}
+                        min={-0.5}
+                        max={0.5}
+                        step={0.01}
+                        color="amber"
+                        precision={2}
+                        resetValue={0.0}
+                        tooltip={MATERIAL_TOOLTIPS.displacementBias}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 p-3 rounded-lg bg-indigo-950/20 border border-indigo-500/30">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-indigo-300">Opacity & Mesh Wireframe</span>
+                      <InfoTooltip title="Material Opacity" text={MATERIAL_TOOLTIPS.opacity} />
+                    </div>
                     <NumberSliderInput
                       label="Material Opacity"
                       value={matOpacity}
@@ -16313,6 +18834,7 @@ const ARTest = () => {
                       color="indigo"
                       precision={2}
                       resetValue={1.0}
+                      tooltip={MATERIAL_TOOLTIPS.opacity}
                     />
                     <div className="flex items-center justify-between p-2.5 rounded-lg bg-neutral-900/70 border border-neutral-800">
                       <span className="text-xs font-semibold text-neutral-300">Wireframe Mesh Debug</span>
@@ -16333,10 +18855,10 @@ const ARTest = () => {
           {/* TAB 5: MEDIA LAYER, ENVIRONMENT & UI OVERLAYS                             */}
           {/* ========================================================================= */}
           {activeTab === 'scene' && (
-            <div className="space-y-5">
-              <div className="p-3 bg-neutral-900/90 border border-indigo-500/40 rounded-lg space-y-3">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span className="text-xs font-bold uppercase tracking-widest text-indigo-400 flex items-center gap-1.5 shrink-0">
+            <div className="space-y-4">
+              <div className="p-3.5 bg-rose-950/20 border border-rose-500/30 rounded-xl space-y-3 shadow-sm">
+                <div className="flex items-center justify-between gap-2 flex-wrap border-b border-rose-500/20 pb-2">
+                  <span className="text-xs font-bold uppercase tracking-widest text-rose-300 flex items-center gap-1.5 shrink-0">
                     <span className="material-symbols-outlined text-sm">movie</span> Video Texture Layer
                   </span>
                   <div className="flex items-center gap-1.5 flex-wrap">
@@ -16972,8 +19494,8 @@ const ARTest = () => {
               </div>
 
               {/* View Camera Angles Quick Panel in Sidebar */}
-              <div className="space-y-2 pt-2">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
+              <div className="p-3.5 rounded-xl bg-indigo-950/20 border border-indigo-500/30 space-y-3 shadow-sm">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-200 border-b border-indigo-500/20 pb-2 flex items-center gap-1.5">
                   <span className="material-symbols-outlined text-sm text-indigo-400">videocam</span>
                   Center View Angles
                 </h2>
@@ -16981,59 +19503,66 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => setCameraView('front')}
-                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1"
+                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1 cursor-pointer"
                   >
                     Front
                   </button>
                   <button
                     type="button"
                     onClick={() => setCameraView('back')}
-                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1"
+                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1 cursor-pointer"
                   >
                     Back
                   </button>
                   <button
                     type="button"
                     onClick={() => setCameraView('left')}
-                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1"
+                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1 cursor-pointer"
                   >
                     Left
                   </button>
                   <button
                     type="button"
                     onClick={() => setCameraView('right')}
-                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1"
+                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1 cursor-pointer"
                   >
                     Right
                   </button>
                   <button
                     type="button"
                     onClick={() => setCameraView('top')}
-                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1"
+                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1 cursor-pointer"
                   >
                     Top
                   </button>
                   <button
                     type="button"
                     onClick={() => setCameraView('bottom')}
-                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1"
+                    className="py-1.5 px-2 bg-neutral-900 hover:bg-indigo-600/40 text-neutral-200 hover:text-white text-xs font-semibold rounded border border-neutral-800 hover:border-indigo-500 transition-all flex items-center justify-center gap-1 cursor-pointer"
                   >
                     Bottom
                   </button>
                 </div>
               </div>
 
-              <div className="space-y-3 pt-2">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-sm text-cyan-400">hdr_on</span>
-                  Environment Reflection Map (PBR)
-                </h2>
+              {/* Environment Reflection Map & Exposure */}
+              <div className="p-3.5 rounded-xl bg-cyan-950/20 border border-cyan-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-cyan-500/20 pb-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-cyan-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-cyan-400">hdr_on</span>
+                    Environment Reflection Map (PBR &amp; HDRI)
+                  </h2>
+                  <InfoTooltip title="HDRI Environment Reflections" text={MATERIAL_TOOLTIPS.hdriPreset} />
+                </div>
                 <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
-                  <span className="text-xs font-semibold text-neutral-300">Preset</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-semibold text-neutral-300">Preset</span>
+                    <InfoTooltip title="HDRI Preset" text={MATERIAL_TOOLTIPS.hdriPreset} />
+                  </div>
                   <select
                     value={envPreset}
                     onChange={(e) => setEnvPreset(e.target.value)}
-                    className="text-xs bg-neutral-950 border border-neutral-700 text-neutral-200 rounded px-2 py-1 outline-none focus:border-cyan-500"
+                    className="text-xs bg-neutral-950 border border-neutral-700 text-neutral-200 rounded px-2 py-1 outline-none focus:border-cyan-500 cursor-pointer"
                   >
                     <option value="none">None (Black)</option>
                     <option value="studio-chrome">Studio Chrome (Mirror)</option>
@@ -17045,6 +19574,57 @@ const ARTest = () => {
                     <option value="neutral">Neutral Daylight</option>
                   </select>
                 </div>
+
+                {/* Custom HDRI 360 Panorama Upload */}
+                <div className="space-y-1.5 p-2 rounded-lg bg-black/40 border border-neutral-800">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] font-semibold text-neutral-300">Custom HDRI Panorama (.hdr/.exr/.jpg/.png)</span>
+                      <InfoTooltip title="Custom HDRI Panorama" text={MATERIAL_TOOLTIPS.customHdri} />
+                    </div>
+                    {envImage && (
+                      <span className="text-[9px] bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
+                        ACTIVE
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/40 rounded text-xs text-cyan-200 font-medium cursor-pointer transition-colors">
+                      {mapUploadingSlot === 'global-envImage' ? (
+                        <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                      ) : (
+                        <span className="material-symbols-outlined text-sm">upload_file</span>
+                      )}
+                      <span>{envImage ? 'Replace HDRI Panorama' : 'Upload Equirectangular HDRI'}</span>
+                      <input
+                        type="file"
+                        accept=".hdr,.exr,image/jpeg,image/png,image/webp"
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            handleApplyGlobalMap('envImage', e.target.files[0]);
+                            e.target.value = '';
+                          }
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                    {envImage && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEnvImage('');
+                          handleRemoveGlobalMap('envImage');
+                        }}
+                        className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
+                        title="Clear Custom HDRI"
+                      >
+                        <span className="material-symbols-outlined text-sm">close</span>
+                        <span>Clear</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
                 {envPreset !== 'none' && (
                   <NumberSliderInput
                     label="Environment Reflection Intensity"
@@ -17056,8 +19636,55 @@ const ARTest = () => {
                     color="cyan"
                     precision={2}
                     resetValue={1.0}
+                    tooltip={MATERIAL_TOOLTIPS.hdriIntensity}
                   />
                 )}
+
+                {/* HDRI Turntable Rotation Slider (0 to 360 degrees) */}
+                <NumberSliderInput
+                  label="HDRI Turntable Rotation (°)"
+                  value={envRotation}
+                  onChange={setEnvRotation}
+                  min={0}
+                  max={360}
+                  step={5}
+                  color="amber"
+                  precision={0}
+                  resetValue={0}
+                  tooltip={MATERIAL_TOOLTIPS.hdriRotation}
+                  description="Rotates 360° environment reflections in real time across shiny & specular surfaces"
+                />
+
+                {/* 360 Background View Toggle & Blur */}
+                <div className="space-y-2 p-2 rounded-lg bg-black/40 border border-neutral-800">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-semibold text-neutral-300">Show 360° Panorama as Background</span>
+                      <InfoTooltip title="360° Background Visibility" text={MATERIAL_TOOLTIPS.hdriBackground} />
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={envShowBackground}
+                      onChange={(e) => setEnvShowBackground(e.target.checked)}
+                      className="w-4 h-4 accent-cyan-500 cursor-pointer"
+                    />
+                  </div>
+                  {envShowBackground && (
+                    <NumberSliderInput
+                      label="Background Backdrop Blur"
+                      value={envBackgroundBlur}
+                      onChange={setEnvBackgroundBlur}
+                      min={0.0}
+                      max={1.0}
+                      step={0.05}
+                      color="sky"
+                      precision={2}
+                      resetValue={0.0}
+                      tooltip="Blurs the 360° background environment sphere so the product remains the focal point while still reflecting sharp highlights."
+                    />
+                  )}
+                </div>
+
                 <NumberSliderInput
                   label="Tone Mapping Exposure"
                   value={exposure}
@@ -17068,12 +19695,14 @@ const ARTest = () => {
                   color="amber"
                   precision={2}
                   resetValue={1.1}
+                  tooltip="Camera tone-mapping exposure level (ACES Filmic standard)."
                 />
               </div>
 
-              <div className="space-y-3 pt-2">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-sm text-neutral-400">cloud</span>
+              {/* Atmospheric Fog */}
+              <div className="p-3.5 rounded-xl bg-sky-950/20 border border-sky-500/30 space-y-3 shadow-sm">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-sky-200 border-b border-sky-500/20 pb-2 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-sky-400">cloud</span>
                   Atmospheric Fog
                 </h2>
                 <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
@@ -17101,9 +19730,10 @@ const ARTest = () => {
                 />
               </div>
 
-              <div className="space-y-3 pt-2">
-                <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 border-b border-neutral-800 pb-1.5 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-sm text-rose-400">shopping_bag</span>
+              {/* Interactive Buy Button Overlay */}
+              <div className="p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/30 space-y-3 shadow-sm">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-amber-200 border-b border-amber-500/20 pb-2 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-sm text-amber-400">shopping_bag</span>
                   Interactive Buy Button Overlay
                 </h2>
                 <div className="flex items-center justify-between p-2.5 rounded-lg bg-neutral-900/70 border border-neutral-800">
@@ -17112,7 +19742,7 @@ const ARTest = () => {
                     type="checkbox"
                     checked={showBuyButton}
                     onChange={(e) => setShowBuyButton(e.target.checked)}
-                    className="w-5 h-5 accent-white cursor-pointer"
+                    className="w-5 h-5 accent-amber-500 cursor-pointer"
                   />
                 </div>
                 <div className="flex items-center justify-between p-2 rounded-lg bg-neutral-900/70 border border-neutral-800">
@@ -17136,16 +19766,16 @@ const ARTest = () => {
           {/* TAB 6: CAMERA TARGET TRACKING & PRECISION CONTROLS                         */}
           {/* ========================================================================= */}
           {activeTab === 'tracking' && (
-            <div className="space-y-5">
+            <div className="space-y-4">
               {/* Target Marker Visual Reference Card */}
-              <div className="p-3.5 bg-neutral-900/90 border border-emerald-500/40 rounded-xl space-y-3.5 shadow-lg">
-                <div className="flex items-center justify-between">
+              <div className="p-3.5 bg-emerald-950/20 border border-emerald-500/30 rounded-xl space-y-3.5 shadow-sm">
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
                   <div className="flex items-center gap-2">
                     <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
                       <span className="material-symbols-outlined text-base">qr_code_2</span>
                     </div>
                     <div>
-                      <h2 className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
+                      <h2 className="text-xs font-bold uppercase tracking-wider text-emerald-200 flex items-center gap-1.5">
                         Target Marker Reference
                         <span className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-bold uppercase ${markerVisible ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-neutral-800 text-neutral-400'
                           }`}>
@@ -17158,7 +19788,7 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => setMarkerVisible((v) => !v)}
-                    className={`px-2.5 py-1 rounded text-xs font-semibold border transition-all ${markerVisible
+                    className={`px-2.5 py-1 rounded text-xs font-semibold border transition-all cursor-pointer ${markerVisible
                       ? 'bg-emerald-600 text-white border-emerald-400 shadow-md shadow-emerald-900/40'
                       : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border-neutral-700'
                       }`}
@@ -17537,20 +20167,20 @@ const ARTest = () => {
               </div>
 
               {/* Quick Calibration Presets */}
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+              <div className="p-3.5 rounded-xl bg-cyan-950/20 border border-cyan-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-cyan-500/20 pb-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-cyan-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-cyan-400">speed</span>
                     Calibration Presets
                   </h2>
-                  <span className="text-[10px] font-mono text-neutral-500">1-Click Setup</span>
+                  <span className="text-[10px] font-mono text-cyan-400/80">1-Click Setup</span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => applyTrackingPreset('balanced')}
-                    className={`p-2.5 rounded-lg border text-left transition-all ${activeTrackingPreset === 'balanced'
+                    className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${activeTrackingPreset === 'balanced'
                       ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
                       : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
                       }`}
@@ -17567,7 +20197,7 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => applyTrackingPreset('smooth')}
-                    className={`p-2.5 rounded-lg border text-left transition-all ${activeTrackingPreset === 'smooth'
+                    className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${activeTrackingPreset === 'smooth'
                       ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
                       : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
                       }`}
@@ -17584,7 +20214,7 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => applyTrackingPreset('fast')}
-                    className={`p-2.5 rounded-lg border text-left transition-all ${activeTrackingPreset === 'fast'
+                    className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${activeTrackingPreset === 'fast'
                       ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
                       : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
                       }`}
@@ -17601,7 +20231,7 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => applyTrackingPreset('resilient')}
-                    className={`p-2.5 rounded-lg border text-left transition-all ${activeTrackingPreset === 'resilient'
+                    className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${activeTrackingPreset === 'resilient'
                       ? 'bg-cyan-950/40 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400/50'
                       : 'bg-neutral-900/60 border-neutral-800 hover:bg-neutral-900 text-neutral-300'
                       }`}
@@ -17618,10 +20248,10 @@ const ARTest = () => {
               </div>
 
               {/* Precision OneEuroFilter Controls */}
-              <div className="space-y-3 pt-2">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm text-cyan-400">filter_alt</span>
+              <div className="p-3.5 rounded-xl bg-sky-950/20 border border-sky-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-sky-500/20 pb-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-sky-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-sky-400">filter_alt</span>
                     Jitter Filter & Motion Smoothing (1€ Filter)
                   </h2>
                 </div>
@@ -17662,10 +20292,10 @@ const ARTest = () => {
               </div>
 
               {/* Lock-On & Tracking Stability */}
-              <div className="space-y-3 pt-2">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm text-cyan-400">lock</span>
+              <div className="p-3.5 rounded-xl bg-teal-950/20 border border-teal-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-teal-500/20 pb-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-teal-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-teal-400">lock</span>
                     Lock-On & Occlusion Tolerances
                   </h2>
                 </div>
@@ -17708,10 +20338,10 @@ const ARTest = () => {
               </div>
 
               {/* Target Index & Concurrency */}
-              <div className="space-y-3 pt-2">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm text-cyan-400">crop_free</span>
+              <div className="p-3.5 rounded-xl bg-indigo-950/20 border border-indigo-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-indigo-500/20 pb-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-indigo-400">crop_free</span>
                     Target Index & Concurrency
                   </h2>
                 </div>
@@ -17754,10 +20384,10 @@ const ARTest = () => {
               </div>
 
               {/* UI Diagnostics & HUD Overlays */}
-              <div className="space-y-3 pt-2">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm text-cyan-400">bug_report</span>
+              <div className="p-3.5 rounded-xl bg-purple-950/20 border border-purple-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-purple-500/20 pb-2">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-purple-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-purple-400">bug_report</span>
                     Diagnostics & Native HUD Overlays
                   </h2>
                 </div>
@@ -17839,16 +20469,16 @@ const ARTest = () => {
           {/* TAB 7: AR PORTAL & VIRTUAL WINDOW EFFECT CONTROLS                          */}
           {/* ========================================================================= */}
           {activeTab === 'portal' && (
-            <div className="space-y-6">
+            <div className="space-y-4">
               {/* Master Portal Engine Switch & Overview */}
-              <div className="p-3.5 rounded-xl bg-gradient-to-br from-sky-950/40 via-neutral-900 to-indigo-950/30 border border-sky-500/30 shadow-lg space-y-3">
-                <div className="flex items-center justify-between">
+              <div className="p-3.5 rounded-xl bg-sky-950/25 border border-sky-500/35 shadow-md space-y-3">
+                <div className="flex items-center justify-between border-b border-sky-500/20 pb-2">
                   <div className="flex items-center gap-2">
                     <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${portalEnabled ? 'bg-sky-500 text-black shadow-lg shadow-sky-500/30 animate-pulse' : 'bg-neutral-800 text-neutral-400'}`}>
                       <span className="material-symbols-outlined text-lg">meeting_room</span>
                     </div>
                     <div>
-                      <h2 className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
+                      <h2 className="text-xs font-bold uppercase tracking-wider text-sky-200 flex items-center gap-1.5">
                         AR Portal Effect
                         <span className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-bold uppercase ${portalEnabled ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40' : 'bg-neutral-800 text-neutral-400'}`}>
                           {portalEnabled ? 'Active' : 'Disabled'}
@@ -17958,13 +20588,13 @@ const ARTest = () => {
               </div>
 
               {/* 1-Click Curated Presets Strip */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm text-sky-400">auto_awesome</span>
+              <div className="p-3.5 rounded-xl bg-indigo-950/20 border border-indigo-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-indigo-500/20 pb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-indigo-400">auto_awesome</span>
                     1-Click Portal Presets
                   </h3>
-                  <span className="text-[10px] text-neutral-500 font-mono">Quick Themes</span>
+                  <span className="text-[10px] text-indigo-400/80 font-mono">Quick Themes</span>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
@@ -17994,13 +20624,13 @@ const ARTest = () => {
               </div>
 
               {/* Section 1: Window Aperture & 3D Frame */}
-              <div className="space-y-3 pt-1 border-t border-neutral-800/80">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+              <div className="p-3.5 rounded-xl bg-cyan-950/20 border border-cyan-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-cyan-500/20 pb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-cyan-400">crop_portrait</span>
                     Window Aperture & Frame
                   </h3>
-                  <span className="text-[10px] text-neutral-500 font-mono">Shape & Casing</span>
+                  <span className="text-[10px] text-cyan-400/80 font-mono">Shape & Casing</span>
                 </div>
 
                 {/* Shape Selector */}
@@ -18171,16 +20801,16 @@ const ARTest = () => {
               </div>
 
               {/* Section 2: Portal 3D Transform Placement */}
-              <div className="space-y-3 pt-1 border-t border-neutral-800/80">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+              <div className="p-3.5 rounded-xl bg-rose-950/20 border border-rose-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-rose-500/20 pb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-rose-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-rose-400">open_with</span>
                     Portal Placement & Orientation
                   </h3>
                   <button
                     type="button"
                     onClick={() => handleApplyPortalPlacementPreset('center')}
-                    className="text-[10px] font-mono text-neutral-400 hover:text-amber-300"
+                    className="text-[10px] font-mono text-neutral-400 hover:text-amber-300 cursor-pointer"
                   >
                     Reset Origin
                   </button>
@@ -18193,7 +20823,7 @@ const ARTest = () => {
                     <button
                       type="button"
                       onClick={() => handleApplyPortalPlacementPreset('center')}
-                      className="text-neutral-400 hover:text-amber-300"
+                      className="text-neutral-400 hover:text-amber-300 cursor-pointer"
                     >
                       (0,0,0)
                     </button>
@@ -18202,7 +20832,7 @@ const ARTest = () => {
                     <button
                       type="button"
                       onClick={() => handleApplyPortalPlacementPreset('behind')}
-                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalPosZ < -0.3 && Math.abs(portalPosX) < 0.2) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
+                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all cursor-pointer ${(portalPosZ < -0.3 && Math.abs(portalPosX) < 0.2) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
                       title="Position virtual window behind the model"
                     >
                       <span className="material-symbols-outlined text-[11px]">window</span>
@@ -18211,7 +20841,7 @@ const ARTest = () => {
                     <button
                       type="button"
                       onClick={() => handleApplyPortalPlacementPreset('left')}
-                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalPosX < -0.4) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
+                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all cursor-pointer ${(portalPosX < -0.4) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
                       title="Position portal gateway on the left side of the scene"
                     >
                       <span className="material-symbols-outlined text-[11px]">arrow_left_alt</span>
@@ -18220,7 +20850,7 @@ const ARTest = () => {
                     <button
                       type="button"
                       onClick={() => handleApplyPortalPlacementPreset('right')}
-                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalPosX > 0.4) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
+                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all cursor-pointer ${(portalPosX > 0.4) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
                       title="Position portal gateway on the right side of the scene"
                     >
                       <span className="material-symbols-outlined text-[11px]">arrow_right_alt</span>
@@ -18229,7 +20859,7 @@ const ARTest = () => {
                     <button
                       type="button"
                       onClick={() => handleApplyPortalPlacementPreset('ground')}
-                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalRotX === -90) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
+                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all cursor-pointer ${(portalRotX === -90) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
                       title="Position portal on ground beneath model"
                     >
                       <span className="material-symbols-outlined text-[11px]">adjust</span>
@@ -18238,7 +20868,7 @@ const ARTest = () => {
                     <button
                       type="button"
                       onClick={() => handleApplyPortalPlacementPreset('center')}
-                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalPosX === 0 && portalPosY === 0 && portalPosZ === 0 && !portalHideOutsideModel) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
+                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all cursor-pointer ${(portalPosX === 0 && portalPosY === 0 && portalPosZ === 0 && !portalHideOutsideModel) ? 'bg-sky-600/30 text-sky-200 border-sky-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
                       title="Centered at origin"
                     >
                       <span className="material-symbols-outlined text-[11px]">center_focus_strong</span>
@@ -18247,7 +20877,7 @@ const ARTest = () => {
                     <button
                       type="button"
                       onClick={() => handleApplyPortalPlacementPreset('inside')}
-                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all ${(portalHideOutsideModel && portalModelType === 'current-product') ? 'bg-indigo-600/30 text-indigo-200 border-indigo-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
+                      className={`px-1.5 py-1 rounded text-[10px] font-semibold border flex items-center justify-center gap-1 transition-all cursor-pointer ${(portalHideOutsideModel && portalModelType === 'current-product') ? 'bg-indigo-600/30 text-indigo-200 border-indigo-400' : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border-neutral-800'}`}
                       title="Enclose the batch model inside the portal chamber"
                     >
                       <span className="material-symbols-outlined text-[11px]">inbox</span>
@@ -18324,13 +20954,13 @@ const ARTest = () => {
               </div>
 
               {/* Section 3: Interior World Environment (What goes in the portal) */}
-              <div className="space-y-3 pt-1 border-t border-neutral-800/80">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+              <div className="p-3.5 rounded-xl bg-purple-950/20 border border-purple-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-purple-500/20 pb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-purple-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-purple-400">public</span>
                     Interior World Environment
                   </h3>
-                  <span className="text-[10px] text-neutral-500 font-mono">Chamber Atmosphere</span>
+                  <span className="text-[10px] text-purple-400/80 font-mono">Chamber Atmosphere</span>
                 </div>
 
                 {/* Interior Type Buttons */}
@@ -18660,13 +21290,13 @@ const ARTest = () => {
               </div>
 
               {/* Section 4: Interior 3D Content & Objects (What goes inside the portal) */}
-              <div className="space-y-3 pt-1 border-t border-neutral-800/80">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+              <div className="p-3.5 rounded-xl bg-emerald-950/20 border border-emerald-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-emerald-400">token</span>
                     Interior 3D Content & Objects
                   </h3>
-                  <span className="text-[10px] text-neutral-500 font-mono">Inside Portal</span>
+                  <span className="text-[10px] text-emerald-400/80 font-mono">Inside Portal</span>
                 </div>
 
                 {/* Content Type Selector */}
@@ -18846,9 +21476,9 @@ const ARTest = () => {
               </div>
 
               {/* Section 5: Floating Video Screen Inside Portal */}
-              <div className="space-y-3 pt-1 border-t border-neutral-800/80">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+              <div className="p-3.5 rounded-xl bg-sky-950/20 border border-sky-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-sky-500/20 pb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-sky-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-sky-400">videocam</span>
                     Interior Video Screen
                   </h3>
@@ -18944,9 +21574,9 @@ const ARTest = () => {
               </div>
 
               {/* Section 6: Interior Particle FX & Floating Text */}
-              <div className="space-y-3 pt-1 border-t border-neutral-800/80">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+              <div className="p-3.5 rounded-xl bg-amber-950/20 border border-amber-500/30 space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-amber-500/20 pb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-amber-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-amber-400">grain</span>
                     Atmospheric Particles & Hologram Text
                   </h3>
@@ -19068,14 +21698,14 @@ const ARTest = () => {
           {activeTab === 'particles' && (
             <div className="space-y-4">
               {/* Header Card & Master Switch */}
-              <div className="p-3 bg-neutral-900/90 rounded-xl border border-neutral-800 space-y-3 shadow-lg">
+              <div className="p-3.5 bg-amber-950/25 border border-amber-500/40 rounded-xl space-y-3 shadow-md">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 rounded-lg bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300">
                       <span className="material-symbols-outlined text-lg">flare</span>
                     </div>
                     <div>
-                      <h2 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                      <h2 className="text-xs font-bold text-amber-200 uppercase tracking-wider flex items-center gap-1.5">
                         Scene Particle System
                         {particleSystemEnabled && (
                           <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono font-semibold">
@@ -19100,13 +21730,13 @@ const ARTest = () => {
               </div>
 
               {/* 1-Click Particle Style Presets */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
+              <div className="p-3.5 bg-amber-950/20 border border-amber-500/30 rounded-xl space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-amber-500/20 pb-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-amber-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-amber-400">auto_awesome</span>
                     Atmospheric Presets
                   </span>
-                  <span className="text-[10px] text-neutral-500">1-click styles</span>
+                  <span className="text-[10px] text-amber-400/80 font-mono">1-click styles</span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-1.5">
@@ -19118,7 +21748,7 @@ const ARTest = () => {
                         if (!particleSystemEnabled) setParticleSystemEnabled(true);
                         applyParticlePreset(key);
                       }}
-                      className={`p-2 rounded-lg text-left transition-all border flex items-center gap-2 ${particlePreset === key && particleSystemEnabled
+                      className={`p-2 rounded-lg text-left transition-all border flex items-center gap-2 cursor-pointer ${particlePreset === key && particleSystemEnabled
                         ? 'bg-amber-950/40 border-amber-500/60 text-white shadow-sm'
                         : 'bg-neutral-900/60 hover:bg-neutral-800 border-neutral-800/80 text-neutral-300'
                         }`}
@@ -19143,11 +21773,13 @@ const ARTest = () => {
               </div>
 
               {/* Particle Appearance & Density */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-sm text-indigo-400">palette</span>
-                  Appearance & Colors
-                </span>
+              <div className="p-3.5 bg-rose-950/20 border border-rose-500/30 rounded-xl space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-rose-500/20 pb-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-rose-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-rose-400">palette</span>
+                    Appearance & Colors
+                  </span>
+                </div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <div className="space-y-1">
@@ -19297,11 +21929,13 @@ const ARTest = () => {
               </div>
 
               {/* Motion Dynamics & Movement */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-sm text-cyan-400">air</span>
-                  Motion Dynamics & Direction
-                </span>
+              <div className="p-3.5 bg-cyan-950/20 border border-cyan-500/30 rounded-xl space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-cyan-500/20 pb-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-cyan-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-cyan-400">air</span>
+                    Motion Dynamics & Direction
+                  </span>
+                </div>
 
                 <div className="space-y-1">
                   <span className="text-[11px] font-semibold text-neutral-300">Flow Direction</span>
@@ -19317,7 +21951,7 @@ const ARTest = () => {
                         key={d.id}
                         type="button"
                         onClick={() => setParticleDirection(d.id)}
-                        className={`py-1.5 px-1 rounded flex flex-col items-center justify-center gap-0.5 border text-center transition-all ${particleDirection === d.id
+                        className={`py-1.5 px-1 rounded flex flex-col items-center justify-center gap-0.5 border text-center transition-all cursor-pointer ${particleDirection === d.id
                           ? 'bg-cyan-500/20 text-cyan-200 border-cyan-400 font-bold'
                           : 'bg-neutral-900/60 hover:bg-neutral-800 text-neutral-400 border-neutral-800'
                           }`}
@@ -19360,11 +21994,13 @@ const ARTest = () => {
               </div>
 
               {/* Spread Dimensions (Bounding Volume) */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-sm text-emerald-400">view_in_ar</span>
-                  Volume Spread & Bounds
-                </span>
+              <div className="p-3.5 bg-emerald-950/20 border border-emerald-500/30 rounded-xl space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-emerald-400">view_in_ar</span>
+                    Volume Spread & Bounds
+                  </span>
+                </div>
 
                 <div className="grid grid-cols-3 gap-2">
                   <NumberSliderInput
@@ -19410,10 +22046,10 @@ const ARTest = () => {
               </div>
 
               {/* 3D Spatial Position Offset */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-neutral-200 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm text-rose-400">open_with</span>
+              <div className="p-3.5 bg-purple-950/20 border border-purple-500/30 rounded-xl space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-purple-500/20 pb-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-purple-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-purple-400">open_with</span>
                     Center Position
                   </span>
                   <button
@@ -19423,7 +22059,7 @@ const ARTest = () => {
                       setParticlePosY(0.0);
                       setParticlePosZ(0.0);
                     }}
-                    className="text-[10px] text-neutral-400 hover:text-white flex items-center gap-0.5 px-1.5 py-0.5 bg-neutral-800/80 rounded"
+                    className="text-[10px] text-neutral-400 hover:text-white flex items-center gap-0.5 px-1.5 py-0.5 bg-neutral-800/80 rounded cursor-pointer"
                     title="Reset to center (0, 0, 0)"
                   >
                     <span className="material-symbols-outlined text-[11px]">restart_alt</span> Reset
@@ -19494,14 +22130,14 @@ const ARTest = () => {
           {activeTab === 'scatter' && (
             <div className="space-y-4">
               {/* Header Card & Add Button */}
-              <div className="p-3 bg-neutral-900/90 rounded-xl border border-neutral-800 space-y-3 shadow-lg">
-                <div className="flex items-center justify-between">
+              <div className="p-3.5 bg-emerald-950/25 border border-emerald-500/40 rounded-xl space-y-3 shadow-md">
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-300">
                       <span className="material-symbols-outlined text-lg">grass</span>
                     </div>
                     <div>
-                      <h2 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                      <h2 className="text-xs font-bold text-emerald-200 uppercase tracking-wider flex items-center gap-1.5">
                         Scatter Layers
                         <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-mono font-semibold">
                           {scatterLayers.length} {scatterLayers.length === 1 ? 'LAYER' : 'LAYERS'}
@@ -19552,13 +22188,13 @@ const ARTest = () => {
               </div>
 
               {/* 1-Click Quick Add Presets Bar */}
-              <div className="bg-neutral-950/60 p-2 rounded-xl border border-neutral-800/80 space-y-1.5">
-                <div className="flex items-center justify-between px-0.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 flex items-center gap-1">
-                    <span className="material-symbols-outlined text-xs text-emerald-400">auto_awesome</span>
+              <div className="p-3.5 bg-emerald-950/20 border border-emerald-500/30 rounded-xl space-y-2.5 shadow-sm">
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-200 flex items-center gap-1">
+                    <span className="material-symbols-outlined text-sm text-emerald-400">auto_awesome</span>
                     Quick Add Preset Layer
                   </span>
-                  <span className="text-[9px] text-neutral-500">+1 click adds layer</span>
+                  <span className="text-[10px] text-emerald-400/80 font-mono">+1 click adds layer</span>
                 </div>
                 <div className="grid grid-cols-3 gap-1">
                   {SCATTER_PRESETS.slice(0, 6).map((p) => (
@@ -20284,14 +22920,14 @@ const ARTest = () => {
           {/* TAB: LIVE INTERACTIVE 3D WEBSITE LAYER                                    */}
           {/* ========================================================================= */}
           {activeTab === 'website' && (
-            <div className="space-y-5">
+            <div className="space-y-4">
               {/* Master Live Website Layer Toggle & Intro */}
-              <div className="p-3 bg-gradient-to-r from-indigo-950/60 to-purple-950/40 rounded-xl border border-indigo-500/30 space-y-2.5">
-                <div className="flex items-center justify-between">
+              <div className="p-3.5 bg-indigo-950/25 border border-indigo-500/40 rounded-xl space-y-3 shadow-md">
+                <div className="flex items-center justify-between border-b border-indigo-500/20 pb-2">
                   <div className="flex items-center gap-2">
                     <span className="material-symbols-outlined text-lg text-indigo-400">language</span>
                     <div>
-                      <h2 className="text-xs font-bold uppercase tracking-wider text-white">Live 3D Website Layer</h2>
+                      <h2 className="text-xs font-bold uppercase tracking-wider text-indigo-200">Live 3D Website Layer</h2>
                       <p className="text-[10px] text-neutral-400">Interactive Web Browser Viewport in 3D & AR</p>
                     </div>
                   </div>
@@ -20315,9 +22951,9 @@ const ARTest = () => {
               </div>
 
               {/* URL Input & Presets */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+              <div className="p-3.5 bg-sky-950/20 border border-sky-500/30 rounded-xl space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-sky-500/20 pb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-sky-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-sky-400">link</span>
                     Website Target URL
                   </h3>
@@ -20325,7 +22961,7 @@ const ARTest = () => {
                     href={websiteUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-0.5"
+                    className="text-[10px] font-bold text-sky-400 hover:text-sky-300 flex items-center gap-0.5"
                     title="Open website in new browser tab"
                   >
                     <span>Open External</span>
@@ -20359,7 +22995,7 @@ const ARTest = () => {
 
                 {/* Quick Presets */}
                 <div className="space-y-1.5">
-                  <span className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider">Quick Presets</span>
+                  <span className="text-[10px] text-sky-400/80 font-bold uppercase tracking-wider">Quick Presets</span>
                   <div className="grid grid-cols-2 gap-1.5">
                     {[
                       { label: 'Star weAR Store', url: 'https://starwear.app', icon: 'shopping_bag' },
@@ -20388,8 +23024,8 @@ const ARTest = () => {
               </div>
 
               {/* Interactivity & Display Mode */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5 border-b border-neutral-800 pb-1.5">
+              <div className="p-3.5 bg-emerald-950/20 border border-emerald-500/30 rounded-xl space-y-3 shadow-sm">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-200 flex items-center gap-1.5 border-b border-emerald-500/20 pb-2">
                   <span className="material-symbols-outlined text-sm text-emerald-400">touch_app</span>
                   Interactivity & Navigation
                 </h3>
@@ -20454,8 +23090,8 @@ const ARTest = () => {
               </div>
 
               {/* Aspect Ratio & Resolution */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5 border-b border-neutral-800 pb-1.5">
+              <div className="p-3.5 bg-purple-950/20 border border-purple-500/30 rounded-xl space-y-3 shadow-sm">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-purple-200 flex items-center gap-1.5 border-b border-purple-500/20 pb-2">
                   <span className="material-symbols-outlined text-sm text-purple-400">aspect_ratio</span>
                   Aspect Ratio & Virtual Resolution
                 </h3>
@@ -20501,8 +23137,8 @@ const ARTest = () => {
               </div>
 
               {/* Physical Sizing & 3D Transform Sliders */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5 border-b border-neutral-800 pb-1.5">
+              <div className="p-3.5 bg-amber-950/20 border border-amber-500/30 rounded-xl space-y-3 shadow-sm">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-amber-200 flex items-center gap-1.5 border-b border-amber-500/20 pb-2">
                   <span className="material-symbols-outlined text-sm text-amber-400">straighten</span>
                   Physical Sizing & Scale
                 </h3>
@@ -20569,10 +23205,10 @@ const ARTest = () => {
               </div>
 
               {/* 3D Spatial Position Offset */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-sm text-indigo-400">open_with</span>
+              <div className="p-3.5 bg-rose-950/20 border border-rose-500/30 rounded-xl space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-rose-500/20 pb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-rose-200 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm text-rose-400">open_with</span>
                     3D Spatial Position
                   </h3>
                   <button
@@ -20625,9 +23261,9 @@ const ARTest = () => {
               </div>
 
               {/* 3D Spatial Rotation */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+              <div className="p-3.5 bg-cyan-950/20 border border-cyan-500/30 rounded-xl space-y-3 shadow-sm">
+                <div className="flex items-center justify-between border-b border-cyan-500/20 pb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-cyan-200 flex items-center gap-1.5">
                     <span className="material-symbols-outlined text-sm text-cyan-400">sync</span>
                     3D Spatial Rotation (Euler)
                   </h3>
@@ -20681,8 +23317,8 @@ const ARTest = () => {
               </div>
 
               {/* 3D Physical Enclosure Frame Styling */}
-              <div className="p-3 bg-neutral-900/70 rounded-xl border border-neutral-800 space-y-3">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5 border-b border-neutral-800 pb-1.5">
+              <div className="p-3.5 bg-pink-950/20 border border-pink-500/30 rounded-xl space-y-3 shadow-sm">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-pink-200 flex items-center gap-1.5 border-b border-pink-500/20 pb-2">
                   <span className="material-symbols-outlined text-sm text-pink-400">crop_free</span>
                   Enclosure Frame & Aesthetics
                 </h3>
@@ -21180,6 +23816,31 @@ const ARTest = () => {
           {/* Beneath: 3D Transform Controls Gizmo Toolbar (Studio Mode Only) */}
           {!isRenderPreviewActive && (
           <div className="pointer-events-auto flex items-center gap-1.5 p-1.5 bg-neutral-900/90 backdrop-blur-md border border-neutral-700/80 rounded-xl shadow-2xl max-w-full overflow-x-auto scrollbar-none">
+            {/* Viewport Undo & Redo Controls */}
+            <div className="flex items-center bg-black/60 p-0.5 rounded-lg border border-neutral-800 shrink-0">
+              <button
+                type="button"
+                onClick={handleUndo}
+                disabled={!canUndo}
+                title="Undo last action (Ctrl+Z / Cmd+Z)"
+                className="px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all disabled:opacity-25 disabled:cursor-not-allowed text-neutral-300 hover:text-white hover:bg-neutral-800 active:scale-95 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-sm">undo</span>
+                <span className="hidden sm:inline">Undo</span>
+              </button>
+              <div className="w-[1px] h-3.5 bg-neutral-800" />
+              <button
+                type="button"
+                onClick={handleRedo}
+                disabled={!canRedo}
+                title="Redo action (Ctrl+Shift+Z / Cmd+Shift+Z)"
+                className="px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all disabled:opacity-25 disabled:cursor-not-allowed text-neutral-300 hover:text-white hover:bg-neutral-800 active:scale-95 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-sm">redo</span>
+                <span className="hidden sm:inline">Redo</span>
+              </button>
+            </div>
+
             {/* Gizmo Mode Toggle Buttons */}
             <div className="flex items-center gap-0.5 bg-black/60 p-0.5 rounded-lg border border-neutral-800 shrink-0">
               <button
@@ -21369,8 +24030,8 @@ const ARTest = () => {
           light="defaultLightsEnabled: false"
           vr-mode-ui="enabled: false"
           device-orientation-permission-ui="enabled: false"
-          scene-environment={`exposure: ${exposure}; hdrIntensity: ${envIntensity}; enabled: ${envPreset !== 'none' && envIntensity > 0}; preset: ${envPreset}`}
-          fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
+          scene-environment={`exposure: ${exposure}; hdrIntensity: ${envIntensity}; enabled: ${(envImage && envImage.trim() !== '') || (envPreset !== 'none' && envIntensity > 0)}; preset: ${envPreset}; envImage: ${envImage}; rotation: ${envRotation}; showBackground: ${envShowBackground}; backgroundBlur: ${envBackgroundBlur}`}
+          fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : undefined}
           style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
         >
           <a-entity
@@ -21420,7 +24081,7 @@ const ARTest = () => {
                   }
                   : {})}
                 model-auto-center="enabled: true"
-                dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
+                dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}; normalScale: ${matNormalScale}; normalMap: ${matNormalMapUrl ? encodeURIComponent(matNormalMapUrl) : ''}; displacementScale: ${matDisplacementScale}; displacementBias: ${matDisplacementBias}; displacementMap: ${matDisplacementMapUrl ? encodeURIComponent(matDisplacementMapUrl) : ''}; emissiveMap: ${matEmissiveMapUrl ? encodeURIComponent(matEmissiveMapUrl) : ''}; transmission: ${matTransmission}; ior: ${matIor}; thickness: ${matThickness}; clearcoat: ${matClearcoat}; clearcoatRoughness: ${matClearcoatRoughness}; sheen: ${matSheen}; sheenRoughness: ${matSheenRoughness}; sheenColor: ${matSheenColor}; envMapIntensity: ${matEnvMapIntensity}`}
                 play-gltf-video={`src: ${activeVideoUrl || customVideoUrl || arData?.videoUrl || ''}; playing: ${mediaPlaying}; muted: ${mediaMuted}; targetMesh: ${videoTargetMesh}; flipX: ${videoFlipX}; videoScale: ${videoScale}; videoOffsetX: ${videoOffsetX}; videoOffsetY: ${videoOffsetY}; videoOffsetZ: ${videoOffsetZ}; videoRotation: ${videoRotation}; videoTextureRepeatX: ${videoTextureRepeatX}; videoTextureRepeatY: ${videoTextureRepeatY}; videoTextureOffsetX: ${videoTextureOffsetX}; videoTextureOffsetY: ${videoTextureOffsetY}; aspectRatio: ${videoAspectRatio}`}
                 play-gltf-animation={`playing: ${mediaPlaying}`}
               >
@@ -21860,7 +24521,10 @@ const ARTest = () => {
           dir1Intensity: Number(dir1Intensity ?? 2.5),
           exposure: Number(exposure ?? 1.15),
           envPreset: envPreset || 'studio-chrome',
-          envIntensity: Number(envIntensity ?? 1.2)
+          envIntensity: Number(envIntensity ?? 1.2),
+          envImage: envImage || '',
+          fogColor: fogColor || '#000000',
+          fogDensity: Number(fogDensity ?? 0)
         }}
         onUpdateStudioLighting={(updatedStudio) => {
           if (updatedStudio.ambientIntensity !== undefined) setAmbientIntensity(updatedStudio.ambientIntensity);
@@ -21868,6 +24532,29 @@ const ARTest = () => {
           if (updatedStudio.exposure !== undefined) setExposure(updatedStudio.exposure);
           if (updatedStudio.envPreset !== undefined) setEnvPreset(updatedStudio.envPreset);
           if (updatedStudio.envIntensity !== undefined) setEnvIntensity(updatedStudio.envIntensity);
+          if (updatedStudio.envImage !== undefined) setEnvImage(updatedStudio.envImage);
+          if (updatedStudio.fogColor !== undefined) setFogColor(updatedStudio.fogColor);
+          if (updatedStudio.fogDensity !== undefined) setFogDensity(updatedStudio.fogDensity);
+        }}
+        particleConfig={{
+          enabled: Boolean(particleSystemEnabled),
+          preset: particlePreset,
+          count: Number(particleCount),
+          size: Number(particleSize),
+          color: particleColor,
+          colorSecondary: particleColorSecondary,
+          speed: Number(particleSpeed),
+          opacity: Number(particleOpacity)
+        }}
+        onUpdateParticleConfig={(updatedParticles) => {
+          if (updatedParticles.enabled !== undefined) setParticleSystemEnabled(Boolean(updatedParticles.enabled));
+          if (updatedParticles.preset) setParticlePreset(updatedParticles.preset);
+          if (updatedParticles.count !== undefined) setParticleCount(Number(updatedParticles.count));
+          if (updatedParticles.size !== undefined) setParticleSize(Number(updatedParticles.size));
+          if (updatedParticles.color) setParticleColor(updatedParticles.color);
+          if (updatedParticles.colorSecondary) setParticleColorSecondary(updatedParticles.colorSecondary);
+          if (updatedParticles.speed !== undefined) setParticleSpeed(Number(updatedParticles.speed));
+          if (updatedParticles.opacity !== undefined) setParticleOpacity(Number(updatedParticles.opacity));
         }}
       />
 

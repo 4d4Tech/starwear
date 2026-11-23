@@ -959,7 +959,11 @@ if (typeof AFRAME !== 'undefined') {
         exposure: { type: 'number', default: 1.1 },
         hdrIntensity: { type: 'number', default: 1.0 },
         enabled: { type: 'boolean', default: false },
-        preset: { type: 'string', default: 'none' } // 'studio-chrome' | 'city' | 'sunset' | 'forest' | 'night' | 'cyber' | 'neutral' | 'none'
+        preset: { type: 'string', default: 'none' }, // 'studio-chrome' | 'city' | 'sunset' | 'forest' | 'night' | 'cyber' | 'neutral' | 'none'
+        envImage: { type: 'string', default: '' }, // Custom environmental equirectangular image URL or data URL
+        rotation: { type: 'number', default: 0 }, // 0 to 360 turntable degrees
+        showBackground: { type: 'boolean', default: false },
+        backgroundBlur: { type: 'number', default: 0.0 }
       },
       init: function () {
         this.setupEnvironment = this.setupEnvironment.bind(this);
@@ -975,20 +979,48 @@ if (typeof AFRAME !== 'undefined') {
       refreshEnvMaterials: function () {
         const scene = this.el?.object3D;
         if (!scene) return;
-        const intensity = Number(this.data.hdrIntensity ?? 1.0);
+        const intensity = Number(this.data.hdrIntensity ?? 1.2);
+        const envTex = scene.environment || this.envTexture;
         scene.traverse((node) => {
           if (node.isMesh && node.material) {
             const mats = Array.isArray(node.material) ? node.material : [node.material];
             mats.forEach((m) => {
               if (m && (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial)) {
-                if (scene.environmentIntensity === undefined && m.envMapIntensity !== undefined) {
-                  m.envMapIntensity = this.el.object3D?.environment ? intensity : 1.0;
+                if (envTex) {
+                  m.envMap = envTex;
                 }
+                const customIntensity = (m.userData?.envMapIntensity !== undefined && m.userData.envMapIntensity >= 0)
+                  ? Number(m.userData.envMapIntensity)
+                  : intensity;
+                m.envMapIntensity = customIntensity;
                 m.needsUpdate = true;
               }
             });
           }
         });
+      },
+      applyRotationAndBackground: function (THREE_LIB, scene) {
+        if (!scene) return;
+        const rotRad = ((Number(this.data.rotation || 0)) * Math.PI) / 180;
+        if (THREE_LIB.Euler) {
+          if (scene.environmentRotation !== undefined) {
+            if (!scene.environmentRotation) scene.environmentRotation = new THREE_LIB.Euler(0, rotRad, 0);
+            else scene.environmentRotation.set(0, rotRad, 0);
+          }
+          if (scene.backgroundRotation !== undefined) {
+            if (!scene.backgroundRotation) scene.backgroundRotation = new THREE_LIB.Euler(0, rotRad, 0);
+            else scene.backgroundRotation.set(0, rotRad, 0);
+          }
+        }
+        const envTex = scene.environment || this.envTexture;
+        if (this.data.showBackground && envTex) {
+          scene.background = envTex;
+          if (scene.backgroundBlurriness !== undefined) {
+            scene.backgroundBlurriness = Math.max(0, Math.min(1, Number(this.data.backgroundBlur || 0)));
+          }
+        } else if (!this.data.showBackground && scene.background && scene.background === envTex) {
+          scene.background = null;
+        }
       },
       update: function (oldData) {
         const renderer = this.el.renderer;
@@ -1004,20 +1036,22 @@ if (typeof AFRAME !== 'undefined') {
         }
 
         const normalizedPreset = String(this.data.preset || 'none').trim().toLowerCase();
+        const hasCustomEnvImage = Boolean(this.data.envImage && String(this.data.envImage).trim() !== '');
         const isEnabled =
           Boolean(this.data.enabled) &&
-          normalizedPreset !== '' &&
-          normalizedPreset !== 'none' &&
+          (hasCustomEnvImage || (normalizedPreset !== '' && normalizedPreset !== 'none')) &&
           Number(this.data.hdrIntensity) > 0;
 
         if (!isEnabled) {
           if (this.el.object3D && this.el.object3D.environment) {
             this.el.object3D.environment = null;
+            if (this.el.object3D.background === this.envTexture) this.el.object3D.background = null;
             this.refreshEnvMaterials();
           }
         } else {
           if (
             !oldData ||
+            oldData.envImage !== this.data.envImage ||
             oldData.preset !== this.data.preset ||
             oldData.hdrIntensity !== this.data.hdrIntensity ||
             oldData.enabled !== this.data.enabled ||
@@ -1027,9 +1061,9 @@ if (typeof AFRAME !== 'undefined') {
           } else if (this.el.object3D) {
             if (this.el.object3D.environmentIntensity !== undefined) {
               this.el.object3D.environmentIntensity = Number(this.data.hdrIntensity || 1.0);
-            } else {
-              this.refreshEnvMaterials();
             }
+            this.applyRotationAndBackground(THREE_LIB, this.el.object3D);
+            this.refreshEnvMaterials();
           }
         }
       },
@@ -1051,74 +1085,120 @@ if (typeof AFRAME !== 'undefined') {
         }
 
         const normalizedPreset = String(this.data.preset || 'none').trim().toLowerCase();
+        const customEnvUrl = this.data.envImage ? String(this.data.envImage).trim() : '';
         const isEnabled =
           Boolean(this.data.enabled) &&
-          normalizedPreset !== '' &&
-          normalizedPreset !== 'none' &&
+          (customEnvUrl !== '' || (normalizedPreset !== '' && normalizedPreset !== 'none')) &&
           Number(this.data.hdrIntensity) > 0;
+
         const hadEnv = Boolean(scene.environment);
+
         if (isEnabled) {
-          let disposeEnvScene = null;
-          try {
-            const pmremGenerator = this.pmremGenerator || new THREE_LIB.PMREMGenerator(renderer);
-            this.pmremGenerator = pmremGenerator;
-            pmremGenerator.compileEquirectangularShader();
+          const pmremGenerator = this.pmremGenerator || new THREE_LIB.PMREMGenerator(renderer);
+          this.pmremGenerator = pmremGenerator;
+          pmremGenerator.compileEquirectangularShader();
 
-            const built = createRoomEnvironmentScene(THREE_LIB);
-            const roomEnv = built.envScene;
-            disposeEnvScene = built.disposeEnvScene;
-            const preset = String(this.data.preset || 'studio-chrome').toLowerCase();
-
-            if (preset === 'sunset') {
-              const sunLight = new THREE_LIB.DirectionalLight(0xff8844, 2.5);
-              sunLight.position.set(2, 1, 1);
-              roomEnv.add(sunLight);
-            } else if (preset === 'cyber' || preset === 'night') {
-              const neonCyan = new THREE_LIB.PointLight(0x06b6d4, 4.0, 10);
-              neonCyan.position.set(3, 2, 2);
-              roomEnv.add(neonCyan);
-              const neonPink = new THREE_LIB.PointLight(0xec4899, 4.0, 10);
-              neonPink.position.set(-3, -1, -2);
-              roomEnv.add(neonPink);
-            } else if (preset === 'city') {
-              const amberFill = new THREE_LIB.DirectionalLight(0xf59e0b, 1.8);
-              amberFill.position.set(3, 4, 2);
-              roomEnv.add(amberFill);
-              const blueSky = new THREE_LIB.DirectionalLight(0x38bdf8, 1.2);
-              blueSky.position.set(-2, 3, -2);
-              roomEnv.add(blueSky);
-            } else if (preset === 'forest') {
-              const canopyLight = new THREE_LIB.DirectionalLight(0x10b981, 2.0);
-              canopyLight.position.set(1, 4, 1);
-              roomEnv.add(canopyLight);
-              const earthBounce = new THREE_LIB.DirectionalLight(0xb45309, 0.9);
-              earthBounce.position.set(0, -3, 0);
-              roomEnv.add(earthBounce);
-            }
-
-            const envTexture = pmremGenerator.fromScene(roomEnv, 0.04).texture;
-            if (this.envTexture) {
-              this.envTexture.dispose();
-            }
-            this.envTexture = envTexture;
-            scene.environment = envTexture;
-            if (scene.environmentIntensity !== undefined) {
-              scene.environmentIntensity = Number(this.data.hdrIntensity || 1.0);
-            }
-            if (!hadEnv || scene.environmentIntensity === undefined) {
-              this.refreshEnvMaterials();
-            }
-          } catch (err) {
-            console.warn('[scene-environment] Could not initialize RoomEnvironment:', err);
-          } finally {
-            if (disposeEnvScene) {
-              try { disposeEnvScene(); } catch { /* ignore */ }
-            }
+          // 1. If custom environmental image URL is supplied, load and bake as equirectangular reflection map
+          if (customEnvUrl !== '') {
+            const textureLoader = new THREE_LIB.TextureLoader();
+            textureLoader.crossOrigin = 'anonymous';
+            textureLoader.load(
+              customEnvUrl,
+              (loadedTex) => {
+                if (THREE_LIB.EquirectangularReflectionMapping !== undefined) {
+                  loadedTex.mapping = THREE_LIB.EquirectangularReflectionMapping;
+                }
+                if (THREE_LIB.SRGBColorSpace !== undefined) {
+                  loadedTex.colorSpace = THREE_LIB.SRGBColorSpace;
+                }
+                let envTexture = null;
+                try {
+                  envTexture = pmremGenerator.fromEquirectangular(loadedTex).texture;
+                } catch (pmremErr) {
+                  console.warn('[scene-environment] PMREM equirectangular processing error:', pmremErr);
+                  envTexture = loadedTex;
+                }
+                if (this.envTexture && this.envTexture !== envTexture) {
+                  this.envTexture.dispose();
+                }
+                this.envTexture = envTexture;
+                scene.environment = envTexture;
+                if (scene.environmentIntensity !== undefined) {
+                  scene.environmentIntensity = Number(this.data.hdrIntensity || 1.2);
+                }
+                this.applyRotationAndBackground(THREE_LIB, scene);
+                this.refreshEnvMaterials();
+                loadedTex.dispose();
+              },
+              undefined,
+              (loadErr) => {
+                console.warn('[scene-environment] Error loading custom environmental image, falling back to procedural preset:', loadErr);
+                this.setupProceduralEnvironment(THREE_LIB, renderer, scene, pmremGenerator);
+              }
+            );
+            return;
           }
+
+          // 2. Fall back to procedural studio RoomEnvironment preset
+          this.setupProceduralEnvironment(THREE_LIB, renderer, scene, pmremGenerator);
         } else {
           scene.environment = null;
           if (hadEnv) {
             this.refreshEnvMaterials();
+          }
+        }
+      },
+      setupProceduralEnvironment: function (THREE_LIB, renderer, scene, pmremGenerator) {
+        let disposeEnvScene = null;
+        try {
+          const built = createRoomEnvironmentScene(THREE_LIB);
+          const roomEnv = built.envScene;
+          disposeEnvScene = built.disposeEnvScene;
+          const preset = String(this.data.preset || 'studio-chrome').toLowerCase();
+
+          if (preset === 'sunset') {
+            const sunLight = new THREE_LIB.DirectionalLight(0xff8844, 2.5);
+            sunLight.position.set(2, 1, 1);
+            roomEnv.add(sunLight);
+          } else if (preset === 'cyber' || preset === 'night') {
+            const neonCyan = new THREE_LIB.PointLight(0x06b6d4, 4.0, 10);
+            neonCyan.position.set(3, 2, 2);
+            roomEnv.add(neonCyan);
+            const neonPink = new THREE_LIB.PointLight(0xec4899, 4.0, 10);
+            neonPink.position.set(-3, -1, -2);
+            roomEnv.add(neonPink);
+          } else if (preset === 'city') {
+            const amberFill = new THREE_LIB.DirectionalLight(0xf59e0b, 1.8);
+            amberFill.position.set(3, 4, 2);
+            roomEnv.add(amberFill);
+            const blueSky = new THREE_LIB.DirectionalLight(0x38bdf8, 1.2);
+            blueSky.position.set(-2, 3, -2);
+            roomEnv.add(blueSky);
+          } else if (preset === 'forest') {
+            const canopyLight = new THREE_LIB.DirectionalLight(0x10b981, 2.0);
+            canopyLight.position.set(1, 4, 1);
+            roomEnv.add(canopyLight);
+            const earthBounce = new THREE_LIB.DirectionalLight(0xb45309, 0.9);
+            earthBounce.position.set(0, -3, 0);
+            roomEnv.add(earthBounce);
+          }
+
+          const envTexture = pmremGenerator.fromScene(roomEnv, 0.04).texture;
+          if (this.envTexture && this.envTexture !== envTexture) {
+            this.envTexture.dispose();
+          }
+          this.envTexture = envTexture;
+          scene.environment = envTexture;
+          if (scene.environmentIntensity !== undefined) {
+            scene.environmentIntensity = Number(this.data.hdrIntensity || 1.2);
+          }
+          this.applyRotationAndBackground(THREE_LIB, scene);
+          this.refreshEnvMaterials();
+        } catch (err) {
+          console.warn('[scene-environment] Could not initialize RoomEnvironment:', err);
+        } finally {
+          if (disposeEnvScene) {
+            try { disposeEnvScene(); } catch { /* ignore */ }
           }
         }
       },
@@ -1149,7 +1229,22 @@ if (typeof AFRAME !== 'undefined') {
         emissive: { type: 'color', default: '' },
         emissiveIntensity: { type: 'number', default: -1 },
         wireframe: { type: 'boolean', default: false },
-        opacity: { type: 'number', default: 1.0 }
+        opacity: { type: 'number', default: 1.0 },
+        transmission: { type: 'number', default: 0.0 },
+        ior: { type: 'number', default: 1.5 },
+        thickness: { type: 'number', default: 0.5 },
+        clearcoat: { type: 'number', default: 0.0 },
+        clearcoatRoughness: { type: 'number', default: 0.1 },
+        sheen: { type: 'number', default: 0.0 },
+        sheenRoughness: { type: 'number', default: 0.5 },
+        sheenColor: { type: 'color', default: '#ffffff' },
+        normalScale: { type: 'number', default: 1.0 },
+        normalMap: { type: 'string', default: '' },
+        displacementScale: { type: 'number', default: 0.0 },
+        displacementBias: { type: 'number', default: 0.0 },
+        displacementMap: { type: 'string', default: '' },
+        emissiveMap: { type: 'string', default: '' },
+        envMapIntensity: { type: 'number', default: -1 }
       },
       init: function () {
         this.applyMaterials = this.applyMaterials.bind(this);
@@ -1177,60 +1272,193 @@ if (typeof AFRAME !== 'undefined') {
             }
 
             if (node.material) {
-              const materials = Array.isArray(node.material) ? node.material : [node.material];
+              const isMulti = Array.isArray(node.material);
+              const materials = isMulti ? node.material : [node.material];
 
-              materials.forEach((mat) => {
+              materials.forEach((mat, idx) => {
+                let currentMat = mat;
+
+                // Upgrade to MeshPhysicalMaterial if transmission, clearcoat, or sheen are used
+                const needsPhysical = (
+                  (data.transmission !== undefined && Number(data.transmission) > 0) ||
+                  (data.clearcoat !== undefined && Number(data.clearcoat) > 0) ||
+                  (data.sheen !== undefined && Number(data.sheen) > 0)
+                );
+
+                if (needsPhysical && !currentMat.isMeshPhysicalMaterial) {
+                  const physMat = new THREE_LIB.MeshPhysicalMaterial();
+                  physMat.copy(currentMat);
+                  currentMat = physMat;
+                  if (isMulti) {
+                    node.material[idx] = currentMat;
+                  } else {
+                    node.material = currentMat;
+                  }
+                }
+
                 // Ensure double-sided rendering to prevent backface culling darkness
-                mat.side = THREE_LIB.DoubleSide;
+                currentMat.side = THREE_LIB.DoubleSide;
+
+                // Explicitly sync material fog with Three.js scene fog state
+                const sceneEl = this.el?.sceneEl;
+                const hasActiveFog = Boolean(sceneEl?.object3D?.fog);
+                currentMat.fog = hasActiveFog;
+
+                // Directly bind PBR environment map & intensity to guarantee rich surface reflections
+                const envTex = sceneEl?.object3D?.environment;
+                if (envTex && (currentMat.isMeshStandardMaterial || currentMat.isMeshPhysicalMaterial)) {
+                  currentMat.envMap = envTex;
+                  currentMat.envMapIntensity = Number(sceneEl?.object3D?.environmentIntensity || 1.2);
+                }
 
                 // Configure color spaces on texture maps
-                if (mat.map) {
+                if (currentMat.map) {
                   if (THREE_LIB.SRGBColorSpace !== undefined) {
-                    mat.map.colorSpace = THREE_LIB.SRGBColorSpace;
+                    currentMat.map.colorSpace = THREE_LIB.SRGBColorSpace;
                   } else if (THREE_LIB.sRGBEncoding !== undefined) {
-                    mat.map.encoding = THREE_LIB.sRGBEncoding;
+                    currentMat.map.encoding = THREE_LIB.sRGBEncoding;
                   }
-                  mat.map.needsUpdate = true;
+                  currentMat.map.needsUpdate = true;
                 }
 
-                if (mat.emissiveMap) {
-                  if (THREE_LIB.SRGBColorSpace !== undefined) {
-                    mat.emissiveMap.colorSpace = THREE_LIB.SRGBColorSpace;
-                  } else if (THREE_LIB.sRGBEncoding !== undefined) {
-                    mat.emissiveMap.encoding = THREE_LIB.sRGBEncoding;
+                // Handle custom texture map overrides (normalMap, displacementMap, emissiveMap)
+                if (data.normalMap && typeof data.normalMap === 'string' && data.normalMap.trim() !== '') {
+                  const cleanUrl = decodeURIComponent(data.normalMap.trim());
+                  if (!currentMat.userData.__loadedNormalUrl || currentMat.userData.__loadedNormalUrl !== cleanUrl) {
+                    const loader = new THREE_LIB.TextureLoader();
+                    loader.load(cleanUrl, (tex) => {
+                      tex.wrapS = THREE_LIB.RepeatWrapping;
+                      tex.wrapT = THREE_LIB.RepeatWrapping;
+                      tex.flipY = false;
+                      currentMat.normalMap = tex;
+                      currentMat.userData.__loadedNormalUrl = cleanUrl;
+                      currentMat.needsUpdate = true;
+                    });
                   }
-                  mat.emissiveMap.needsUpdate = true;
                 }
 
-                if (mat.normalMap) mat.normalMap.needsUpdate = true;
-                if (mat.roughnessMap) mat.roughnessMap.needsUpdate = true;
-                if (mat.metalnessMap) mat.metalnessMap.needsUpdate = true;
-                if (mat.aoMap) mat.aoMap.needsUpdate = true;
-                if (mat.alphaMap) mat.alphaMap.needsUpdate = true;
+                if (data.displacementMap && typeof data.displacementMap === 'string' && data.displacementMap.trim() !== '') {
+                  const cleanUrl = decodeURIComponent(data.displacementMap.trim());
+                  if (!currentMat.userData.__loadedDisplacementUrl || currentMat.userData.__loadedDisplacementUrl !== cleanUrl) {
+                    const loader = new THREE_LIB.TextureLoader();
+                    loader.load(cleanUrl, (tex) => {
+                      tex.wrapS = THREE_LIB.RepeatWrapping;
+                      tex.wrapT = THREE_LIB.RepeatWrapping;
+                      tex.flipY = false;
+                      currentMat.displacementMap = tex;
+                      currentMat.userData.__loadedDisplacementUrl = cleanUrl;
+                      currentMat.needsUpdate = true;
+                    });
+                  }
+                }
+
+                if (data.emissiveMap && typeof data.emissiveMap === 'string' && data.emissiveMap.trim() !== '') {
+                  const cleanUrl = decodeURIComponent(data.emissiveMap.trim());
+                  if (!currentMat.userData.__loadedEmissiveUrl || currentMat.userData.__loadedEmissiveUrl !== cleanUrl) {
+                    const loader = new THREE_LIB.TextureLoader();
+                    loader.load(cleanUrl, (tex) => {
+                      if (THREE_LIB.SRGBColorSpace !== undefined) {
+                        tex.colorSpace = THREE_LIB.SRGBColorSpace;
+                      }
+                      tex.wrapS = THREE_LIB.RepeatWrapping;
+                      tex.wrapT = THREE_LIB.RepeatWrapping;
+                      tex.flipY = false;
+                      currentMat.emissiveMap = tex;
+                      currentMat.userData.__loadedEmissiveUrl = cleanUrl;
+                      currentMat.needsUpdate = true;
+                    });
+                  }
+                }
+
+                if (currentMat.emissiveMap) {
+                  if (THREE_LIB.SRGBColorSpace !== undefined) {
+                    currentMat.emissiveMap.colorSpace = THREE_LIB.SRGBColorSpace;
+                  } else if (THREE_LIB.sRGBEncoding !== undefined) {
+                    currentMat.emissiveMap.encoding = THREE_LIB.sRGBEncoding;
+                  }
+                  currentMat.emissiveMap.needsUpdate = true;
+                }
+
+                if (currentMat.normalMap) currentMat.normalMap.needsUpdate = true;
+                if (currentMat.roughnessMap) currentMat.roughnessMap.needsUpdate = true;
+                if (currentMat.metalnessMap) currentMat.metalnessMap.needsUpdate = true;
+                if (currentMat.aoMap) currentMat.aoMap.needsUpdate = true;
+                if (currentMat.alphaMap) currentMat.alphaMap.needsUpdate = true;
 
                 // Apply explicit user overrides only if configured (>= 0 or non-empty)
-                if (data.metalness >= 0 && mat.metalness !== undefined) {
-                  mat.metalness = data.metalness;
+                if (data.metalness >= 0 && currentMat.metalness !== undefined) {
+                  currentMat.metalness = data.metalness;
                 }
-                if (data.roughness >= 0 && mat.roughness !== undefined) {
-                  mat.roughness = data.roughness;
-                }
-
-                if (data.emissive && data.emissive.trim() !== '' && mat.emissive && typeof mat.emissive.set === 'function') {
-                  mat.emissive.set(data.emissive);
-                }
-                if (data.emissiveIntensity >= 0 && mat.emissiveIntensity !== undefined) {
-                  mat.emissiveIntensity = data.emissiveIntensity;
+                if (data.roughness >= 0 && currentMat.roughness !== undefined) {
+                  currentMat.roughness = data.roughness;
                 }
 
-                mat.wireframe = !!data.wireframe;
+                if (data.emissive && data.emissive.trim() !== '' && currentMat.emissive && typeof currentMat.emissive.set === 'function') {
+                  currentMat.emissive.set(data.emissive);
+                }
+                if (data.emissiveIntensity >= 0 && currentMat.emissiveIntensity !== undefined) {
+                  currentMat.emissiveIntensity = data.emissiveIntensity;
+                }
+
+                currentMat.wireframe = !!data.wireframe;
 
                 if (data.opacity !== undefined && data.opacity < 1.0) {
-                  mat.opacity = data.opacity;
-                  mat.transparent = true;
+                  currentMat.opacity = data.opacity;
+                  currentMat.transparent = true;
                 }
 
-                mat.needsUpdate = true;
+                // Normal map scale depth
+                if (data.normalScale !== undefined && currentMat.normalScale) {
+                  const ns = Number(data.normalScale);
+                  currentMat.normalScale.set(ns, ns);
+                }
+
+                // Displacement scale and bias
+                if (data.displacementScale !== undefined && currentMat.displacementScale !== undefined) {
+                  currentMat.displacementScale = Number(data.displacementScale);
+                }
+                if (data.displacementBias !== undefined && currentMat.displacementBias !== undefined) {
+                  currentMat.displacementBias = Number(data.displacementBias);
+                }
+
+                // Transmission & Glass Refraction (MeshPhysicalMaterial)
+                if (currentMat.isMeshPhysicalMaterial) {
+                  if (data.transmission !== undefined && Number(data.transmission) > 0) {
+                    currentMat.transmission = Number(data.transmission);
+                    currentMat.transparent = true;
+                  }
+                  if (data.ior !== undefined) {
+                    currentMat.ior = Number(data.ior);
+                  }
+                  if (data.thickness !== undefined) {
+                    currentMat.thickness = Number(data.thickness);
+                  }
+
+                  // Clearcoat
+                  if (data.clearcoat !== undefined) {
+                    currentMat.clearcoat = Number(data.clearcoat);
+                  }
+                  if (data.clearcoatRoughness !== undefined) {
+                    currentMat.clearcoatRoughness = Number(data.clearcoatRoughness);
+                  }
+
+                  // Sheen
+                  if (data.sheen !== undefined) {
+                    currentMat.sheen = Number(data.sheen);
+                  }
+                  if (data.sheenRoughness !== undefined) {
+                    currentMat.sheenRoughness = Number(data.sheenRoughness);
+                  }
+                  if (data.sheenColor && currentMat.sheenColor) {
+                    currentMat.sheenColor.set(data.sheenColor);
+                  }
+                }
+
+                if (data.envMapIntensity !== undefined && Number(data.envMapIntensity) >= 0) {
+                  currentMat.envMapIntensity = Number(data.envMapIntensity);
+                }
+
+                currentMat.needsUpdate = true;
               });
             }
           }
@@ -4159,19 +4387,20 @@ if (typeof AFRAME !== 'undefined') {
 
         const spriteTex = generateParticleSprite(this.data.shape, THREE_LIB);
         const pMat = new THREE_LIB.PointsMaterial({
-          size: Math.max(0.01, Number(this.data.size) || 0.04),
+          size: Math.max(0.02, Number(this.data.size) || 0.06),
           map: spriteTex,
           vertexColors: true,
           transparent: true,
           opacity: Math.max(0.05, Number(this.data.opacity) || 0.85),
           blending: this.data.blending === 'normal' ? THREE_LIB.NormalBlending : THREE_LIB.AdditiveBlending,
           depthWrite: false,
-          depthTest: true
+          depthTest: true,
+          fog: false // Crucial: particles shine brightly through atmospheric fog instead of being darkened
         });
 
         const pointsMesh = new THREE_LIB.Points(geom, pMat);
         pointsMesh.frustumCulled = false;
-        pointsMesh.renderOrder = 999;
+        pointsMesh.renderOrder = 9999;
         this.particlesObj = pointsMesh;
         this.particleGroup.add(pointsMesh);
       },
@@ -4610,11 +4839,21 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['mindar-target-sync']) {
         }
         const sObj = sceneEl.object3D;
         if (!sObj) return;
+        const hasActiveFog = Boolean(sObj?.fog);
+        const envTex = sObj.environment;
+        const envIntensity = Number(sObj.environmentIntensity || 1.2);
         sObj.traverse((node) => {
           if (node.isMesh && node.material) {
             const mats = Array.isArray(node.material) ? node.material : [node.material];
             mats.forEach((m) => {
-              if (m) m.needsUpdate = true;
+              if (m) {
+                m.fog = Boolean(hasActiveFog);
+                if (envTex && (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial)) {
+                  m.envMap = envTex;
+                  m.envMapIntensity = envIntensity;
+                }
+                m.needsUpdate = true;
+              }
             });
           }
         });
@@ -4740,11 +4979,21 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-studio-lighting']) {
         }
         const sObj = sceneEl.object3D;
         if (!sObj) return;
+        const hasActiveFog = Boolean(sObj?.fog);
+        const envTex = sObj.environment;
+        const envIntensity = Number(sObj.environmentIntensity || 1.2);
         sObj.traverse((node) => {
           if (node.isMesh && node.material) {
             const mats = Array.isArray(node.material) ? node.material : [node.material];
             mats.forEach((m) => {
-              if (m) m.needsUpdate = true;
+              if (m) {
+                m.fog = Boolean(hasActiveFog);
+                if (envTex && (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial)) {
+                  m.envMap = envTex;
+                  m.envMapIntensity = envIntensity;
+                }
+                m.needsUpdate = true;
+              }
             });
           }
         });
@@ -5115,6 +5364,11 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
 
           // Check if material appearance or texture changed
           const textureUrlChanged = existingMesh.userData?.textureUrl !== item.textureUrl;
+          const normalMapChanged = existingMesh.userData?.normalMap !== item.normalMap;
+          const displacementMapChanged = existingMesh.userData?.displacementMap !== item.displacementMap;
+          const emissiveMapChanged = existingMesh.userData?.emissiveMap !== item.emissiveMap;
+          const mapsChanged = textureUrlChanged || normalMapChanged || displacementMapChanged || emissiveMapChanged;
+
           const textureTransformChanged = (
             existingMesh.userData?.textureRepeatX !== item.textureRepeatX ||
             existingMesh.userData?.textureRepeatY !== item.textureRepeatY ||
@@ -5133,18 +5387,41 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
             existingMesh.userData?.wireframe !== item.wireframe ||
             existingMesh.userData?.flatShading !== item.flatShading ||
             existingMesh.userData?.opacity !== item.opacity ||
-            existingMesh.userData?.transparent !== item.transparent
+            existingMesh.userData?.transparent !== item.transparent ||
+            existingMesh.userData?.transmission !== item.transmission ||
+            existingMesh.userData?.ior !== item.ior ||
+            existingMesh.userData?.thickness !== item.thickness ||
+            existingMesh.userData?.clearcoat !== item.clearcoat ||
+            existingMesh.userData?.clearcoatRoughness !== item.clearcoatRoughness ||
+            existingMesh.userData?.sheen !== item.sheen ||
+            existingMesh.userData?.sheenRoughness !== item.sheenRoughness ||
+            existingMesh.userData?.sheenColor !== item.sheenColor ||
+            existingMesh.userData?.normalScale !== item.normalScale ||
+            existingMesh.userData?.displacementScale !== item.displacementScale ||
+            existingMesh.userData?.displacementBias !== item.displacementBias
           );
 
-          if (textureUrlChanged || (matSurfaceChanged && !existingMesh.material)) {
+          const needsPhysicalUpgrade = (
+            (Number(item.transmission || 0) > 0 || Number(item.clearcoat || 0) > 0 || Number(item.sheen || 0) > 0) &&
+            existingMesh.material &&
+            !(Array.isArray(existingMesh.material) ? existingMesh.material[0]?.isMeshPhysicalMaterial : existingMesh.material.isMeshPhysicalMaterial)
+          );
+
+          if (mapsChanged || needsPhysicalUpgrade || (matSurfaceChanged && !existingMesh.material)) {
             if (existingMesh.material) {
               if (Array.isArray(existingMesh.material)) {
                 existingMesh.material.forEach((m) => {
                   if (m.map && !m.map.isVideoTexture) m.map.dispose();
+                  if (m.normalMap) m.normalMap.dispose();
+                  if (m.displacementMap) m.displacementMap.dispose();
+                  if (m.emissiveMap) m.emissiveMap.dispose();
                   m.dispose();
                 });
               } else {
                 if (existingMesh.material.map && !existingMesh.material.map.isVideoTexture) existingMesh.material.map.dispose();
+                if (existingMesh.material.normalMap) existingMesh.material.normalMap.dispose();
+                if (existingMesh.material.displacementMap) existingMesh.material.displacementMap.dispose();
+                if (existingMesh.material.emissiveMap) existingMesh.material.emissiveMap.dispose();
                 existingMesh.material.dispose();
               }
             }
@@ -5168,6 +5445,8 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
                   }
                 } else {
                   if (item.color && m.color) m.color.set(item.color);
+                  if (item.emissive && m.emissive) m.emissive.set(item.emissive);
+                  if (item.emissiveIntensity !== undefined) m.emissiveIntensity = Number(item.emissiveIntensity);
                 }
                 if (item.roughness !== undefined) m.roughness = Number(item.roughness);
                 if (item.metalness !== undefined) m.metalness = Number(item.metalness);
@@ -5175,8 +5454,41 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
                 if (item.flatShading !== undefined) m.flatShading = Boolean(item.flatShading);
                 if (item.opacity !== undefined) {
                   m.opacity = Number(item.opacity);
-                  m.transparent = Boolean(item.transparent) || Number(item.opacity) < 1.0;
                 }
+                if (item.transmission !== undefined && m.transmission !== undefined) {
+                  m.transmission = Number(item.transmission);
+                }
+                if (item.ior !== undefined && m.ior !== undefined) {
+                  m.ior = Number(item.ior);
+                }
+                if (item.thickness !== undefined && m.thickness !== undefined) {
+                  m.thickness = Number(item.thickness);
+                }
+                if (item.clearcoat !== undefined && m.clearcoat !== undefined) {
+                  m.clearcoat = Number(item.clearcoat);
+                }
+                if (item.clearcoatRoughness !== undefined && m.clearcoatRoughness !== undefined) {
+                  m.clearcoatRoughness = Number(item.clearcoatRoughness);
+                }
+                if (item.sheen !== undefined && m.sheen !== undefined) {
+                  m.sheen = Number(item.sheen);
+                }
+                if (item.sheenRoughness !== undefined && m.sheenRoughness !== undefined) {
+                  m.sheenRoughness = Number(item.sheenRoughness);
+                }
+                if (item.sheenColor && m.sheenColor) {
+                  m.sheenColor.set(item.sheenColor);
+                }
+                if (item.normalScale !== undefined && m.normalScale) {
+                  m.normalScale.set(Number(item.normalScale), Number(item.normalScale));
+                }
+                if (item.displacementScale !== undefined && m.displacementScale !== undefined) {
+                  m.displacementScale = Number(item.displacementScale);
+                }
+                if (item.displacementBias !== undefined && m.displacementBias !== undefined) {
+                  m.displacementBias = Number(item.displacementBias);
+                }
+                m.transparent = Boolean(item.transparent) || Number(m.opacity ?? 1.0) < 1.0 || Number(m.transmission ?? 0) > 0;
                 m.needsUpdate = true;
               });
             }

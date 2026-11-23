@@ -1144,6 +1144,13 @@ export default function Shop() {
                         : (Array.isArray(pCfg.customLights) && pCfg.customLights.length > 0)
                           ? pCfg.customLights
                           : (Array.isArray(selectedProduct?.customLights) ? selectedProduct.customLights : []);
+                    res.customModels = (Array.isArray(bCfg.customModels) && bCfg.customModels.length > 0)
+                      ? bCfg.customModels
+                      : (Array.isArray(selectedBatchConfig?.customModels) && selectedBatchConfig.customModels.length > 0)
+                        ? selectedBatchConfig.customModels
+                        : (Array.isArray(pCfg.customModels) && pCfg.customModels.length > 0)
+                          ? pCfg.customModels
+                          : (Array.isArray(selectedProduct?.customModels) ? selectedProduct.customModels : []);
                     res.custom3DTexts = (Array.isArray(bCfg.custom3DTexts) && bCfg.custom3DTexts.length > 0)
                       ? bCfg.custom3DTexts
                       : (Array.isArray(selectedBatchConfig?.custom3DTexts) && selectedBatchConfig.custom3DTexts.length > 0)

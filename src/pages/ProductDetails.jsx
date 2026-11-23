@@ -95,13 +95,17 @@ function ProductDetails() {
           if (data.portalConfig && typeof data.portalConfig === 'object') res.portalConfig = data.portalConfig;
           if (data.particleConfig && typeof data.particleConfig === 'object') res.particleConfig = data.particleConfig;
           if (Array.isArray(data.additionalGeometries)) res.additionalGeometries = data.additionalGeometries;
+          if (Array.isArray(data.customModels)) res.customModels = data.customModels;
           if (Array.isArray(data.custom3DTexts)) res.custom3DTexts = data.custom3DTexts;
           if (Array.isArray(data.customLights)) res.customLights = data.customLights;
           if (Array.isArray(data.scatterLayers)) res.scatterLayers = data.scatterLayers;
           if (Array.isArray(data.ar_config?.additionalGeometries)) res.additionalGeometries = data.ar_config.additionalGeometries;
+          if (Array.isArray(data.ar_config?.customModels)) res.customModels = data.ar_config.customModels;
           if (Array.isArray(data.ar_config?.custom3DTexts)) res.custom3DTexts = data.ar_config.custom3DTexts;
           if (Array.isArray(data.ar_config?.customLights)) res.customLights = data.ar_config.customLights;
           if (Array.isArray(data.ar_config?.scatterLayers)) res.scatterLayers = data.ar_config.scatterLayers;
+          if (Array.isArray(data.config?.additionalGeometries)) res.additionalGeometries = data.config.additionalGeometries;
+          if (Array.isArray(data.config?.customModels)) res.customModels = data.config.customModels;
           if (Array.isArray(data.config?.custom3DTexts)) res.custom3DTexts = data.config.custom3DTexts;
           if (Array.isArray(data.config?.customLights)) res.customLights = data.config.customLights;
           if (Array.isArray(data.config?.scatterLayers)) res.scatterLayers = data.config.scatterLayers;
@@ -114,7 +118,7 @@ function ProductDetails() {
             'modelRotX', 'modelRotY', 'modelRotZ',
             'modelPosX', 'modelPosY', 'modelPosZ', 'modelRotSpeed',
             'matMetalness', 'matRoughness', 'matEmissive', 'matEmissiveIntensity',
-            'matWireframe', 'matOpacity', 'meshOverrides', 'scatterLayers'
+            'matWireframe', 'matOpacity', 'meshOverrides', 'scatterLayers', 'customModels'
           ];
           keys.forEach((k) => {
             if (data[k] !== undefined && data[k] !== null) res[k] = data[k];
@@ -136,6 +140,9 @@ function ProductDetails() {
               customLights: (Array.isArray(bLighting.customLights) && bLighting.customLights.length > 0)
                 ? bLighting.customLights
                 : (Array.isArray(mergedConfig.customLights) ? mergedConfig.customLights : []),
+              customModels: (Array.isArray(bLighting.customModels) && bLighting.customModels.length > 0)
+                ? bLighting.customModels
+                : (Array.isArray(mergedConfig.customModels) ? mergedConfig.customModels : []),
               custom3DTexts: (Array.isArray(bLighting.custom3DTexts) && bLighting.custom3DTexts.length > 0)
                 ? bLighting.custom3DTexts
                 : (Array.isArray(mergedConfig.custom3DTexts) ? mergedConfig.custom3DTexts : []),

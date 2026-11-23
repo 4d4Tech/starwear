@@ -38,13 +38,14 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const [arData, setArData] = useState(null);
   const [customLights, setCustomLights] = useState([]);
   const [liveStudioLighting, setLiveStudioLighting] = useState(null);
+  const [liveParticleConfig, setLiveParticleConfig] = useState(null);
   const [error, setError] = useState(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [mediaPlaying, setMediaPlaying] = useState(true);
   const [mediaMuted, setMediaMuted] = useState(false);
 
-  // Real-Time Batch Lighting & Scene Synchronization
-  // Automatically syncs newly added or modified lights when saved from ARTest or another admin session
+  // Real-Time Batch Lighting, Fog, Particles & Scene Synchronization
+  // Automatically syncs newly added or modified lights/effects when saved from ARTest or another admin session
   useEffect(() => {
     if (!batchId) return;
     const cleanBatchId = String(batchId).trim();
@@ -67,6 +68,17 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         });
       }
 
+      const incomingParticles = bData.particleConfig || bData.ar_config?.particleConfig;
+      if (incomingParticles && typeof incomingParticles === 'object') {
+        setLiveParticleConfig((prev) => {
+          if (JSON.stringify(prev) !== JSON.stringify(incomingParticles)) {
+            console.log('[ARExperience] Real-time batch particle sync received from Firestore:', incomingParticles);
+            return incomingParticles;
+          }
+          return prev;
+        });
+      }
+
       setLiveStudioLighting((prev) => {
         const next = { ...(prev || {}) };
         let changed = false;
@@ -75,7 +87,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           'dir1Color', 'dir1Intensity', 'dir1Position',
           'dir2Color', 'dir2Intensity', 'dir2Position',
           'rimColor', 'rimIntensity', 'rimPosition',
-          'exposure', 'envPreset', 'envIntensity', 'fogColor', 'fogDensity'
+          'exposure', 'envPreset', 'envIntensity', 'envImage', 'fogColor', 'fogDensity'
         ];
         lightingKeys.forEach((k) => {
           const val = bData[k] ?? bData.ar_config?.[k];
@@ -96,6 +108,12 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             comp.rebuildLights();
           }
         });
+        sceneEl.querySelectorAll('[ar-particle-system]').forEach((el) => {
+          const comp = el.components?.['ar-particle-system'];
+          if (comp && typeof comp.buildParticles === 'function') {
+            comp.buildParticles();
+          }
+        });
       }
     }, (err) => {
       console.warn('[ARExperience] Real-time batch snapshot warning:', err);
@@ -107,6 +125,9 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           const parsed = JSON.parse(e.newValue);
           if (Array.isArray(parsed.customLights)) {
             setCustomLights(parsed.customLights);
+          }
+          if (parsed.particleConfig && typeof parsed.particleConfig === 'object') {
+            setLiveParticleConfig(parsed.particleConfig);
           }
         } catch {}
       }
@@ -458,7 +479,13 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             'modelRotX', 'modelRotY', 'modelRotZ',
             'modelPosX', 'modelPosY', 'modelPosZ', 'modelRotSpeed',
             'matMetalness', 'matRoughness', 'matEmissive', 'matEmissiveIntensity',
-            'matWireframe', 'matOpacity', 'meshOverrides'
+            'matWireframe', 'matOpacity', 'meshOverrides',
+            'matTransmission', 'matIor', 'matThickness',
+            'matClearcoat', 'matClearcoatRoughness',
+            'matSheen', 'matSheenRoughness', 'matSheenColor',
+            'matNormalScale', 'matNormalMapUrl',
+            'matDisplacementScale', 'matDisplacementBias', 'matDisplacementMapUrl',
+            'matEmissiveMapUrl'
           ];
           directLightingKeys.forEach((key) => {
             if (docData[key] !== undefined && docData[key] !== null) {
@@ -1237,7 +1264,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         if (modelEl) {
           const mesh = modelEl.getObject3D('mesh');
           if (mesh) {
-            const overrides = arData?.config?.meshOverrides;
+            const overrides = arData?.config?.meshOverrides || arData?.ar_config?.meshOverrides || arData?.meshOverrides;
             const nodesToDelete = [];
             mesh.traverse((node) => {
               if (node.isMesh) {
@@ -1251,34 +1278,78 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                       }
                       return;
                     }
-                    if (ovr.position) node.position.set(ovr.position.x, ovr.position.y, ovr.position.z);
+                    if (ovr.position) {
+                      node.position.set(
+                        Number(ovr.position.x ?? node.position.x),
+                        Number(ovr.position.y ?? node.position.y),
+                        Number(ovr.position.z ?? node.position.z)
+                      );
+                    }
                     if (ovr.rotation) {
+                      node.rotation.order = 'YXZ';
                       node.rotation.set(
                         ((ovr.rotation.x || 0) * Math.PI) / 180,
                         ((ovr.rotation.y || 0) * Math.PI) / 180,
-                        ((ovr.rotation.z || 0) * Math.PI) / 180
+                        ((ovr.rotation.z || 0) * Math.PI) / 180,
+                        'YXZ'
                       );
                     }
                     if (ovr.scale) {
-                      const sx = typeof ovr.scale === 'number' ? ovr.scale : (ovr.scale.x || 1);
-                      node.scale.set(sx, sx, sx);
+                      const sx = typeof ovr.scale === 'number' ? ovr.scale : (ovr.scale.x ?? 1);
+                      const sy = typeof ovr.scale === 'number' ? ovr.scale : (ovr.scale.y ?? sx);
+                      const sz = typeof ovr.scale === 'number' ? ovr.scale : (ovr.scale.z ?? sx);
+                      node.scale.set(sx, sy, sz);
                     }
                     if (ovr.visible !== undefined) node.visible = !!ovr.visible;
                     if (ovr.material && node.material) {
-                      const mats = Array.isArray(node.material) ? node.material : [node.material];
-                      mats.forEach((m) => {
-                        if (ovr.material.color && m.color) m.color.set(ovr.material.color);
-                        if (ovr.material.metalness !== undefined && m.metalness !== undefined) m.metalness = ovr.material.metalness;
-                        if (ovr.material.roughness !== undefined && m.roughness !== undefined) m.roughness = ovr.material.roughness;
-                        if (ovr.material.emissive && m.emissive) m.emissive.set(ovr.material.emissive);
-                        if (ovr.material.opacity !== undefined) {
-                          m.opacity = ovr.material.opacity;
-                          if (m.opacity < 1.0) m.transparent = true;
-                        }
-                        if (ovr.material.wireframe !== undefined) m.wireframe = !!ovr.material.wireframe;
-                        m.needsUpdate = true;
-                      });
                       const THREE_LIB = (typeof AFRAME !== 'undefined' && AFRAME.THREE) ? AFRAME.THREE : THREE;
+                      const isMulti = Array.isArray(node.material);
+                      const mats = isMulti ? node.material : [node.material];
+                      const needsPhysical = (
+                        (ovr.material.transmission !== undefined && Number(ovr.material.transmission) > 0) ||
+                        (ovr.material.clearcoat !== undefined && Number(ovr.material.clearcoat) > 0) ||
+                        (ovr.material.sheen !== undefined && Number(ovr.material.sheen) > 0)
+                      );
+
+                      mats.forEach((m, idx) => {
+                        let curM = m;
+                        if (needsPhysical && !curM.isMeshPhysicalMaterial) {
+                          const phys = new THREE_LIB.MeshPhysicalMaterial().copy(curM);
+                          curM = phys;
+                          if (isMulti) node.material[idx] = curM;
+                          else node.material = curM;
+                        }
+                        if (ovr.material.color && curM.color) curM.color.set(ovr.material.color);
+                        if (ovr.material.metalness !== undefined && curM.metalness !== undefined) curM.metalness = ovr.material.metalness;
+                        if (ovr.material.roughness !== undefined && curM.roughness !== undefined) curM.roughness = ovr.material.roughness;
+                        if (ovr.material.emissive && curM.emissive) curM.emissive.set(ovr.material.emissive);
+                        if (ovr.material.emissiveIntensity !== undefined && curM.emissiveIntensity !== undefined) curM.emissiveIntensity = ovr.material.emissiveIntensity;
+                        if (ovr.material.opacity !== undefined) {
+                          curM.opacity = ovr.material.opacity;
+                        }
+                        if (ovr.material.wireframe !== undefined) curM.wireframe = !!ovr.material.wireframe;
+                        if (ovr.material.transmission !== undefined && curM.transmission !== undefined) curM.transmission = Number(ovr.material.transmission);
+                        if (ovr.material.ior !== undefined && curM.ior !== undefined) curM.ior = Number(ovr.material.ior);
+                        if (ovr.material.thickness !== undefined && curM.thickness !== undefined) curM.thickness = Number(ovr.material.thickness);
+                        if (ovr.material.clearcoat !== undefined && curM.clearcoat !== undefined) curM.clearcoat = Number(ovr.material.clearcoat);
+                        if (ovr.material.clearcoatRoughness !== undefined && curM.clearcoatRoughness !== undefined) curM.clearcoatRoughness = Number(ovr.material.clearcoatRoughness);
+                        if (ovr.material.sheen !== undefined && curM.sheen !== undefined) curM.sheen = Number(ovr.material.sheen);
+                        if (ovr.material.sheenRoughness !== undefined && curM.sheenRoughness !== undefined) curM.sheenRoughness = Number(ovr.material.sheenRoughness);
+                        if (ovr.material.sheenColor && curM.sheenColor) curM.sheenColor.set(ovr.material.sheenColor);
+                        if (ovr.material.normalScale !== undefined && curM.normalScale) curM.normalScale.set(Number(ovr.material.normalScale), Number(ovr.material.normalScale));
+                        if (ovr.material.displacementScale !== undefined && curM.displacementScale !== undefined) curM.displacementScale = Number(ovr.material.displacementScale);
+                        if (ovr.material.displacementBias !== undefined && curM.displacementBias !== undefined) curM.displacementBias = Number(ovr.material.displacementBias);
+                        if (ovr.material.envMapIntensity !== undefined && curM.envMapIntensity !== undefined) {
+                          curM.envMapIntensity = Number(ovr.material.envMapIntensity);
+                          if (!curM.userData) curM.userData = {};
+                          curM.userData.envMapIntensity = Number(ovr.material.envMapIntensity);
+                        }
+                        if (Number(curM.opacity ?? 1.0) < 1.0 || Number(curM.transmission ?? 0) > 0) curM.transparent = true;
+                        curM.needsUpdate = true;
+                      });
+
+                      const updatedMats = Array.isArray(node.material) ? node.material : [node.material];
+
                       const applyTexTransform = (tex) => {
                         if (!tex) return;
                         tex.wrapS = THREE_LIB.RepeatWrapping;
@@ -1300,6 +1371,52 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                         tex.needsUpdate = true;
                       };
 
+                      // Load normalMap if configured in override
+                      if (ovr.material.normalMapUrl && typeof ovr.material.normalMapUrl === 'string' && !ovr.material.normalMapUrl.startsWith('blob:')) {
+                        const nLoader = new THREE_LIB.TextureLoader();
+                        nLoader.load(ovr.material.normalMapUrl, (tex) => {
+                          tex.wrapS = THREE_LIB.RepeatWrapping;
+                          tex.wrapT = THREE_LIB.RepeatWrapping;
+                          tex.flipY = false;
+                          applyTexTransform(tex);
+                          updatedMats.forEach((m) => {
+                            m.normalMap = tex;
+                            m.needsUpdate = true;
+                          });
+                        });
+                      }
+
+                      // Load displacementMap if configured in override
+                      if (ovr.material.displacementMapUrl && typeof ovr.material.displacementMapUrl === 'string' && !ovr.material.displacementMapUrl.startsWith('blob:')) {
+                        const dLoader = new THREE_LIB.TextureLoader();
+                        dLoader.load(ovr.material.displacementMapUrl, (tex) => {
+                          tex.wrapS = THREE_LIB.RepeatWrapping;
+                          tex.wrapT = THREE_LIB.RepeatWrapping;
+                          tex.flipY = false;
+                          applyTexTransform(tex);
+                          updatedMats.forEach((m) => {
+                            m.displacementMap = tex;
+                            m.needsUpdate = true;
+                          });
+                        });
+                      }
+
+                      // Load emissiveMap if configured in override
+                      if (ovr.material.emissiveMapUrl && typeof ovr.material.emissiveMapUrl === 'string' && !ovr.material.emissiveMapUrl.startsWith('blob:')) {
+                        const eLoader = new THREE_LIB.TextureLoader();
+                        eLoader.load(ovr.material.emissiveMapUrl, (tex) => {
+                          if (THREE_LIB.SRGBColorSpace !== undefined) tex.colorSpace = THREE_LIB.SRGBColorSpace;
+                          tex.wrapS = THREE_LIB.RepeatWrapping;
+                          tex.wrapT = THREE_LIB.RepeatWrapping;
+                          tex.flipY = false;
+                          applyTexTransform(tex);
+                          updatedMats.forEach((m) => {
+                            m.emissiveMap = tex;
+                            m.needsUpdate = true;
+                          });
+                        });
+                      }
+
                       if (ovr.material.textureUrl && typeof ovr.material.textureUrl === 'string' && !ovr.material.textureUrl.startsWith('blob:')) {
                         const loader = new THREE_LIB.TextureLoader();
                         loader.load(ovr.material.textureUrl, (tex) => {
@@ -1308,14 +1425,14 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                           }
                           tex.flipY = false;
                           applyTexTransform(tex);
-                          mats.forEach((m) => {
+                          updatedMats.forEach((m) => {
                             m.map = tex;
                             m.needsUpdate = true;
                           });
                         });
                       } else {
-                        mats.forEach((m) => {
-                          ['map', 'emissiveMap', 'roughnessMap', 'metalnessMap'].forEach((slot) => {
+                        updatedMats.forEach((m) => {
+                          ['map', 'emissiveMap', 'roughnessMap', 'metalnessMap', 'normalMap', 'displacementMap'].forEach((slot) => {
                             if (m[slot]) applyTexTransform(m[slot]);
                           });
                           m.needsUpdate = true;
@@ -1471,12 +1588,39 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
       }
       const sObj = sceneEl.object3D;
       if (!sObj) return;
+
+      const activeFogDensity = Number(liveStudioLighting?.fogDensity ?? arData?.config?.fogDensity ?? 0);
+      const activeFogColor = liveStudioLighting?.fogColor || arData?.config?.fogColor || '#000000';
+
+      if (activeFogDensity > 0) {
+        sObj.fog = new THREE_LIB.FogExp2(activeFogColor, activeFogDensity);
+        if (!cameraEnabled) {
+          sObj.background = new THREE_LIB.Color(activeFogColor);
+        }
+      } else {
+        sObj.fog = null;
+        if (!cameraEnabled) {
+          sObj.background = null;
+        }
+        if (sceneEl.hasAttribute('fog')) sceneEl.removeAttribute('fog');
+      }
+
+      const envTex = sObj.environment;
+      const activeEnvIntensity = Number(liveStudioLighting?.envIntensity ?? arData?.config?.envIntensity ?? 1.2);
+
       sObj.updateMatrixWorld(true);
       sObj.traverse((node) => {
         if (node.isMesh && node.material) {
           const mats = Array.isArray(node.material) ? node.material : [node.material];
           mats.forEach((m) => {
-            if (m) m.needsUpdate = true;
+            if (m) {
+              m.fog = activeFogDensity > 0;
+              if (envTex && (m.isMeshStandardMaterial || m.isMeshPhysicalMaterial)) {
+                m.envMap = envTex;
+                m.envMapIntensity = activeEnvIntensity;
+              }
+              m.needsUpdate = true;
+            }
           });
         }
       });
@@ -1653,23 +1797,37 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
     : (cfg.rimIntensity !== undefined ? Number(cfg.rimIntensity) : 1.0);
   const rimPosition = liveStudioLighting?.rimPosition || cfg.rimPosition || '0 3 -3';
 
-  // Single Unified Studio Lighting Rig configuration matching ProductViewer & ARTest 1:1
+  // Single Unified Studio Lighting Rig (1:1 Parity with ARTest & ProductViewer - Ambient, Key, Fill, Rim)
   const studioLightingAttr = `enabled: true; includeAmbient: true; ambientColor: ${ambientColor}; ambientIntensity: ${ambientIntensity}; dir1Color: ${dir1Color}; dir1Intensity: ${dir1Intensity}; dir1Position: ${dir1Position}; dir2Color: ${dir2Color}; dir2Intensity: ${dir2Intensity}; dir2Position: ${dir2Position}; rimColor: ${rimColor}; rimIntensity: ${rimIntensity}; rimPosition: ${rimPosition};`;
 
   const exposure = liveStudioLighting?.exposure !== undefined
     ? Number(liveStudioLighting.exposure)
     : (cfg.exposure !== undefined ? Number(cfg.exposure) : 1.15);
 
-  // Enable studio-chrome environment reflection by default so PBR materials never look dark from a distance
-  const envPreset = liveStudioLighting?.envPreset || cfg.envPreset || 'studio-chrome';
+  // Enable environment reflection (custom image or studio-chrome) so PBR materials never look dark
+  const envImage = liveStudioLighting?.envImage || cfg.envImage || cfg.envImageUrl || cfg.hdrUrl || '';
+  const rawEnvPreset = liveStudioLighting?.envPreset ?? cfg.envPreset;
+  const envPreset = (rawEnvPreset && rawEnvPreset !== 'none') ? rawEnvPreset : 'studio-chrome';
   const envIntensity = liveStudioLighting?.envIntensity !== undefined
     ? Number(liveStudioLighting.envIntensity)
-    : (cfg.envIntensity !== undefined
+    : (cfg.envIntensity !== undefined && Number(cfg.envIntensity) > 0
       ? Number(cfg.envIntensity)
-      : (cfg.hdrIntensity !== undefined ? Number(cfg.hdrIntensity) : 1.2));
-  const envEnabled = Boolean(envPreset && envPreset !== 'none' && envIntensity > 0);
-  const fogColor = cfg.fogColor || '#000000';
-  const fogDensity = cfg.fogDensity !== undefined ? Number(cfg.fogDensity) : 0;
+      : (cfg.hdrIntensity !== undefined && Number(cfg.hdrIntensity) > 0 ? Number(cfg.hdrIntensity) : 1.2));
+  const envRotation = liveStudioLighting?.envRotation !== undefined
+    ? Number(liveStudioLighting.envRotation)
+    : (cfg.envRotation !== undefined ? Number(cfg.envRotation) : 0);
+  const envShowBackground = liveStudioLighting?.envShowBackground !== undefined
+    ? Boolean(liveStudioLighting.envShowBackground)
+    : Boolean(cfg.envShowBackground);
+  const envBackgroundBlur = liveStudioLighting?.envBackgroundBlur !== undefined
+    ? Number(liveStudioLighting.envBackgroundBlur)
+    : (cfg.envBackgroundBlur !== undefined ? Number(cfg.envBackgroundBlur) : 0);
+  const matEnvMapIntensity = cfg.matEnvMapIntensity !== undefined ? Number(cfg.matEnvMapIntensity) : -1;
+  const envEnabled = Boolean((envImage && envImage.trim() !== '') || (envPreset && envPreset !== 'none' && envIntensity > 0));
+  const fogColor = liveStudioLighting?.fogColor || cfg.fogColor || '#000000';
+  const fogDensity = liveStudioLighting?.fogDensity !== undefined
+    ? Number(liveStudioLighting.fogDensity)
+    : (cfg.fogDensity !== undefined ? Number(cfg.fogDensity) : 0);
 
   const modelScale = cfg.modelScale ?? 0.4;
   const modelRotSpeed = cfg.modelRotSpeed ?? 10000;
@@ -1687,6 +1845,20 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const matEmissiveIntensity = cfg.matEmissiveIntensity !== undefined ? cfg.matEmissiveIntensity : -1;
   const matWireframe = !!cfg.matWireframe;
   const matOpacity = cfg.matOpacity ?? 1.0;
+  const matTransmission = Number(cfg.matTransmission ?? 0);
+  const matIor = Number(cfg.matIor ?? 1.5);
+  const matThickness = Number(cfg.matThickness ?? 0.5);
+  const matClearcoat = Number(cfg.matClearcoat ?? 0);
+  const matClearcoatRoughness = Number(cfg.matClearcoatRoughness ?? 0.1);
+  const matSheen = Number(cfg.matSheen ?? 0);
+  const matSheenRoughness = Number(cfg.matSheenRoughness ?? 0.5);
+  const matSheenColor = cfg.matSheenColor || '#ffffff';
+  const matNormalScale = Number(cfg.matNormalScale ?? 1.0);
+  const matNormalMapUrl = cfg.matNormalMapUrl || '';
+  const matDisplacementScale = Number(cfg.matDisplacementScale ?? 0);
+  const matDisplacementBias = Number(cfg.matDisplacementBias ?? 0);
+  const matDisplacementMapUrl = cfg.matDisplacementMapUrl || '';
+  const matEmissiveMapUrl = cfg.matEmissiveMapUrl || '';
 
   const showBuyButton = cfg.showBuyButton !== undefined ? cfg.showBuyButton : true;
   const buyButtonColor = cfg.buyButtonColor || '#e11d48';
@@ -1744,6 +1916,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const getValidParticleObj = (val) => (val && typeof val === 'object' && !Array.isArray(val) ? val : null);
 
   const particleCfg =
+    liveParticleConfig ||
     getValidParticleObj(arData?.config?.particleConfig) ||
     getValidParticleObj(arData?.config?.particle_config) ||
     getValidParticleObj(arData?.config?.ar_config?.particleConfig) ||
@@ -1765,7 +1938,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
 
   const particleEnabled = urlParticlesFlag !== null
     ? urlParticlesFlag
-    : !!(
+    : Boolean(
       particleCfg &&
       (particleCfg.enabled === true ||
         particleCfg.enabled === 'true' ||
@@ -1781,7 +1954,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
   const particleRotY = particleCfg?.rotY !== undefined ? Number(particleCfg.rotY) : 0;
   const particleRotZ = particleCfg?.rotZ !== undefined ? Number(particleCfg.rotZ) : 0;
   const particleAttr = particleEnabled
-    ? `enabled: true; preset: ${particleCfg?.preset || 'cosmic-stardust'}; count: ${particleCfg?.count ?? 300}; size: ${particleCfg?.size ?? 0.04}; color: ${particleCfg?.color || particleCfg?.colorA || '#38bdf8'}; colorSecondary: ${particleCfg?.colorSecondary || particleCfg?.colorB || '#c084fc'}; opacity: ${particleCfg?.opacity ?? 0.85}; shape: ${particleCfg?.shape || 'sparkle'}; blending: ${particleCfg?.blending || 'additive'}; direction: ${particleCfg?.direction || particleCfg?.motionType || 'float'}; speed: ${particleCfg?.speed ?? 1.0}; rotationSpeed: ${particleCfg?.rotationSpeed ?? 0.2}; spreadX: ${particleCfg?.spreadX ?? 3.0}; spreadY: ${particleCfg?.spreadY ?? 3.0}; spreadZ: ${particleCfg?.spreadZ ?? 3.0}; posX: ${particleCfg?.posX ?? 0}; posY: ${particleCfg?.posY ?? 0}; posZ: ${particleCfg?.posZ ?? 0}; rotX: ${particleRotX}; rotY: ${particleRotY}; rotZ: ${particleRotZ}; twinkle: ${particleCfg?.twinkle ?? true};`
+    ? `enabled: true; preset: ${particleCfg?.preset || 'cosmic-stardust'}; count: ${particleCfg?.count ?? 300}; size: ${particleCfg?.size ?? 0.08}; color: ${particleCfg?.color || particleCfg?.colorA || '#38bdf8'}; colorSecondary: ${particleCfg?.colorSecondary || particleCfg?.colorB || '#c084fc'}; opacity: ${particleCfg?.opacity ?? 0.85}; shape: ${particleCfg?.shape || 'sparkle'}; blending: ${particleCfg?.blending || 'additive'}; direction: ${particleCfg?.direction || particleCfg?.motionType || 'float'}; speed: ${particleCfg?.speed ?? 1.0}; rotationSpeed: ${particleCfg?.rotationSpeed ?? 0.2}; spreadX: ${particleCfg?.spreadX ?? 3.0}; spreadY: ${particleCfg?.spreadY ?? 3.0}; spreadZ: ${particleCfg?.spreadZ ?? 3.0}; posX: ${particleCfg?.posX ?? 0}; posY: ${particleCfg?.posY ?? 0}; posZ: ${particleCfg?.posZ ?? 0}; rotX: ${particleRotX}; rotY: ${particleRotY}; rotZ: ${particleRotZ}; twinkle: ${particleCfg?.twinkle ?? true};`
     : '';
 
   const additionalGeometries = Array.isArray(cfg?.additionalGeometries)
@@ -1958,8 +2131,8 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
         vr-mode-ui="enabled: false"
         device-orientation-permission-ui="enabled: false"
         loading-screen="enabled: false"
-        scene-environment={`exposure: ${exposure}; hdrIntensity: ${envIntensity}; enabled: ${envEnabled}; preset: ${envPreset}`}
-        fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : ''}
+        scene-environment={`exposure: ${exposure}; hdrIntensity: ${envIntensity}; enabled: ${envEnabled}; preset: ${envPreset}; envImage: ${envImage}; rotation: ${envRotation}; showBackground: ${envShowBackground}; backgroundBlur: ${envBackgroundBlur}`}
+        fog={fogDensity > 0 ? `type: exponential; color: ${fogColor}; density: ${fogDensity}` : undefined}
         style={{
           position: 'absolute',
           top: 0,
@@ -2009,7 +2182,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                 }
                 : {})}
               model-auto-center="enabled: true"
-              dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
+              dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}; normalScale: ${matNormalScale}; normalMap: ${matNormalMapUrl ? encodeURIComponent(matNormalMapUrl) : ''}; displacementScale: ${matDisplacementScale}; displacementBias: ${matDisplacementBias}; displacementMap: ${matDisplacementMapUrl ? encodeURIComponent(matDisplacementMapUrl) : ''}; emissiveMap: ${matEmissiveMapUrl ? encodeURIComponent(matEmissiveMapUrl) : ''}; transmission: ${matTransmission}; ior: ${matIor}; thickness: ${matThickness}; clearcoat: ${matClearcoat}; clearcoatRoughness: ${matClearcoatRoughness}; sheen: ${matSheen}; sheenRoughness: ${matSheenRoughness}; sheenColor: ${matSheenColor}; envMapIntensity: ${matEnvMapIntensity}`}
               play-gltf-video={playGltfVideoAttr}
               play-gltf-animation={`playing: ${mediaPlaying}`}
             ></a-gltf-model>
@@ -2117,7 +2290,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                   }
                   : {})}
                 model-auto-center="enabled: true"
-                dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
+                dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}; normalScale: ${matNormalScale}; normalMap: ${matNormalMapUrl ? encodeURIComponent(matNormalMapUrl) : ''}; displacementScale: ${matDisplacementScale}; displacementBias: ${matDisplacementBias}; displacementMap: ${matDisplacementMapUrl ? encodeURIComponent(matDisplacementMapUrl) : ''}; emissiveMap: ${matEmissiveMapUrl ? encodeURIComponent(matEmissiveMapUrl) : ''}; transmission: ${matTransmission}; ior: ${matIor}; thickness: ${matThickness}; clearcoat: ${matClearcoat}; clearcoatRoughness: ${matClearcoatRoughness}; sheen: ${matSheen}; sheenRoughness: ${matSheenRoughness}; sheenColor: ${matSheenColor}; envMapIntensity: ${matEnvMapIntensity}`}
                 play-gltf-video={playGltfVideoAttr}
                 play-gltf-animation={`playing: ${mediaPlaying}`}
               ></a-gltf-model>
@@ -2224,7 +2397,7 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
                   }
                   : {})}
                 model-auto-center="enabled: true"
-                dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}`}
+                dynamic-materials={`metalness: ${matMetalness}; roughness: ${matRoughness}; emissive: ${matEmissive}; emissiveIntensity: ${matEmissiveIntensity}; wireframe: ${matWireframe}; opacity: ${matOpacity}; normalScale: ${matNormalScale}; normalMap: ${matNormalMapUrl ? encodeURIComponent(matNormalMapUrl) : ''}; displacementScale: ${matDisplacementScale}; displacementBias: ${matDisplacementBias}; displacementMap: ${matDisplacementMapUrl ? encodeURIComponent(matDisplacementMapUrl) : ''}; emissiveMap: ${matEmissiveMapUrl ? encodeURIComponent(matEmissiveMapUrl) : ''}; transmission: ${matTransmission}; ior: ${matIor}; thickness: ${matThickness}; clearcoat: ${matClearcoat}; clearcoatRoughness: ${matClearcoatRoughness}; sheen: ${matSheen}; sheenRoughness: ${matSheenRoughness}; sheenColor: ${matSheenColor}; envMapIntensity: ${matEnvMapIntensity}`}
                 play-gltf-video={playGltfVideoAttr}
                 play-gltf-animation={`playing: ${mediaPlaying}`}
               ></a-gltf-model>
@@ -2549,12 +2722,22 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
             dir1Intensity,
             exposure,
             envPreset,
-            envIntensity
+            envIntensity,
+            envImage,
+            fogColor,
+            fogDensity
           }}
           onUpdateStudioLighting={(updatedStudio) => {
             setLiveStudioLighting((prev) => ({
               ...(prev || {}),
               ...updatedStudio
+            }));
+          }}
+          particleConfig={particleCfg}
+          onUpdateParticleConfig={(updatedParticles) => {
+            setLiveParticleConfig((prev) => ({
+              ...(prev || {}),
+              ...updatedParticles
             }));
           }}
           getThreeCamera={getThreeCamera}

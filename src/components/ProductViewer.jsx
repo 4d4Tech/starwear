@@ -9,7 +9,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { computeGeometrySurfaceFrame } from '../utils/geometryHelper';
 import WebGLErrorBoundary from './WebGLErrorBoundary';
 import { createPortalObject3D, createParticleSystemObject3D } from '../utils/portalThreeHelper';
-import { createGeometriesGroup } from '../utils/geometryHelper';
+import { createGeometriesGroup, createCustomModelsGroup } from '../utils/geometryHelper';
 import { createCustomLightsGroup } from '../utils/lightingHelper';
 import { create3DTextsGroup } from '../utils/text3DHelper';
 import { generateSurfaceScatterMesh } from '../utils/surfaceScatter';
@@ -169,47 +169,205 @@ export function applyMeshStyling(rootObject, config = {}, videoUrl = '', videoTe
 
       // Apply Material PBR configs if defined (skip color override on video mesh)
       if (node.material && !isTargetForVideo) {
-        const mats = Array.isArray(node.material) ? node.material : [node.material];
-        mats.forEach((mat) => {
+        const isMulti = Array.isArray(node.material);
+        const mats = isMulti ? node.material : [node.material];
+        const needsPhysicalGlobal = (
+          (config.matTransmission !== undefined && Number(config.matTransmission) > 0) ||
+          (config.matClearcoat !== undefined && Number(config.matClearcoat) > 0) ||
+          (config.matSheen !== undefined && Number(config.matSheen) > 0)
+        );
+
+        mats.forEach((mat, idx) => {
+          let curMat = mat;
+          if (needsPhysicalGlobal && !curMat.isMeshPhysicalMaterial) {
+            const phys = new THREE.MeshPhysicalMaterial().copy(curMat);
+            curMat = phys;
+            if (isMulti) node.material[idx] = curMat;
+            else node.material = curMat;
+          }
+
           if (config.matMetalness !== undefined && config.matMetalness >= 0) {
-            mat.metalness = config.matMetalness;
+            curMat.metalness = config.matMetalness;
           }
           if (config.matRoughness !== undefined && config.matRoughness >= 0) {
-            mat.roughness = config.matRoughness;
+            curMat.roughness = config.matRoughness;
           }
-          if (config.matEmissive && mat.emissive) {
-            mat.emissive.set(config.matEmissive);
+          if (config.matEmissive && curMat.emissive) {
+            curMat.emissive.set(config.matEmissive);
             if (config.matEmissiveIntensity !== undefined && config.matEmissiveIntensity >= 0) {
-              mat.emissiveIntensity = config.matEmissiveIntensity;
+              curMat.emissiveIntensity = config.matEmissiveIntensity;
             }
           }
           if (config.matOpacity !== undefined) {
-            mat.opacity = config.matOpacity;
-            mat.transparent = mat.opacity < 1.0;
+            curMat.opacity = config.matOpacity;
           }
-          mat.needsUpdate = true;
+          if (config.matTransmission !== undefined && curMat.transmission !== undefined) {
+            curMat.transmission = Number(config.matTransmission);
+          }
+          if (config.matIor !== undefined && curMat.ior !== undefined) {
+            curMat.ior = Number(config.matIor);
+          }
+          if (config.matThickness !== undefined && curMat.thickness !== undefined) {
+            curMat.thickness = Number(config.matThickness);
+          }
+          if (config.matClearcoat !== undefined && curMat.clearcoat !== undefined) {
+            curMat.clearcoat = Number(config.matClearcoat);
+          }
+          if (config.matClearcoatRoughness !== undefined && curMat.clearcoatRoughness !== undefined) {
+            curMat.clearcoatRoughness = Number(config.matClearcoatRoughness);
+          }
+          if (config.matSheen !== undefined && curMat.sheen !== undefined) {
+            curMat.sheen = Number(config.matSheen);
+          }
+          if (config.matSheenRoughness !== undefined && curMat.sheenRoughness !== undefined) {
+            curMat.sheenRoughness = Number(config.matSheenRoughness);
+          }
+          if (config.matSheenColor && curMat.sheenColor) {
+            curMat.sheenColor.set(config.matSheenColor);
+          }
+          if (config.matNormalScale !== undefined && curMat.normalScale) {
+            curMat.normalScale.set(Number(config.matNormalScale), Number(config.matNormalScale));
+          }
+          if (config.matDisplacementScale !== undefined && curMat.displacementScale !== undefined) {
+            curMat.displacementScale = Number(config.matDisplacementScale);
+          }
+          if (config.matDisplacementBias !== undefined && curMat.displacementBias !== undefined) {
+            curMat.displacementBias = Number(config.matDisplacementBias);
+          }
+          if (config.matEnvMapIntensity !== undefined && config.matEnvMapIntensity >= 0 && curMat.envMapIntensity !== undefined) {
+            curMat.envMapIntensity = Number(config.matEnvMapIntensity);
+          }
+          if (Number(curMat.opacity ?? 1.0) < 1.0 || Number(curMat.transmission ?? 0) > 0) {
+            curMat.transparent = true;
+          }
+          curMat.needsUpdate = true;
         });
+
+        const activeMats = Array.isArray(node.material) ? node.material : [node.material];
+
+        // Global normalMap
+        if (config.matNormalMapUrl && typeof config.matNormalMapUrl === 'string' && !config.matNormalMapUrl.startsWith('blob:')) {
+          const nLoader = new THREE.TextureLoader();
+          nLoader.load(config.matNormalMapUrl, (tex) => {
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.flipY = false;
+            activeMats.forEach((m) => {
+              m.normalMap = tex;
+              m.needsUpdate = true;
+            });
+          });
+        }
+
+        // Global displacementMap
+        if (config.matDisplacementMapUrl && typeof config.matDisplacementMapUrl === 'string' && !config.matDisplacementMapUrl.startsWith('blob:')) {
+          const dLoader = new THREE.TextureLoader();
+          dLoader.load(config.matDisplacementMapUrl, (tex) => {
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.flipY = false;
+            activeMats.forEach((m) => {
+              m.displacementMap = tex;
+              m.needsUpdate = true;
+            });
+          });
+        }
+
+        // Global emissiveMap
+        if (config.matEmissiveMapUrl && typeof config.matEmissiveMapUrl === 'string' && !config.matEmissiveMapUrl.startsWith('blob:')) {
+          const eLoader = new THREE.TextureLoader();
+          eLoader.load(config.matEmissiveMapUrl, (tex) => {
+            if (THREE.SRGBColorSpace !== undefined) tex.colorSpace = THREE.SRGBColorSpace;
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.flipY = false;
+            activeMats.forEach((m) => {
+              m.emissiveMap = tex;
+              m.needsUpdate = true;
+            });
+          });
+        }
       }
 
       // Apply custom meshOverrides if saved from ARTest (skip color override on video mesh)
-      if (config.meshOverrides) {
-        const ovr = config.meshOverrides[node.name] || config.meshOverrides[node.uuid];
-        if (ovr) {
-          if (ovr.deleted || ovr.visible === false) {
-            node.visible = false;
-            if (ovr.deleted && node.parent) {
-              nodesToDelete.push(node);
-            }
-            return;
+      const overrides = config?.meshOverrides || config?.ar_config?.meshOverrides || config?.config?.meshOverrides || {};
+      const ovr = overrides[node.name] || overrides[node.uuid];
+      if (ovr) {
+        if (ovr.deleted || ovr.visible === false) {
+          node.visible = false;
+          if (ovr.deleted && node.parent) {
+            nodesToDelete.push(node);
           }
-          if (ovr.position) node.position.set(ovr.position.x, ovr.position.y, ovr.position.z);
-          if (ovr.scale) node.scale.set(ovr.scale.x, ovr.scale.y, ovr.scale.z);
+          return;
+        }
+        if (ovr.position) {
+          node.position.set(
+            Number(ovr.position.x ?? node.position.x),
+            Number(ovr.position.y ?? node.position.y),
+            Number(ovr.position.z ?? node.position.z)
+          );
+        }
+        if (ovr.rotation) {
+          node.rotation.order = 'YXZ';
+          node.rotation.set(
+            THREE.MathUtils.degToRad(ovr.rotation.x || 0),
+            THREE.MathUtils.degToRad(ovr.rotation.y || 0),
+            THREE.MathUtils.degToRad(ovr.rotation.z || 0),
+            'YXZ'
+          );
+        }
+        if (ovr.scale) {
+          const sx = typeof ovr.scale === 'number' ? ovr.scale : (ovr.scale.x ?? 1);
+          const sy = typeof ovr.scale === 'number' ? ovr.scale : (ovr.scale.y ?? sx);
+          const sz = typeof ovr.scale === 'number' ? ovr.scale : (ovr.scale.z ?? sx);
+          node.scale.set(sx, sy, sz);
+        }
+        if (ovr.visible !== undefined) {
+          node.visible = !!ovr.visible;
+        }
           if (ovr.material && node.material && !isTargetForVideo) {
-            const mat = Array.isArray(node.material) ? node.material[0] : node.material;
-            if (ovr.material.color && mat.color) mat.color.set(ovr.material.color);
-            if (ovr.material.metalness !== undefined) mat.metalness = ovr.material.metalness;
-            if (ovr.material.roughness !== undefined) mat.roughness = ovr.material.roughness;
-            if (ovr.material.emissive && mat.emissive) mat.emissive.set(ovr.material.emissive);
+            const isMulti = Array.isArray(node.material);
+            const mats = isMulti ? node.material : [node.material];
+            const needsPhysical = (
+              (ovr.material.transmission !== undefined && Number(ovr.material.transmission) > 0) ||
+              (ovr.material.clearcoat !== undefined && Number(ovr.material.clearcoat) > 0) ||
+              (ovr.material.sheen !== undefined && Number(ovr.material.sheen) > 0)
+            );
+
+            mats.forEach((mat, idx) => {
+              let curM = mat;
+              if (needsPhysical && !curM.isMeshPhysicalMaterial) {
+                const phys = new THREE.MeshPhysicalMaterial().copy(curM);
+                curM = phys;
+                if (isMulti) node.material[idx] = curM;
+                else node.material = curM;
+              }
+              if (ovr.material.color && curM.color) curM.color.set(ovr.material.color);
+              if (ovr.material.metalness !== undefined) curM.metalness = ovr.material.metalness;
+              if (ovr.material.roughness !== undefined) curM.roughness = ovr.material.roughness;
+              if (ovr.material.emissive && curM.emissive) curM.emissive.set(ovr.material.emissive);
+              if (ovr.material.emissiveIntensity !== undefined) curM.emissiveIntensity = ovr.material.emissiveIntensity;
+              if (ovr.material.opacity !== undefined) curM.opacity = ovr.material.opacity;
+              if (ovr.material.wireframe !== undefined) curM.wireframe = !!ovr.material.wireframe;
+              if (ovr.material.transmission !== undefined && curM.transmission !== undefined) curM.transmission = Number(ovr.material.transmission);
+              if (ovr.material.ior !== undefined && curM.ior !== undefined) curM.ior = Number(ovr.material.ior);
+              if (ovr.material.thickness !== undefined && curM.thickness !== undefined) curM.thickness = Number(ovr.material.thickness);
+              if (ovr.material.clearcoat !== undefined && curM.clearcoat !== undefined) curM.clearcoat = Number(ovr.material.clearcoat);
+              if (ovr.material.clearcoatRoughness !== undefined && curM.clearcoatRoughness !== undefined) curM.clearcoatRoughness = Number(ovr.material.clearcoatRoughness);
+              if (ovr.material.sheen !== undefined && curM.sheen !== undefined) curM.sheen = Number(ovr.material.sheen);
+              if (ovr.material.sheenRoughness !== undefined && curM.sheenRoughness !== undefined) curM.sheenRoughness = Number(ovr.material.sheenRoughness);
+              if (ovr.material.sheenColor && curM.sheenColor) curM.sheenColor.set(ovr.material.sheenColor);
+              if (ovr.material.normalScale !== undefined && curM.normalScale) curM.normalScale.set(Number(ovr.material.normalScale), Number(ovr.material.normalScale));
+              if (ovr.material.displacementScale !== undefined && curM.displacementScale !== undefined) curM.displacementScale = Number(ovr.material.displacementScale);
+              if (ovr.material.displacementBias !== undefined && curM.displacementBias !== undefined) curM.displacementBias = Number(ovr.material.displacementBias);
+              if (ovr.material.envMapIntensity !== undefined && curM.envMapIntensity !== undefined) {
+                curM.envMapIntensity = Number(ovr.material.envMapIntensity);
+              }
+              if (Number(curM.opacity ?? 1.0) < 1.0 || Number(curM.transmission ?? 0) > 0) curM.transparent = true;
+              curM.needsUpdate = true;
+            });
+
+            const updatedMats = Array.isArray(node.material) ? node.material : [node.material];
 
             const applyTexTransform = (tex) => {
               if (!tex) return;
@@ -232,6 +390,52 @@ export function applyMeshStyling(rootObject, config = {}, videoUrl = '', videoTe
               tex.needsUpdate = true;
             };
 
+            // Load normalMap if configured in override
+            if (ovr.material.normalMapUrl && typeof ovr.material.normalMapUrl === 'string' && !ovr.material.normalMapUrl.startsWith('blob:')) {
+              const nLoader = new THREE.TextureLoader();
+              nLoader.load(ovr.material.normalMapUrl, (tex) => {
+                tex.wrapS = THREE.RepeatWrapping;
+                tex.wrapT = THREE.RepeatWrapping;
+                tex.flipY = false;
+                applyTexTransform(tex);
+                updatedMats.forEach((m) => {
+                  m.normalMap = tex;
+                  m.needsUpdate = true;
+                });
+              });
+            }
+
+            // Load displacementMap if configured in override
+            if (ovr.material.displacementMapUrl && typeof ovr.material.displacementMapUrl === 'string' && !ovr.material.displacementMapUrl.startsWith('blob:')) {
+              const dLoader = new THREE.TextureLoader();
+              dLoader.load(ovr.material.displacementMapUrl, (tex) => {
+                tex.wrapS = THREE.RepeatWrapping;
+                tex.wrapT = THREE.RepeatWrapping;
+                tex.flipY = false;
+                applyTexTransform(tex);
+                updatedMats.forEach((m) => {
+                  m.displacementMap = tex;
+                  m.needsUpdate = true;
+                });
+              });
+            }
+
+            // Load emissiveMap if configured in override
+            if (ovr.material.emissiveMapUrl && typeof ovr.material.emissiveMapUrl === 'string' && !ovr.material.emissiveMapUrl.startsWith('blob:')) {
+              const eLoader = new THREE.TextureLoader();
+              eLoader.load(ovr.material.emissiveMapUrl, (tex) => {
+                if (THREE.SRGBColorSpace !== undefined) tex.colorSpace = THREE.SRGBColorSpace;
+                tex.wrapS = THREE.RepeatWrapping;
+                tex.wrapT = THREE.RepeatWrapping;
+                tex.flipY = false;
+                applyTexTransform(tex);
+                updatedMats.forEach((m) => {
+                  m.emissiveMap = tex;
+                  m.needsUpdate = true;
+                });
+              });
+            }
+
             if (ovr.material.textureUrl && typeof ovr.material.textureUrl === 'string' && !ovr.material.textureUrl.startsWith('blob:')) {
               const tLoader = new THREE.TextureLoader();
               tLoader.load(ovr.material.textureUrl, (tex) => {
@@ -240,18 +444,23 @@ export function applyMeshStyling(rootObject, config = {}, videoUrl = '', videoTe
                 }
                 tex.flipY = false;
                 applyTexTransform(tex);
-                mat.map = tex;
-                mat.needsUpdate = true;
+                updatedMats.forEach((m) => {
+                  m.map = tex;
+                  m.needsUpdate = true;
+                });
               });
-            } else if (mat.map) {
-              applyTexTransform(mat.map);
+            } else {
+              updatedMats.forEach((m) => {
+                ['map', 'emissiveMap', 'roughnessMap', 'metalnessMap', 'normalMap', 'displacementMap'].forEach((slot) => {
+                  if (m[slot]) applyTexTransform(m[slot]);
+                });
+                m.needsUpdate = true;
+              });
             }
-            mat.needsUpdate = true;
           }
         }
       }
-    }
-  });
+    });
 
   nodesToDelete.forEach((node) => {
     if (node.parent) {
@@ -475,24 +684,56 @@ function SceneContent({
     }
   }, [modelBoundingData, camera, controlsRef, defaultCamPosRef]);
 
-  const gridY = modelBoundingData
-    ? (modelBoundingData.center?.y ?? 0) - modelBoundingData.maxDim / 2 - 0.05
-    : -0.5;
+  const gridY = modelBoundingData?.box
+    ? modelBoundingData.box.min.y - 0.05
+    : (modelBoundingData
+      ? (modelBoundingData.center?.y ?? 0) - modelBoundingData.maxDim / 2 - 0.05
+      : -0.5);
 
   const parsePos = parseVector3;
 
   const normCfg = useMemo(() => {
+    const raw = config || {};
+    const subAr = raw.ar_config || {};
+    const subCfg = raw.config || {};
+    const subExp = raw.arExperience?.config || {};
     return {
-      ...(config?.ar_config || {}),
-      ...(config?.config || {}),
-      ...(config?.arExperience?.config || {}),
-      ...(config || {})
+      ...subAr,
+      ...subCfg,
+      ...subExp,
+      ...raw,
+      additionalGeometries: (Array.isArray(raw.additionalGeometries) && raw.additionalGeometries.length > 0)
+        ? raw.additionalGeometries
+        : (Array.isArray(subAr.additionalGeometries) && subAr.additionalGeometries.length > 0)
+          ? subAr.additionalGeometries
+          : (Array.isArray(subCfg.additionalGeometries) && subCfg.additionalGeometries.length > 0)
+            ? subCfg.additionalGeometries
+            : (raw.additionalGeometries || subAr.additionalGeometries || subCfg.additionalGeometries || []),
+      customModels: (Array.isArray(raw.customModels) && raw.customModels.length > 0)
+        ? raw.customModels
+        : (Array.isArray(subAr.customModels) && subAr.customModels.length > 0)
+          ? subAr.customModels
+          : (Array.isArray(subCfg.customModels) && subCfg.customModels.length > 0)
+            ? subCfg.customModels
+            : (raw.customModels || subAr.customModels || subCfg.customModels || []),
+      custom3DTexts: (Array.isArray(raw.custom3DTexts) && raw.custom3DTexts.length > 0)
+        ? raw.custom3DTexts
+        : (Array.isArray(subAr.custom3DTexts) && subAr.custom3DTexts.length > 0)
+          ? subAr.custom3DTexts
+          : (Array.isArray(subCfg.custom3DTexts) && subCfg.custom3DTexts.length > 0)
+            ? subCfg.custom3DTexts
+            : (raw.custom3DTexts || subAr.custom3DTexts || subCfg.custom3DTexts || []),
+      meshOverrides: raw.meshOverrides || subAr.meshOverrides || subCfg.meshOverrides || {}
     };
   }, [config]);
 
   const effectiveExposure = normCfg.exposure !== undefined ? Number(normCfg.exposure) : 1.15;
   const effectiveEnvPreset = String(normCfg.envPreset || 'studio-chrome').trim().toLowerCase();
   const effectiveEnvIntensity = normCfg.envIntensity !== undefined ? Number(normCfg.envIntensity) : 1.2;
+  const effectiveEnvImage = String(normCfg.envImage || normCfg.envImageUrl || normCfg.hdrUrl || '').trim();
+  const effectiveEnvRotation = normCfg.envRotation !== undefined ? Number(normCfg.envRotation) : 0;
+  const effectiveEnvShowBackground = Boolean(normCfg.envShowBackground);
+  const effectiveEnvBackgroundBlur = normCfg.envBackgroundBlur !== undefined ? Number(normCfg.envBackgroundBlur) : 0;
   const effectiveFogColor = normCfg.fogColor || '#000000';
   const effectiveFogDensity = normCfg.fogDensity !== undefined ? Number(normCfg.fogDensity) : 0;
 
@@ -508,8 +749,7 @@ function SceneContent({
   useEffect(() => {
     if (!gl || !scene) return undefined;
     const isEnabled =
-      effectiveEnvPreset !== '' &&
-      effectiveEnvPreset !== 'none' &&
+      (effectiveEnvImage !== '' || (effectiveEnvPreset !== '' && effectiveEnvPreset !== 'none')) &&
       Number.isFinite(effectiveEnvIntensity) &&
       effectiveEnvIntensity > 0;
 
@@ -521,42 +761,84 @@ function SceneContent({
     let pmremGenerator = null;
     let envTexture = null;
     let roomEnv = null;
+    let loadedCustomTex = null;
+
+    const applyRotationAndBackground = (tex) => {
+      scene.environment = tex;
+      if (scene.environmentIntensity !== undefined) {
+        scene.environmentIntensity = effectiveEnvIntensity;
+      }
+      const rad = (effectiveEnvRotation * Math.PI) / 180;
+      if (scene.environmentRotation !== undefined) {
+        scene.environmentRotation = new THREE.Euler(0, rad, 0);
+      }
+      if (effectiveEnvShowBackground && tex) {
+        scene.background = tex;
+        if (scene.backgroundRotation !== undefined) {
+          scene.backgroundRotation = new THREE.Euler(0, rad, 0);
+        }
+        if (scene.backgroundBlurriness !== undefined) {
+          scene.backgroundBlurriness = effectiveEnvBackgroundBlur;
+        }
+      }
+    };
+
     try {
       pmremGenerator = new THREE.PMREMGenerator(gl);
       pmremGenerator.compileEquirectangularShader();
-      roomEnv = new RoomEnvironment();
 
-      if (effectiveEnvPreset === 'sunset') {
-        const sunLight = new THREE.DirectionalLight(0xff8844, 2.5);
-        sunLight.position.set(2, 1, 1);
-        roomEnv.add(sunLight);
-      } else if (effectiveEnvPreset === 'cyber' || effectiveEnvPreset === 'night') {
-        const neonCyan = new THREE.PointLight(0x06b6d4, 4.0, 10);
-        neonCyan.position.set(3, 2, 2);
-        roomEnv.add(neonCyan);
-        const neonPink = new THREE.PointLight(0xec4899, 4.0, 10);
-        neonPink.position.set(-3, -1, -2);
-        roomEnv.add(neonPink);
-      } else if (effectiveEnvPreset === 'city') {
-        const amberFill = new THREE.DirectionalLight(0xf59e0b, 1.8);
-        amberFill.position.set(3, 4, 2);
-        roomEnv.add(amberFill);
-        const blueSky = new THREE.DirectionalLight(0x38bdf8, 1.2);
-        blueSky.position.set(-2, 3, -2);
-        roomEnv.add(blueSky);
-      } else if (effectiveEnvPreset === 'forest') {
-        const canopyLight = new THREE.DirectionalLight(0x10b981, 2.0);
-        canopyLight.position.set(1, 4, 1);
-        roomEnv.add(canopyLight);
-        const earthBounce = new THREE.DirectionalLight(0xb45309, 0.9);
-        earthBounce.position.set(0, -3, 0);
-        roomEnv.add(earthBounce);
-      }
+      if (effectiveEnvImage !== '') {
+        const textureLoader = new THREE.TextureLoader();
+        textureLoader.crossOrigin = 'anonymous';
+        textureLoader.load(
+          effectiveEnvImage,
+          (tex) => {
+            tex.mapping = THREE.EquirectangularReflectionMapping;
+            if (THREE.SRGBColorSpace !== undefined) tex.colorSpace = THREE.SRGBColorSpace;
+            envTexture = pmremGenerator.fromEquirectangular(tex).texture;
+            applyRotationAndBackground(envTexture);
+            tex.dispose();
+          },
+          undefined,
+          (err) => {
+            console.warn('[ProductViewer] Failed to load custom envImage, falling back to RoomEnvironment:', err);
+            roomEnv = new RoomEnvironment();
+            envTexture = pmremGenerator.fromScene(roomEnv, 0.04).texture;
+            applyRotationAndBackground(envTexture);
+          }
+        );
+      } else {
+        roomEnv = new RoomEnvironment();
 
-      envTexture = pmremGenerator.fromScene(roomEnv, 0.04).texture;
-      scene.environment = envTexture;
-      if (scene.environmentIntensity !== undefined) {
-        scene.environmentIntensity = effectiveEnvIntensity;
+        if (effectiveEnvPreset === 'sunset') {
+          const sunLight = new THREE.DirectionalLight(0xff8844, 2.5);
+          sunLight.position.set(2, 1, 1);
+          roomEnv.add(sunLight);
+        } else if (effectiveEnvPreset === 'cyber' || effectiveEnvPreset === 'night') {
+          const neonCyan = new THREE.PointLight(0x06b6d4, 4.0, 10);
+          neonCyan.position.set(3, 2, 2);
+          roomEnv.add(neonCyan);
+          const neonPink = new THREE.PointLight(0xec4899, 4.0, 10);
+          neonPink.position.set(-3, -1, -2);
+          roomEnv.add(neonPink);
+        } else if (effectiveEnvPreset === 'city') {
+          const amberFill = new THREE.DirectionalLight(0xf59e0b, 1.8);
+          amberFill.position.set(3, 4, 2);
+          roomEnv.add(amberFill);
+          const blueSky = new THREE.DirectionalLight(0x38bdf8, 1.2);
+          blueSky.position.set(-2, 3, -2);
+          roomEnv.add(blueSky);
+        } else if (effectiveEnvPreset === 'forest') {
+          const canopyLight = new THREE.DirectionalLight(0x10b981, 2.0);
+          canopyLight.position.set(1, 4, 1);
+          roomEnv.add(canopyLight);
+          const earthBounce = new THREE.DirectionalLight(0xb45309, 0.9);
+          earthBounce.position.set(0, -3, 0);
+          roomEnv.add(earthBounce);
+        }
+
+        envTexture = pmremGenerator.fromScene(roomEnv, 0.04).texture;
+        applyRotationAndBackground(envTexture);
       }
     } catch (err) {
       console.warn('[ProductViewer] Could not initialize RoomEnvironment:', err);
@@ -566,11 +848,15 @@ function SceneContent({
       if (scene && scene.environment === envTexture) {
         scene.environment = null;
       }
+      if (scene && scene.background === envTexture) {
+        scene.background = new THREE.Color('#0d1117');
+      }
       if (envTexture) envTexture.dispose();
+      if (loadedCustomTex) loadedCustomTex.dispose();
       if (pmremGenerator) pmremGenerator.dispose();
       if (roomEnv && typeof roomEnv.dispose === 'function') roomEnv.dispose();
     };
-  }, [gl, scene, effectiveEnvPreset, effectiveEnvIntensity]);
+  }, [gl, scene, effectiveEnvPreset, effectiveEnvIntensity, effectiveEnvImage, effectiveEnvRotation, effectiveEnvShowBackground, effectiveEnvBackgroundBlur]);
 
   const dir1Pos = parsePos(normCfg.dir1Position, [2, 4, 3]);
   const dir2Pos = parsePos(normCfg.dir2Position, [-2, -1, -2]);
@@ -698,6 +984,36 @@ function SceneContent({
       }
     };
   }, [JSON.stringify(custom3DTexts)]);
+
+  // Custom External 3D Models (.glb / .gltf)
+  const customModels = normCfg?.customModels || [];
+  const [customModelsGroup, setCustomModelsGroup] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    if (!Array.isArray(customModels) || customModels.length === 0) {
+      setCustomModelsGroup(null);
+      return;
+    }
+    createCustomModelsGroup(customModels, THREE)
+      .then((grp) => {
+        if (active) setCustomModelsGroup(grp);
+      })
+      .catch((err) => console.warn('[ProductViewer] Custom models build notice:', err));
+
+    return () => {
+      active = false;
+      if (customModelsGroup) {
+        customModelsGroup.traverse((child) => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+        });
+      }
+    };
+  }, [JSON.stringify(customModels)]);
 
   // Map WebGL video texture onto procedural Shapes, Planes & 3D Texts when targeted by videoTargetMesh
   useEffect(() => {
@@ -906,9 +1222,10 @@ function SceneContent({
     };
     updateMaterials(modelGroup);
     updateMaterials(geometriesGroup);
+    updateMaterials(customModelsGroup);
     updateMaterials(texts3DGroup);
     updateMaterials(scatterGroup);
-  }, [modelGroup, geometriesGroup, texts3DGroup, scatterGroup, customLightsGroup]);
+  }, [modelGroup, geometriesGroup, customModelsGroup, texts3DGroup, scatterGroup, customLightsGroup]);
 
   useFrame((state, delta) => {
     if (portalInstance) {
@@ -922,6 +1239,23 @@ function SceneContent({
         const mesh = geometriesGroup.children[i];
         if (mesh && mesh.userData && Number(mesh.userData.rotationSpeed)) {
           mesh.rotation.y += Number(mesh.userData.rotationSpeed) * delta;
+        }
+      }
+    }
+    if (customModelsGroup) {
+      for (let i = 0; i < customModelsGroup.children.length; i++) {
+        const wrapper = customModelsGroup.children[i];
+        if (wrapper && wrapper.userData) {
+          if (Number(wrapper.userData.rotationSpeed)) {
+            wrapper.rotation.y += Number(wrapper.userData.rotationSpeed) * delta;
+          }
+          if (Number(wrapper.userData.bobbingSpeed) > 0 && Number(wrapper.userData.bobbingHeight) > 0) {
+            const basePosY = wrapper.userData.initialY ?? 0;
+            wrapper.position.y =
+              basePosY +
+              Math.sin(state.clock.elapsedTime * Number(wrapper.userData.bobbingSpeed) * 3) *
+              Number(wrapper.userData.bobbingHeight);
+          }
         }
       }
     }
@@ -1033,11 +1367,16 @@ function SceneContent({
         <primitive object={texts3DGroup} />
       )}
 
+      {/* Custom External 3D Models */}
+      {customModelsGroup && (
+        <primitive object={customModelsGroup} />
+      )}
+
       {/* 3D Asset or Stylized Placeholder */}
       {!portalHideOutsideModel && (
         modelGroup ? (
           <primitive object={modelGroup} />
-        ) : (!geometriesGroup && !texts3DGroup && !particleInstance && !scatterGroup && !portalInstance) ? (
+        ) : (!geometriesGroup && !customModelsGroup && !texts3DGroup && !particleInstance && !scatterGroup && !portalInstance) ? (
           <StylizedPlaceholder isWireframe={isWireframe} />
         ) : null
       )}
@@ -1248,6 +1587,32 @@ export default function ProductViewer({
       setLoading(false);
       setModelGroup(null);
       setMeshCount(1);
+      const normCfg = {
+        ...(config?.ar_config || {}),
+        ...(config?.config || {}),
+        ...(config?.arExperience?.config || {}),
+        ...(config || {})
+      };
+      const additionalGeoms = normCfg?.additionalGeometries || [];
+      if (Array.isArray(additionalGeoms) && additionalGeoms.length > 0) {
+        try {
+          const tempGeomGroup = createGeometriesGroup(additionalGeoms, THREE);
+          if (tempGeomGroup) {
+            const geomBox = new THREE.Box3().setFromObject(tempGeomGroup);
+            const gCenter = geomBox.getCenter(new THREE.Vector3());
+            const gSize = geomBox.getSize(new THREE.Vector3());
+            const gMaxDim = Math.max(gSize.x, gSize.y, gSize.z) || 1;
+            setModelBoundingData({ center: gCenter, size: gSize, maxDim: gMaxDim, box: geomBox });
+            tempGeomGroup.traverse((c) => {
+              if (c.geometry) c.geometry.dispose();
+              if (c.material) {
+                if (Array.isArray(c.material)) c.material.forEach((m) => m.dispose());
+                else c.material.dispose();
+              }
+            });
+          }
+        } catch { /* ignore */ }
+      }
       return;
     }
 
@@ -1281,14 +1646,25 @@ export default function ProductViewer({
         };
 
         // Center the model at origin (matching model-auto-center in ARTest/ARExperience)
-        if (maxDim > 10 || maxDim < 0.05) {
-          const autoScale = 1.0 / maxDim;
-          model.scale.set(autoScale, autoScale, autoScale);
-          const scaledBox = new THREE.Box3().setFromObject(model);
-          const scaledCenter = scaledBox.getCenter(new THREE.Vector3());
-          model.position.set(-scaledCenter.x, -scaledCenter.y, -scaledCenter.z);
-        } else {
-          model.position.set(-center.x, -center.y, -center.z);
+        let shouldPreserveOrigin = Boolean(model.userData?.preserveSceneOrigin || normCfg.preserveSceneOrigin);
+        if (!shouldPreserveOrigin) {
+          model.traverse((child) => {
+            if (child.userData?.preserveSceneOrigin) {
+              shouldPreserveOrigin = true;
+            }
+          });
+        }
+
+        if (!shouldPreserveOrigin) {
+          if (maxDim > 10 || maxDim < 0.05) {
+            const autoScale = 1.0 / maxDim;
+            model.scale.set(autoScale, autoScale, autoScale);
+            const scaledBox = new THREE.Box3().setFromObject(model);
+            const scaledCenter = scaledBox.getCenter(new THREE.Vector3());
+            model.position.set(-scaledCenter.x, -scaledCenter.y, -scaledCenter.z);
+          } else {
+            model.position.set(-center.x, -center.y, -center.z);
+          }
         }
 
         const anchorGroup = new THREE.Group();
@@ -1301,12 +1677,14 @@ export default function ProductViewer({
           : (normCfg.scale !== undefined && normCfg.scale !== null ? Number(normCfg.scale) : 1.0);
         anchorGroup.scale.set(scaleVal, scaleVal, scaleVal);
 
-        // Apply rotation matching ARTest (<a-gltf-model rotation="rx ry rz">)
+        // Apply rotation matching ARTest (<a-gltf-model rotation="rx ry rz">) using YXZ order
         const rotCoords = parseVector3(normCfg.modelRotation || [normCfg.modelRotX || 0, normCfg.modelRotY || 0, normCfg.modelRotZ || 0], [0, 0, 0]);
+        anchorGroup.rotation.order = 'YXZ';
         anchorGroup.rotation.set(
           THREE.MathUtils.degToRad(rotCoords[0] || 0),
           THREE.MathUtils.degToRad(rotCoords[1] || 0),
-          THREE.MathUtils.degToRad(rotCoords[2] || 0)
+          THREE.MathUtils.degToRad(rotCoords[2] || 0),
+          'YXZ'
         );
 
         // Apply position matching ARTest (<a-gltf-model position="px py pz">)
@@ -1371,7 +1749,7 @@ export default function ProductViewer({
 
         modelRef.current = anchorGroup;
         setModelGroup(anchorGroup);
-        setModelBoundingData({ center: framedCenter, size: framedSize, maxDim: framedMaxDim });
+        setModelBoundingData({ center: framedCenter, size: framedSize, maxDim: framedMaxDim, box: framedBox });
         setMeshCount(totalMeshes);
         setLoading(false);
       },

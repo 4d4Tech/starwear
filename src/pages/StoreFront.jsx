@@ -330,6 +330,13 @@ export default function StoreFront() {
                           : (Array.isArray(pCfg.customLights) && pCfg.customLights.length > 0)
                           ? pCfg.customLights
                           : (Array.isArray(featuredAsset?.customLights) ? featuredAsset.customLights : []);
+                        res.customModels = (Array.isArray(bCfg.customModels) && bCfg.customModels.length > 0)
+                          ? bCfg.customModels
+                          : (Array.isArray(featuredBatchConfig?.customModels) && featuredBatchConfig.customModels.length > 0)
+                            ? featuredBatchConfig.customModels
+                            : (Array.isArray(pCfg.customModels) && pCfg.customModels.length > 0)
+                              ? pCfg.customModels
+                              : (Array.isArray(featuredAsset?.customModels) ? featuredAsset.customModels : []);
                         res.custom3DTexts = (Array.isArray(bCfg.custom3DTexts) && bCfg.custom3DTexts.length > 0)
                           ? bCfg.custom3DTexts
                           : (Array.isArray(featuredBatchConfig?.custom3DTexts) && featuredBatchConfig.custom3DTexts.length > 0)

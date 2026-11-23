@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import {
   createInflatedGeometryFromPoints,
   applyDomeDeformation,
@@ -1202,9 +1204,24 @@ export function createPrimitiveMaterial(options = {}, THREE_LIB = THREE) {
   const wireframe = Boolean(options.wireframe);
   const flatShading = Boolean(options.flatShading);
   const opacity = options.opacity !== undefined ? Number(options.opacity) : 1.0;
-  const transparent = Boolean(options.transparent) || opacity < 1.0;
+  const transmission = options.transmission !== undefined ? Number(options.transmission) : 0.0;
+  const transparent = Boolean(options.transparent) || opacity < 1.0 || transmission > 0;
 
-  const mat = new THREE_LIB.MeshStandardMaterial({
+  const clearcoat = options.clearcoat !== undefined ? Number(options.clearcoat) : 0.0;
+  const clearcoatRoughness = options.clearcoatRoughness !== undefined ? Number(options.clearcoatRoughness) : 0.1;
+  const sheen = options.sheen !== undefined ? Number(options.sheen) : 0.0;
+  const sheenRoughness = options.sheenRoughness !== undefined ? Number(options.sheenRoughness) : 0.5;
+  const sheenColor = options.sheenColor || '#ffffff';
+  const ior = options.ior !== undefined ? Number(options.ior) : 1.5;
+  const thickness = options.thickness !== undefined ? Number(options.thickness) : 0.5;
+  const normalScale = options.normalScale !== undefined ? Number(options.normalScale) : 1.0;
+  const displacementScale = options.displacementScale !== undefined ? Number(options.displacementScale) : 0.0;
+  const displacementBias = options.displacementBias !== undefined ? Number(options.displacementBias) : 0.0;
+
+  const isPhysical = transmission > 0 || clearcoat > 0 || sheen > 0;
+  const MaterialClass = isPhysical ? THREE_LIB.MeshPhysicalMaterial : THREE_LIB.MeshStandardMaterial;
+
+  const matConfig = {
     color: new THREE_LIB.Color(color),
     roughness,
     metalness,
@@ -1215,37 +1232,60 @@ export function createPrimitiveMaterial(options = {}, THREE_LIB = THREE) {
     opacity,
     transparent,
     side: THREE_LIB.DoubleSide
-  });
+  };
+
+  if (isPhysical) {
+    if (transmission > 0) {
+      matConfig.transmission = transmission;
+      matConfig.ior = ior;
+      matConfig.thickness = thickness;
+    }
+    if (clearcoat > 0) {
+      matConfig.clearcoat = clearcoat;
+      matConfig.clearcoatRoughness = clearcoatRoughness;
+    }
+    if (sheen > 0) {
+      matConfig.sheen = sheen;
+      matConfig.sheenRoughness = sheenRoughness;
+      matConfig.sheenColor = new THREE_LIB.Color(sheenColor);
+    }
+  }
+
+  if (options.envMapIntensity !== undefined && Number(options.envMapIntensity) >= 0) {
+    matConfig.envMapIntensity = Number(options.envMapIntensity);
+  }
+
+  const mat = new MaterialClass(matConfig);
+
+  const applyTexProps = (tex) => {
+    if (!tex) return;
+    tex.wrapS = THREE_LIB.RepeatWrapping;
+    tex.wrapT = THREE_LIB.RepeatWrapping;
+    if (tex.center) tex.center.set(0.5, 0.5);
+
+    const repX = options.textureRepeatX !== undefined && options.textureRepeatX !== null ? Number(options.textureRepeatX) : 1.0;
+    const repY = options.textureRepeatY !== undefined && options.textureRepeatY !== null ? Number(options.textureRepeatY) : 1.0;
+    const flipX = Boolean(options.textureFlipX);
+    const flipY = Boolean(options.textureFlipY);
+    const offX = options.textureOffsetX !== undefined && options.textureOffsetX !== null ? Number(options.textureOffsetX) : 0.0;
+    const offY = options.textureOffsetY !== undefined && options.textureOffsetY !== null ? Number(options.textureOffsetY) : 0.0;
+    const rotDeg = options.textureRotation !== undefined && options.textureRotation !== null ? Number(options.textureRotation) : 0.0;
+
+    if (tex.repeat) tex.repeat.set(flipX ? -repX : repX, flipY ? -repY : repY);
+    if (tex.offset) tex.offset.set(offX, offY);
+    tex.rotation = (rotDeg * Math.PI) / 180;
+    tex.needsUpdate = true;
+  };
 
   if (hasTexture && typeof options.textureUrl === 'string') {
     try {
       const loader = new THREE_LIB.TextureLoader();
-      const applyTexProps = (tex) => {
-        if (!tex) return;
-        if (THREE_LIB.SRGBColorSpace !== undefined) {
-          tex.colorSpace = THREE_LIB.SRGBColorSpace;
-        }
-        tex.wrapS = THREE_LIB.RepeatWrapping;
-        tex.wrapT = THREE_LIB.RepeatWrapping;
-        if (tex.center) tex.center.set(0.5, 0.5);
-
-        const repX = options.textureRepeatX !== undefined && options.textureRepeatX !== null ? Number(options.textureRepeatX) : 1.0;
-        const repY = options.textureRepeatY !== undefined && options.textureRepeatY !== null ? Number(options.textureRepeatY) : 1.0;
-        const flipX = Boolean(options.textureFlipX);
-        const flipY = Boolean(options.textureFlipY);
-        const offX = options.textureOffsetX !== undefined && options.textureOffsetX !== null ? Number(options.textureOffsetX) : 0.0;
-        const offY = options.textureOffsetY !== undefined && options.textureOffsetY !== null ? Number(options.textureOffsetY) : 0.0;
-        const rotDeg = options.textureRotation !== undefined && options.textureRotation !== null ? Number(options.textureRotation) : 0.0;
-
-        if (tex.repeat) tex.repeat.set(flipX ? -repX : repX, flipY ? -repY : repY);
-        if (tex.offset) tex.offset.set(offX, offY);
-        tex.rotation = (rotDeg * Math.PI) / 180;
-        tex.needsUpdate = true;
-      };
-
       const texture = loader.load(
         options.textureUrl,
         (loadedTex) => {
+          if (THREE_LIB.SRGBColorSpace !== undefined) {
+            loadedTex.colorSpace = THREE_LIB.SRGBColorSpace;
+          }
           applyTexProps(loadedTex);
           mat.needsUpdate = true;
         },
@@ -1254,11 +1294,72 @@ export function createPrimitiveMaterial(options = {}, THREE_LIB = THREE) {
           console.warn('[geometryHelper] Texture failed to load:', options.textureUrl, err);
         }
       );
-
+      if (THREE_LIB.SRGBColorSpace !== undefined) {
+        texture.colorSpace = THREE_LIB.SRGBColorSpace;
+      }
       applyTexProps(texture);
       mat.map = texture;
     } catch (err) {
       console.warn('[geometryHelper] TextureLoader error:', err);
+    }
+  }
+
+  // Normal Map channel
+  const normalMapUrl = options.normalMapUrl || options.normalMap;
+  if (normalMapUrl && typeof normalMapUrl === 'string') {
+    try {
+      const loader = new THREE_LIB.TextureLoader();
+      const nTex = loader.load(normalMapUrl, (loadedTex) => {
+        applyTexProps(loadedTex);
+        mat.needsUpdate = true;
+      });
+      applyTexProps(nTex);
+      mat.normalMap = nTex;
+      if (mat.normalScale) {
+        mat.normalScale.set(normalScale, normalScale);
+      }
+    } catch (err) {
+      console.warn('[geometryHelper] NormalMap load error:', err);
+    }
+  }
+
+  // Displacement Map channel
+  const dispMapUrl = options.displacementMapUrl || options.displacementMap;
+  if (dispMapUrl && typeof dispMapUrl === 'string') {
+    try {
+      const loader = new THREE_LIB.TextureLoader();
+      const dTex = loader.load(dispMapUrl, (loadedTex) => {
+        applyTexProps(loadedTex);
+        mat.needsUpdate = true;
+      });
+      applyTexProps(dTex);
+      mat.displacementMap = dTex;
+      mat.displacementScale = displacementScale;
+      mat.displacementBias = displacementBias;
+    } catch (err) {
+      console.warn('[geometryHelper] DisplacementMap load error:', err);
+    }
+  }
+
+  // Emissive Map channel
+  const emissiveMapUrl = options.emissiveMapUrl || options.emissiveMap;
+  if (emissiveMapUrl && typeof emissiveMapUrl === 'string') {
+    try {
+      const loader = new THREE_LIB.TextureLoader();
+      const eTex = loader.load(emissiveMapUrl, (loadedTex) => {
+        if (THREE_LIB.SRGBColorSpace !== undefined) {
+          loadedTex.colorSpace = THREE_LIB.SRGBColorSpace;
+        }
+        applyTexProps(loadedTex);
+        mat.needsUpdate = true;
+      });
+      if (THREE_LIB.SRGBColorSpace !== undefined) {
+        eTex.colorSpace = THREE_LIB.SRGBColorSpace;
+      }
+      applyTexProps(eTex);
+      mat.emissiveMap = eTex;
+    } catch (err) {
+      console.warn('[geometryHelper] EmissiveMap load error:', err);
     }
   }
 
@@ -1303,10 +1404,12 @@ export function createPrimitiveMesh(geomConfig, THREE_LIB = THREE) {
     Number(geomConfig.posY ?? 0),
     Number(geomConfig.posZ ?? 0)
   );
+  mesh.rotation.order = 'YXZ';
   mesh.rotation.set(
     ((Number(geomConfig.rotX ?? 0)) * Math.PI) / 180,
     ((Number(geomConfig.rotY ?? 0)) * Math.PI) / 180,
-    ((Number(geomConfig.rotZ ?? 0)) * Math.PI) / 180
+    ((Number(geomConfig.rotZ ?? 0)) * Math.PI) / 180,
+    'YXZ'
   );
 
   const scale = Number(geomConfig.scale ?? 1);
@@ -1335,6 +1438,88 @@ export function createGeometriesGroup(geometriesList, THREE_LIB = THREE) {
     if (mesh) group.add(mesh);
   });
 
+  return group;
+}
+
+/**
+ * Asynchronously loads external GLB/GLTF models and builds a Three.js Group
+ * matching ar-custom-models in A-Frame (ARExperience & ARTest).
+ */
+export async function createCustomModelsGroup(modelsList = [], THREE_LIB = THREE) {
+  const group = new THREE_LIB.Group();
+  group.name = 'ar_custom_models_group';
+  if (!Array.isArray(modelsList) || modelsList.length === 0) return group;
+
+  const dracoLoader = new DRACOLoader();
+  dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+
+  const loader = new GLTFLoader();
+  loader.setDRACOLoader(dracoLoader);
+
+  for (const item of modelsList) {
+    if (!item || item.visible === false || !item.url) continue;
+    try {
+      const gltf = await new Promise((resolve, reject) => {
+        loader.load(item.url, resolve, undefined, reject);
+      });
+      const modelScene = gltf.scene || gltf.scenes?.[0];
+      if (!modelScene) continue;
+
+      const wrapper = new THREE_LIB.Group();
+      wrapper.name = `custom_model_${item.name || item.id}`;
+      wrapper.userData = {
+        ...(item || {}),
+        isCustomModel: true,
+        modelId: item.id,
+        initialY: Number(item.posY ?? 0)
+      };
+
+      // Auto-center geometry inside wrapper so pivot matches ar-custom-models in aframe
+      const box = new THREE_LIB.Box3().setFromObject(modelScene);
+      if (!box.isEmpty()) {
+        const center = new THREE_LIB.Vector3();
+        box.getCenter(center);
+        modelScene.position.sub(center);
+      }
+
+      modelScene.traverse((node) => {
+        if (node.isMesh) {
+          node.castShadow = true;
+          node.receiveShadow = true;
+          node.userData.modelId = item.id;
+          node.userData.isCustomModel = true;
+        }
+      });
+
+      wrapper.add(modelScene);
+
+      wrapper.position.set(
+        Number(item.posX ?? 0),
+        Number(item.posY ?? 0),
+        Number(item.posZ ?? 0)
+      );
+      wrapper.rotation.order = 'YXZ';
+      wrapper.rotation.set(
+        ((Number(item.rotX ?? 0)) * Math.PI) / 180,
+        ((Number(item.rotY ?? 0)) * Math.PI) / 180,
+        ((Number(item.rotZ ?? 0)) * Math.PI) / 180,
+        'YXZ'
+      );
+      const scale = Number(item.scale ?? 1);
+      wrapper.scale.set(
+        Number(item.scaleX ?? scale),
+        Number(item.scaleY ?? scale),
+        Number(item.scaleZ ?? scale)
+      );
+      wrapper.visible = item.visible !== false;
+
+      group.add(wrapper);
+    } catch (err) {
+      console.warn('[geometryHelper] Could not load custom model:', item.url, err);
+    }
+  }
+
+  dracoLoader.dispose();
   return group;
 }
 

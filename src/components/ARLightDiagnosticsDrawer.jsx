@@ -33,6 +33,8 @@ export default function ARLightDiagnosticsDrawer({
   onUpdateCustomLights,
   studioLighting = null,
   onUpdateStudioLighting = null,
+  particleConfig = null,
+  onUpdateParticleConfig = null,
   getThreeCamera
 }) {
   const { currentUser, isSuperAdmin, isSuperUser } = useAuth();
@@ -65,7 +67,10 @@ export default function ARLightDiagnosticsDrawer({
     dir1Intensity: studioLighting?.dir1Intensity ?? 2.5,
     exposure: studioLighting?.exposure ?? 1.15,
     envPreset: studioLighting?.envPreset ?? 'studio-chrome',
-    envIntensity: studioLighting?.envIntensity ?? 1.2
+    envIntensity: studioLighting?.envIntensity ?? 1.2,
+    envImage: studioLighting?.envImage ?? '',
+    fogColor: studioLighting?.fogColor ?? '#000000',
+    fogDensity: studioLighting?.fogDensity ?? 0
   });
 
   useEffect(() => {
@@ -75,9 +80,72 @@ export default function ARLightDiagnosticsDrawer({
       dir1Intensity: studioLighting.dir1Intensity !== undefined ? Number(studioLighting.dir1Intensity) : prev.dir1Intensity,
       exposure: studioLighting.exposure !== undefined ? Number(studioLighting.exposure) : prev.exposure,
       envPreset: studioLighting.envPreset !== undefined ? studioLighting.envPreset : prev.envPreset,
-      envIntensity: studioLighting.envIntensity !== undefined ? Number(studioLighting.envIntensity) : prev.envIntensity
+      envIntensity: studioLighting.envIntensity !== undefined ? Number(studioLighting.envIntensity) : prev.envIntensity,
+      envImage: studioLighting.envImage !== undefined ? studioLighting.envImage : prev.envImage,
+      fogColor: studioLighting.fogColor !== undefined ? studioLighting.fogColor : prev.fogColor,
+      fogDensity: studioLighting.fogDensity !== undefined ? Number(studioLighting.fogDensity) : prev.fogDensity
     }));
   }, [studioLighting]);
+
+  // Particle System Live State
+  const [particleSettings, setParticleSettings] = useState({
+    enabled: particleConfig?.enabled ?? false,
+    preset: particleConfig?.preset ?? 'cosmic-stardust',
+    count: particleConfig?.count ?? 300,
+    size: particleConfig?.size ?? 0.08,
+    color: particleConfig?.color ?? '#38bdf8',
+    colorSecondary: particleConfig?.colorSecondary ?? '#c084fc',
+    speed: particleConfig?.speed ?? 1.0,
+    opacity: particleConfig?.opacity ?? 0.85
+  });
+
+  useEffect(() => {
+    if (!particleConfig) return;
+    setParticleSettings((prev) => ({
+      ...prev,
+      enabled: particleConfig.enabled !== undefined ? Boolean(particleConfig.enabled) : prev.enabled,
+      preset: particleConfig.preset || prev.preset,
+      count: particleConfig.count !== undefined ? Number(particleConfig.count) : prev.count,
+      size: particleConfig.size !== undefined ? Number(particleConfig.size) : prev.size,
+      color: particleConfig.color || prev.color,
+      colorSecondary: particleConfig.colorSecondary || prev.colorSecondary,
+      speed: particleConfig.speed !== undefined ? Number(particleConfig.speed) : prev.speed,
+      opacity: particleConfig.opacity !== undefined ? Number(particleConfig.opacity) : prev.opacity
+    }));
+  }, [particleConfig]);
+
+  const handleUpdateParticle = (field, value) => {
+    const updated = {
+      ...particleSettings,
+      [field]: value
+    };
+    setParticleSettings(updated);
+    setHasUnsavedChanges(true);
+
+    if (typeof onUpdateParticleConfig === 'function') {
+      onUpdateParticleConfig(updated);
+    }
+
+    const sceneEl = sceneRef?.current || document.querySelector('a-scene');
+    if (sceneEl) {
+      sceneEl.querySelectorAll('[ar-particle-system]').forEach((el) => {
+        const comp = el.components?.['ar-particle-system'];
+        if (comp) {
+          if (field === 'enabled') comp.data.enabled = Boolean(value);
+          if (field === 'preset') comp.data.preset = value;
+          if (field === 'count') comp.data.count = Number(value);
+          if (field === 'size') comp.data.size = Number(value);
+          if (field === 'color') comp.data.color = value;
+          if (field === 'colorSecondary') comp.data.colorSecondary = value;
+          if (field === 'speed') comp.data.speed = Number(value);
+          if (field === 'opacity') comp.data.opacity = Number(value);
+          if (typeof comp.buildParticles === 'function') {
+            comp.buildParticles();
+          }
+        }
+      });
+    }
+  };
 
   const handleUpdateGlobalLighting = (field, value) => {
     const updated = {
@@ -94,18 +162,68 @@ export default function ARLightDiagnosticsDrawer({
     // Direct 60fps Three.js manipulation for instant scrubbing feedback
     const sceneEl = sceneRef?.current || document.querySelector('a-scene');
     if (sceneEl) {
-      const studioRig = sceneEl.querySelector('#main-studio-lighting')?.components?.['ar-studio-lighting'] ||
-        sceneEl.querySelector('[ar-studio-lighting]')?.components?.['ar-studio-lighting'];
-      if (studioRig) {
-        if (field === 'ambientIntensity' && studioRig.ambientLight) {
-          studioRig.ambientLight.intensity = Number(value);
+      const THREE_LIB = (typeof window !== 'undefined' && window.AFRAME && window.AFRAME.THREE)
+        ? window.AFRAME.THREE
+        : THREE;
+
+      sceneEl.querySelectorAll('[ar-studio-lighting]').forEach((rigEl) => {
+        const studioRig = rigEl.components?.['ar-studio-lighting'];
+        if (studioRig) {
+          if (field === 'ambientIntensity' && studioRig.ambientLight) {
+            studioRig.ambientLight.intensity = Number(value);
+          }
+          if (field === 'dir1Intensity' && studioRig.dir1Light) {
+            studioRig.dir1Light.intensity = Number(value);
+          }
         }
-        if (field === 'dir1Intensity' && studioRig.dir1Light) {
-          studioRig.dir1Light.intensity = Number(value);
-        }
-      }
+      });
       if (field === 'exposure' && sceneEl.renderer) {
         sceneEl.renderer.toneMappingExposure = Number(value);
+      }
+      const envComp = sceneEl.components?.['scene-environment'];
+      if (envComp) {
+        if (field === 'envPreset') {
+          envComp.data.preset = value;
+          envComp.data.enabled = value !== 'none';
+          envComp.setupEnvironment();
+        }
+        if (field === 'envImage') {
+          envComp.data.envImage = value;
+          envComp.setupEnvironment();
+        }
+        if (field === 'envIntensity') {
+          envComp.data.hdrIntensity = Number(value);
+          if (sceneEl.object3D?.environmentIntensity !== undefined) {
+            sceneEl.object3D.environmentIntensity = Number(value);
+          } else {
+            envComp.refreshEnvMaterials();
+          }
+        }
+      }
+
+      // Real-time atmospheric depth fog manipulation
+      if (field === 'fogDensity' || field === 'fogColor') {
+        const curDens = field === 'fogDensity' ? Number(value) : Number(updated.fogDensity ?? 0);
+        const curCol = field === 'fogColor' ? value : (updated.fogColor || '#000000');
+        const sObj = sceneEl.object3D;
+        if (sObj) {
+          if (curDens > 0) {
+            sObj.fog = new THREE_LIB.FogExp2(curCol, curDens);
+          } else {
+            sObj.fog = null;
+          }
+          sObj.traverse((node) => {
+            if (node.isMesh && node.material) {
+              const mats = Array.isArray(node.material) ? node.material : [node.material];
+              mats.forEach((m) => {
+                if (m) {
+                  m.fog = curDens > 0;
+                  m.needsUpdate = true;
+                }
+              });
+            }
+          });
+        }
       }
     }
   };
@@ -691,6 +809,19 @@ export default function ARLightDiagnosticsDrawer({
       const expVal = Number(globalLighting.exposure ?? 1.15);
       const envPresetVal = globalLighting.envPreset || 'studio-chrome';
       const envIntVal = Number(globalLighting.envIntensity ?? 1.2);
+      const envImageVal = String(globalLighting.envImage || '').trim();
+      const fogColVal = globalLighting.fogColor || '#000000';
+      const fogDensVal = Number(globalLighting.fogDensity ?? 0);
+      const particleCfgPayload = {
+        enabled: Boolean(particleSettings.enabled),
+        preset: particleSettings.preset,
+        count: Number(particleSettings.count),
+        size: Number(particleSettings.size),
+        color: particleSettings.color,
+        colorSecondary: particleSettings.colorSecondary,
+        speed: Number(particleSettings.speed),
+        opacity: Number(particleSettings.opacity)
+      };
 
       const payload = {
         customLights: customLights || [],
@@ -699,6 +830,10 @@ export default function ARLightDiagnosticsDrawer({
         exposure: expVal,
         envPreset: envPresetVal,
         envIntensity: envIntVal,
+        envImage: envImageVal,
+        fogColor: fogColVal,
+        fogDensity: fogDensVal,
+        particleConfig: particleCfgPayload,
         ar_config: {
           customLights: customLights || [],
           ambientIntensity: ambVal,
@@ -706,13 +841,20 @@ export default function ARLightDiagnosticsDrawer({
           exposure: expVal,
           envPreset: envPresetVal,
           envIntensity: envIntVal,
+          envImage: envImageVal,
+          fogColor: fogColVal,
+          fogDensity: fogDensVal,
+          particleConfig: particleCfgPayload,
           lighting: {
             customLights: customLights || [],
             ambientIntensity: ambVal,
             dir1Intensity: dir1Val,
             exposure: expVal,
             envPreset: envPresetVal,
-            envIntensity: envIntVal
+            envIntensity: envIntVal,
+            envImage: envImageVal,
+            fogColor: fogColVal,
+            fogDensity: fogDensVal
           }
         },
         updatedAt: new Date().toISOString()
@@ -732,6 +874,10 @@ export default function ARLightDiagnosticsDrawer({
         existingLocal.exposure = expVal;
         existingLocal.envPreset = envPresetVal;
         existingLocal.envIntensity = envIntVal;
+        existingLocal.envImage = envImageVal;
+        existingLocal.fogColor = fogColVal;
+        existingLocal.fogDensity = fogDensVal;
+        existingLocal.particleConfig = particleCfgPayload;
         localStorage.setItem(localKey, JSON.stringify(existingLocal));
         localStorage.setItem('starwear_live_preview_config_last', JSON.stringify(existingLocal));
       } catch (stErr) {
@@ -1257,27 +1403,37 @@ export default function ARLightDiagnosticsDrawer({
                       </div>
                     </div>
 
-                    {/* Scrubber 4: PBR Environment Reflection (IBL) */}
-                    <div className="space-y-1.5 font-mono text-xs pt-1 border-t border-neutral-800">
+                    {/* Scrubber 4: PBR Environment Reflection (IBL) & Custom Environmental Image */}
+                    <div className="space-y-2 font-mono text-xs pt-1.5 border-t border-neutral-800">
                       <div className="flex items-center justify-between text-[11px]">
                         <span className="text-neutral-300 font-semibold flex items-center gap-1">
                           <span>🪞 PBR Environment Reflection</span>
-                          <span className="text-[9px] text-neutral-500">({globalLighting.envPreset})</span>
+                          <span className="text-[9px] text-neutral-500">
+                            ({globalLighting.envImage ? 'Custom Image' : globalLighting.envPreset})
+                          </span>
                         </span>
                         <span className="text-amber-400 font-bold">{globalLighting.envIntensity}x</span>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <select
-                          value={globalLighting.envPreset}
-                          onChange={(e) => handleUpdateGlobalLighting('envPreset', e.target.value)}
+                          value={globalLighting.envImage ? 'custom' : globalLighting.envPreset}
+                          onChange={(e) => {
+                            if (e.target.value === 'custom') {
+                              // keep existing custom image
+                            } else {
+                              handleUpdateGlobalLighting('envImage', '');
+                              handleUpdateGlobalLighting('envPreset', e.target.value);
+                            }
+                          }}
                           className="px-2 py-1 bg-neutral-900 border border-neutral-700 rounded text-[10px] text-white font-mono"
                         >
-                          <option value="studio-chrome">Studio Chrome (Default)</option>
+                          <option value="studio-chrome">Studio Chrome (Mirror)</option>
                           <option value="neutral">Neutral Room</option>
                           <option value="city">City Ambient</option>
                           <option value="sunset">Sunset Warmth</option>
                           <option value="cyber">Cyber Neon</option>
                           <option value="forest">Forest Outdoor</option>
+                          <option value="custom">Custom Environmental Image 🌐</option>
                           <option value="none">Disabled (No EnvMap)</option>
                         </select>
                         <div className="flex items-center gap-1.5">
@@ -1293,6 +1449,206 @@ export default function ARLightDiagnosticsDrawer({
                           <span className="text-[10px] text-neutral-400 w-8 text-right font-mono">{globalLighting.envIntensity}x</span>
                         </div>
                       </div>
+
+                      {/* Custom Environmental Image Input & Presets */}
+                      <div className="p-2 rounded-xl bg-neutral-900/90 border border-neutral-800 space-y-1.5 text-[10px]">
+                        <div className="flex items-center justify-between text-neutral-300 font-semibold">
+                          <span className="flex items-center gap-1">
+                            <span className="material-symbols-outlined text-xs text-cyan-400">add_photo_alternate</span>
+                            <span>Environmental Image (Equirectangular)</span>
+                          </span>
+                          {globalLighting.envImage && (
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateGlobalLighting('envImage', '')}
+                              className="text-[9px] text-rose-400 hover:text-rose-300 underline cursor-pointer"
+                            >
+                              Reset to Default
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="Paste image URL (JPG, PNG, WebP, HDR) or select below..."
+                          value={globalLighting.envImage || ''}
+                          onChange={(e) => handleUpdateGlobalLighting('envImage', e.target.value)}
+                          className="w-full px-2 py-1 bg-black/60 border border-neutral-700 rounded text-neutral-200 placeholder-neutral-500 font-mono text-[9px] outline-none focus:border-cyan-500"
+                        />
+                        <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                          <span className="text-neutral-500 text-[9px]">Presets:</span>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateGlobalLighting('envImage', 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=2048&q=80')}
+                            className="px-1.5 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-[9px] cursor-pointer"
+                          >
+                            Cyber Neon
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateGlobalLighting('envImage', 'https://images.unsplash.com/photo-1506703719100-a0f3a48c0f86?auto=format&fit=crop&w=2048&q=80')}
+                            className="px-1.5 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-[9px] cursor-pointer"
+                          >
+                            Space Nebula
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateGlobalLighting('envImage', 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=2048&q=80')}
+                            className="px-1.5 py-0.5 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-[9px] cursor-pointer"
+                          >
+                            Sunset Horizon
+                          </button>
+                          <label className="px-1.5 py-0.5 rounded bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-700/60 text-cyan-300 text-[9px] cursor-pointer inline-flex items-center gap-0.5">
+                            <span className="material-symbols-outlined text-[10px]">upload</span>
+                            <span>Upload File</span>
+                            <input
+                              type="file"
+                              accept="image/*,.hdr"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                const reader = new FileReader();
+                                reader.onload = (uploadEvt) => {
+                                  const dataUrl = uploadEvt.target?.result;
+                                  if (typeof dataUrl === 'string') {
+                                    handleUpdateGlobalLighting('envImage', dataUrl);
+                                  }
+                                };
+                                reader.readAsDataURL(file);
+                              }}
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Atmospheric Depth Fog Section */}
+                    <div className="p-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800 space-y-2 text-[10px] font-mono">
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-1.5 text-neutral-200 font-semibold cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={Number(globalLighting.fogDensity || 0) > 0}
+                            onChange={(e) => {
+                              const nextDens = e.target.checked ? 0.025 : 0;
+                              handleUpdateGlobalLighting('fogDensity', nextDens);
+                            }}
+                            className="accent-indigo-500 rounded"
+                          />
+                          <span>🌫️ Atmospheric Depth Fog</span>
+                        </label>
+                        <span className="text-amber-400 font-bold">{globalLighting.fogDensity}</span>
+                      </div>
+                      {Number(globalLighting.fogDensity || 0) > 0 && (
+                        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-neutral-800/80">
+                          <div className="space-y-1">
+                            <span className="text-neutral-400 text-[9px]">Fog Color</span>
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="color"
+                                value={globalLighting.fogColor || '#000000'}
+                                onChange={(e) => handleUpdateGlobalLighting('fogColor', e.target.value)}
+                                className="w-6 h-6 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                              />
+                              <span className="text-[10px] text-neutral-300 font-mono">{globalLighting.fogColor}</span>
+                            </div>
+                          </div>
+                          <div className="space-y-1">
+                            <span className="text-neutral-400 text-[9px]">Fog Density</span>
+                            <input
+                              type="range"
+                              min="0.005"
+                              max="0.1"
+                              step="0.005"
+                              value={globalLighting.fogDensity}
+                              onChange={(e) => handleUpdateGlobalLighting('fogDensity', parseFloat(e.target.value))}
+                              className="w-full accent-indigo-500 h-1.5 bg-neutral-800 rounded-lg cursor-pointer"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Standalone Particle System Section */}
+                    <div className="p-2.5 rounded-xl bg-neutral-900/90 border border-neutral-800 space-y-2 text-[10px] font-mono">
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-1.5 text-neutral-200 font-semibold cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(particleSettings.enabled)}
+                            onChange={(e) => handleUpdateParticle('enabled', e.target.checked)}
+                            className="accent-cyan-500 rounded"
+                          />
+                          <span>✨ AR Particle System</span>
+                        </label>
+                        <span className="text-cyan-400 font-bold">
+                          {particleSettings.enabled ? `${particleSettings.count} pts` : 'Disabled'}
+                        </span>
+                      </div>
+                      {particleSettings.enabled && (
+                        <div className="space-y-2 pt-1 border-t border-neutral-800/80">
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <span className="text-neutral-400 text-[9px]">Preset</span>
+                              <select
+                                value={particleSettings.preset}
+                                onChange={(e) => handleUpdateParticle('preset', e.target.value)}
+                                className="w-full px-1.5 py-1 bg-black/60 border border-neutral-700 rounded text-neutral-200 text-[9px] font-mono"
+                              >
+                                <option value="cosmic-stardust">Cosmic Stardust</option>
+                                <option value="golden-embers">Golden Embers</option>
+                                <option value="winter-snow">Winter Snow</option>
+                                <option value="cyber-rain">Cyber Rain</option>
+                                <option value="magic-fireflies">Magic Fireflies</option>
+                                <option value="neon-hearts">Neon Hearts</option>
+                              </select>
+                            </div>
+                            <div>
+                              <span className="text-neutral-400 text-[9px]">Count</span>
+                              <input
+                                type="range"
+                                min="50"
+                                max="1000"
+                                step="50"
+                                value={particleSettings.count}
+                                onChange={(e) => handleUpdateParticle('count', parseInt(e.target.value))}
+                                className="w-full accent-cyan-500 h-1.5 bg-neutral-800 rounded-lg cursor-pointer mt-1.5"
+                              />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-neutral-400 text-[9px]">Colors</span>
+                              <input
+                                type="color"
+                                value={particleSettings.color}
+                                onChange={(e) => handleUpdateParticle('color', e.target.value)}
+                                className="w-5 h-5 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                                title="Primary Particle Color"
+                              />
+                              <input
+                                type="color"
+                                value={particleSettings.colorSecondary}
+                                onChange={(e) => handleUpdateParticle('colorSecondary', e.target.value)}
+                                className="w-5 h-5 rounded border border-neutral-700 bg-transparent cursor-pointer"
+                                title="Secondary Particle Color"
+                              />
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-neutral-400 text-[9px]">Size</span>
+                              <input
+                                type="range"
+                                min="0.02"
+                                max="0.2"
+                                step="0.01"
+                                value={particleSettings.size}
+                                onChange={(e) => handleUpdateParticle('size', parseFloat(e.target.value))}
+                                className="flex-1 accent-cyan-500 h-1.5 bg-neutral-800 rounded-lg cursor-pointer"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 

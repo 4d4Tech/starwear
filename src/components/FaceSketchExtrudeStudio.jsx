@@ -21,6 +21,153 @@ const SHAPE_PRESETS = [
   { id: 'freehand', name: 'Freehand', icon: 'draw' }
 ];
 
+// Presets for Vector Pen Tool on Face
+const PEN_FACE_PRESETS = [
+  {
+    id: 'smooth_wave',
+    name: 'Curved Wave',
+    icon: 'waves',
+    points: [
+      { id: 'pw_1', x: -70, y: 0, handleIn: null, handleOut: { x: 25, y: -40 }, type: 'smooth' },
+      { id: 'pw_2', x: -15, y: -35, handleIn: { x: -25, y: 0 }, handleOut: { x: 25, y: 0 }, type: 'smooth' },
+      { id: 'pw_3', x: 45, y: 35, handleIn: { x: -25, y: 0 }, handleOut: { x: 25, y: 0 }, type: 'smooth' },
+      { id: 'pw_4', x: 90, y: -10, handleIn: { x: -20, y: 20 }, handleOut: null, type: 'corner' },
+      { id: 'pw_5', x: 70, y: 55, handleIn: null, handleOut: null, type: 'corner' },
+      { id: 'pw_6', x: -50, y: 55, handleIn: null, handleOut: null, type: 'corner' }
+    ]
+  },
+  {
+    id: 'arch_crest',
+    name: 'Arched Crest',
+    icon: 'shield',
+    points: [
+      { id: 'pc_1', x: 0, y: -70, handleIn: { x: -35, y: 0 }, handleOut: { x: 35, y: 0 }, type: 'smooth' },
+      { id: 'pc_2', x: 70, y: -20, handleIn: { x: 0, y: -30 }, handleOut: { x: 0, y: 35 }, type: 'smooth' },
+      { id: 'pc_3', x: 0, y: 75, handleIn: { x: 35, y: -15 }, handleOut: { x: -35, y: -15 }, type: 'corner' },
+      { id: 'pc_4', x: -70, y: -20, handleIn: { x: 0, y: 35 }, handleOut: { x: 0, y: -30 }, type: 'smooth' }
+    ]
+  },
+  {
+    id: 'smooth_capsule',
+    name: 'Curved Capsule',
+    icon: 'egg',
+    points: [
+      { id: 'po_1', x: 0, y: -55, handleIn: { x: -40, y: 0 }, handleOut: { x: 40, y: 0 }, type: 'smooth' },
+      { id: 'po_2', x: 60, y: 0, handleIn: { x: 0, y: -35 }, handleOut: { x: 0, y: 35 }, type: 'smooth' },
+      { id: 'po_3', x: 0, y: 55, handleIn: { x: 40, y: 0 }, handleOut: { x: -40, y: 0 }, type: 'smooth' },
+      { id: 'po_4', x: -60, y: 0, handleIn: { x: 0, y: 35 }, handleOut: { x: 0, y: -35 }, type: 'smooth' }
+    ]
+  }
+];
+
+// -----------------------------------------------------------------------------
+// Pure Math Helpers for Bézier Curve Sampling & Segment Hit Testing
+// -----------------------------------------------------------------------------
+const evalBezier = (p0, p1, p2, p3, t) => {
+  const u = 1 - t;
+  const tt = t * t;
+  const uu = u * u;
+  const uuu = uu * u;
+  const ttt = tt * t;
+  return {
+    x: uuu * p0.x + 3 * uu * t * p1.x + 3 * u * tt * p2.x + ttt * p3.x,
+    y: uuu * p0.y + 3 * uu * t * p1.y + 3 * u * tt * p2.y + ttt * p3.y
+  };
+};
+
+const distToLineSegment = (p, a, b) => {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return { dist: Math.hypot(p.x - a.x, p.y - a.y), point: { ...a }, t: 0 };
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const proj = { x: a.x + t * dx, y: a.y + t * dy };
+  return { dist: Math.hypot(p.x - proj.x, p.y - proj.y), point: proj, t };
+};
+
+const findSegmentHit = (coords, pts, closed, threshold = 14) => {
+  if (!Array.isArray(pts) || pts.length < 2) return null;
+  const maxSegments = closed ? pts.length : pts.length - 1;
+  let best = null;
+  let minD = threshold;
+
+  for (let i = 0; i < maxSegments; i++) {
+    const curr = pts[i];
+    const next = pts[(i + 1) % pts.length];
+    const p0 = { x: curr.x, y: curr.y };
+    const p3 = { x: next.x, y: next.y };
+    const hasCurve = Boolean(curr.handleOut || next.handleIn);
+
+    if (!hasCurve) {
+      const res = distToLineSegment(coords, p0, p3);
+      if (res.dist <= minD) {
+        minD = res.dist;
+        best = { index: i, point: res.point, t: res.t, isCurve: false };
+      }
+    } else {
+      const p1 = curr.handleOut ? { x: curr.x + curr.handleOut.x, y: curr.y + curr.handleOut.y } : p0;
+      const p2 = next.handleIn ? { x: next.x + next.handleIn.x, y: next.y + next.handleIn.y } : p3;
+      const steps = 24;
+      let prevSample = p0;
+      for (let s = 1; s <= steps; s++) {
+        const tVal = s / steps;
+        const curSample = evalBezier(p0, p1, p2, p3, tVal);
+        const res = distToLineSegment(coords, prevSample, curSample);
+        if (res.dist <= minD) {
+          minD = res.dist;
+          const approxT = (s - 1 + res.t) / steps;
+          best = { index: i, point: res.point, t: approxT, isCurve: true };
+        }
+        prevSample = curSample;
+      }
+    }
+  }
+
+  return best;
+};
+
+const samplePenPathToPoints = (pts, isClosed, subdivisionsPerSegment = 16) => {
+  if (!Array.isArray(pts) || pts.length === 0) return [];
+  if (pts.length === 1) return [{ x: pts[0].x, y: pts[0].y }];
+  const dense = [];
+  const maxSeg = isClosed ? pts.length : pts.length - 1;
+  for (let i = 0; i < maxSeg; i++) {
+    const curr = pts[i];
+    const next = pts[(i + 1) % pts.length];
+    const p0 = { x: curr.x, y: curr.y };
+    const p3 = { x: next.x, y: next.y };
+    const hasCurve = Boolean(curr.handleOut || next.handleIn);
+
+    if (!hasCurve) {
+      dense.push(p0);
+    } else {
+      const p1 = curr.handleOut ? { x: curr.x + curr.handleOut.x, y: curr.y + curr.handleOut.y } : p0;
+      const p2 = next.handleIn ? { x: next.x + next.handleIn.x, y: next.y + next.handleIn.y } : p3;
+      for (let s = 0; s < subdivisionsPerSegment; s++) {
+        const t = s / subdivisionsPerSegment;
+        dense.push(evalBezier(p0, p1, p2, p3, t));
+      }
+    }
+  }
+  if (!isClosed && pts.length > 0) {
+    dense.push({ x: pts[pts.length - 1].x, y: pts[pts.length - 1].y });
+  }
+  return dense;
+};
+
+const hitAnchor = (coords, anchor, threshold = 14) => {
+  if (!anchor) return false;
+  return Math.hypot(coords.x - anchor.x, coords.y - anchor.y) <= threshold;
+};
+
+const hitHandle = (coords, anchor, handle, threshold = 12) => {
+  if (!anchor || !handle) return false;
+  const hx = anchor.x + handle.x;
+  const hy = anchor.y + handle.y;
+  return Math.hypot(coords.x - hx, coords.y - hy) <= threshold;
+};
+
 export default function FaceSketchExtrudeStudio({
   isOpen,
   onClose,
@@ -50,6 +197,14 @@ export default function FaceSketchExtrudeStudio({
   const [offsetV, setOffsetV] = useState(0); // meters
   const [customPoints, setCustomPoints] = useState([]); // Array of { u, v } in meters
 
+  // Vector Pen Tool State (photoshop-style Bézier anchors & handles on face)
+  const [penPoints, setPenPoints] = useState([]);
+  const [isPathClosed, setIsPathClosed] = useState(false);
+  const [selectedPointIdx, setSelectedPointIdx] = useState(null);
+  const [hoveredSegment, setHoveredSegment] = useState(null);
+  const [hoverStartPoint, setHoverStartPoint] = useState(false);
+  const [penHistory, setPenHistory] = useState([]);
+
   // Interaction mode in drawing step: 'draw' vs 'orbit'
   const [canvasInteractionMode, setCanvasInteractionMode] = useState('draw');
 
@@ -71,12 +226,47 @@ export default function FaceSketchExtrudeStudio({
   const sketchMeshRef = useRef(null);
   const sketchLineRef = useRef(null);
   const sketchGridRef = useRef(null);
+  const penGizmoGroupRef = useRef(null);
   const extrudeMeshRef = useRef(null);
   const pullHandleRef = useRef(null);
 
   const isDrawingStrokeRef = useRef(false);
+  const dragRef = useRef({
+    isDrawing: false,
+    dragPointIdx: null,
+    dragHandle: null, // { pointIdx, type: 'in' | 'out', breakSymmetry: boolean }
+    isDirectMoving: false,
+    isAltCurvePull: false,
+    hasMoved: false,
+    downPos: { x: 0, y: 0 }
+  });
   const originalCameraPosRef = useRef(null);
   const originalCameraTargetRef = useRef(null);
+
+  // Undo / History helper for Pen Tool
+  const pushPenHistory = useCallback((pts, closed) => {
+    setPenHistory((prev) => [
+      ...prev.slice(-20),
+      {
+        points: pts.map((p) => ({
+          ...p,
+          handleIn: p.handleIn ? { ...p.handleIn } : null,
+          handleOut: p.handleOut ? { ...p.handleOut } : null
+        })),
+        isClosed: Boolean(closed)
+      }
+    ]);
+  }, []);
+
+  const undoPenAction = useCallback(() => {
+    if (penHistory.length === 0) return;
+    const lastState = penHistory[penHistory.length - 1];
+    setPenHistory((prev) => prev.slice(0, -1));
+    setPenPoints(lastState.points);
+    setIsPathClosed(lastState.isClosed);
+    setSelectedPointIdx(null);
+    setHoveredSegment(null);
+  }, [penHistory]);
 
   // ---------------------------------------------------------------------------
   // Initialize Three.js Preview Group in A-Frame Scene
@@ -108,6 +298,10 @@ export default function FaceSketchExtrudeStudio({
       sketchMeshRef.current = null;
       sketchLineRef.current = null;
       sketchGridRef.current = null;
+      if (penGizmoGroupRef.current && penGizmoGroupRef.current.parent) {
+        penGizmoGroupRef.current.parent.remove(penGizmoGroupRef.current);
+      }
+      penGizmoGroupRef.current = null;
       extrudeMeshRef.current = null;
       pullHandleRef.current = null;
     };
@@ -187,14 +381,37 @@ export default function FaceSketchExtrudeStudio({
         { x: Math.round(-40 * s), y: Math.round(75 * s) },
         { x: Math.round(-75 * s), y: Math.round(-35 * s) }
       ];
-    } else if (selectedShape === 'polyline' || selectedShape === 'freehand') {
+    } else if (selectedShape === 'polyline') {
+      if (penPoints.length >= 3) {
+        rawPts = penPoints.map((p) => ({
+          ...p,
+          handleIn: p.handleIn ? { ...p.handleIn } : null,
+          handleOut: p.handleOut ? { ...p.handleOut } : null
+        }));
+      } else if (customPoints.length >= 3) {
+        rawPts = customPoints.map((p) => ({
+          x: Math.round(p.u * 200),
+          y: Math.round(-p.v * 200),
+          handleIn: null,
+          handleOut: null,
+          type: 'corner'
+        }));
+      } else {
+        // Fallback default triangle if not enough custom points
+        const r = shapeRadius * 200;
+        rawPts = [
+          { x: 0, y: -r, handleIn: null, handleOut: null, type: 'corner' },
+          { x: r * 0.866, y: r * 0.5, handleIn: null, handleOut: null, type: 'corner' },
+          { x: -r * 0.866, y: r * 0.5, handleIn: null, handleOut: null, type: 'corner' }
+        ];
+      }
+    } else if (selectedShape === 'freehand') {
       if (customPoints.length >= 3) {
         rawPts = customPoints.map((p) => ({
           x: Math.round(p.u * 200),
           y: Math.round(-p.v * 200)
         }));
       } else {
-        // Fallback default triangle if not enough custom points
         const r = shapeRadius * 200;
         rawPts = [
           { x: 0, y: -r },
@@ -214,9 +431,25 @@ export default function FaceSketchExtrudeStudio({
     return rawPts.map((pt) => {
       const rx = pt.x * cos - pt.y * sin;
       const ry = pt.x * sin + pt.y * cos;
+      const hIn = pt.handleIn
+        ? {
+            x: Math.round(pt.handleIn.x * cos - pt.handleIn.y * sin),
+            y: Math.round(pt.handleIn.x * sin + pt.handleIn.y * cos)
+          }
+        : null;
+      const hOut = pt.handleOut
+        ? {
+            x: Math.round(pt.handleOut.x * cos - pt.handleOut.y * sin),
+            y: Math.round(pt.handleOut.x * sin + pt.handleOut.y * cos)
+          }
+        : null;
+
       return {
+        ...pt,
         x: Math.round(rx + offX),
-        y: Math.round(ry + offY)
+        y: Math.round(ry + offY),
+        handleIn: hIn,
+        handleOut: hOut
       };
     });
   }, [
@@ -230,7 +463,8 @@ export default function FaceSketchExtrudeStudio({
     shapeRotation,
     offsetU,
     offsetV,
-    customPoints
+    customPoints,
+    penPoints
   ]);
 
   // ---------------------------------------------------------------------------
@@ -679,6 +913,26 @@ export default function FaceSketchExtrudeStudio({
     return `Angle (${normal.x.toFixed(2)}, ${normal.y.toFixed(2)}, ${normal.z.toFixed(2)})`;
   }
 
+  // Helper to reliably retrieve active OrbitControls across A-Frame and Three.js
+  const findOrbitControls = useCallback(() => {
+    if (typeof window !== 'undefined' && window.__arOrbitControls) {
+      return window.__arOrbitControls;
+    }
+    if (typeof window !== 'undefined' && window.__starwear_orbit_controls) {
+      return window.__starwear_orbit_controls;
+    }
+    const sceneEl = document.querySelector('a-scene');
+    const cameraEl = document.getElementById('scene-camera') || document.querySelector('[camera]') || document.querySelector('a-camera');
+    if (cameraEl?.orbitControls) return cameraEl.orbitControls;
+    if (cameraEl?.components?.['orbit-camera-controls']?.controls) {
+      return cameraEl.components['orbit-camera-controls'].controls;
+    }
+    if (sceneEl?.camera?.el?.orbitControls) {
+      return sceneEl.camera.el.orbitControls;
+    }
+    return null;
+  }, []);
+
   // ---------------------------------------------------------------------------
   // Align Camera to Face Drafting View (Drafting / Orthogonal Board)
   // ---------------------------------------------------------------------------
@@ -686,7 +940,7 @@ export default function FaceSketchExtrudeStudio({
     if (!faceData) return;
     const sceneEl = document.querySelector('a-scene');
     const camera = sceneEl?.camera || window.__arOrbitCamera;
-    const orbitControls = window.__starwear_orbit_controls || window.__arOrbitControls;
+    const orbitControls = findOrbitControls();
     if (!camera) return;
 
     if (!originalCameraPosRef.current) {
@@ -706,13 +960,13 @@ export default function FaceSketchExtrudeStudio({
       orbitControls.target.copy(targetPos);
       orbitControls.update();
     }
-  }, [faceData]);
+  }, [faceData, findOrbitControls]);
 
   // Restore studio perspective camera
   const restoreCameraView = useCallback(() => {
     const sceneEl = document.querySelector('a-scene');
     const camera = sceneEl?.camera || window.__arOrbitCamera;
-    const orbitControls = window.__starwear_orbit_controls || window.__arOrbitControls;
+    const orbitControls = findOrbitControls();
     if (!camera || !originalCameraPosRef.current) return;
 
     camera.position.copy(originalCameraPosRef.current);
@@ -720,10 +974,10 @@ export default function FaceSketchExtrudeStudio({
       orbitControls.target.copy(originalCameraTargetRef.current);
       orbitControls.update();
     }
-  }, []);
+  }, [findOrbitControls]);
 
   // ---------------------------------------------------------------------------
-  // STEP 2: Render 2D Sketch Shape & Grid on Face
+  // STEP 2: Render 2D Sketch Shape, Grid & Pen Gizmo on Face
   // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!isOpen || step !== 'draw_shape' || !faceData) {
@@ -738,6 +992,10 @@ export default function FaceSketchExtrudeStudio({
       if (sketchLineRef.current && sketchLineRef.current.parent) {
         sketchLineRef.current.parent.remove(sketchLineRef.current);
         sketchLineRef.current = null;
+      }
+      if (penGizmoGroupRef.current && penGizmoGroupRef.current.parent) {
+        penGizmoGroupRef.current.parent.remove(penGizmoGroupRef.current);
+        penGizmoGroupRef.current = null;
       }
       return;
     }
@@ -761,45 +1019,196 @@ export default function FaceSketchExtrudeStudio({
 
     // 2. Generate 2D contour points
     const pts = generateContourPoints();
-    if (!pts || pts.length < 3) return;
+    const isPen = selectedShape === 'polyline';
 
-    // Convert pixel points back to meters for 3D display on the face
-    // x in pts is along uAxis (meters = x / 200)
-    // y in pts is along -vAxis (meters = -y / 200)
-    const shape = new THREE.Shape();
-    const p0 = pts[0];
-    shape.moveTo(p0.x * 0.005, -p0.y * 0.005);
-    for (let i = 1; i < pts.length; i++) {
-      shape.lineTo(pts[i].x * 0.005, -pts[i].y * 0.005);
-    }
-    shape.closePath();
+    // -------------------------------------------------------------------------
+    // 3. Render Vector Pen Visual Gizmos (Anchor Dots, Tangent Handles, Cues)
+    // -------------------------------------------------------------------------
+    if (isPen) {
+      let gizmoGroup = penGizmoGroupRef.current;
+      if (!gizmoGroup) {
+        gizmoGroup = new THREE.Group();
+        gizmoGroup.position.copy(point).add(normal.clone().multiplyScalar(0.003));
+        gizmoGroup.quaternion.copy(quat);
+        previewGroup.add(gizmoGroup);
+        penGizmoGroupRef.current = gizmoGroup;
+      } else {
+        // Clear previous children
+        while (gizmoGroup.children.length > 0) {
+          const child = gizmoGroup.children[0];
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+          gizmoGroup.remove(child);
+        }
+        gizmoGroup.position.copy(point).add(normal.clone().multiplyScalar(0.003));
+        gizmoGroup.quaternion.copy(quat);
+      }
 
-    // Fill mesh on face
-    const shapeGeo = new THREE.ShapeGeometry(shape);
-    const shapeMat = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
-      transparent: true,
-      opacity: 0.35,
-      side: THREE.DoubleSide,
-      depthTest: false
-    });
+      // Render Anchor Points
+      penPoints.forEach((p, idx) => {
+        const isSelected = idx === selectedPointIdx;
+        const isStartHover = idx === 0 && hoverStartPoint && !isPathClosed;
 
-    if (sketchMeshRef.current) {
-      sketchMeshRef.current.geometry.dispose();
-      sketchMeshRef.current.geometry = shapeGeo;
+        const anchorRadius = isSelected ? 0.012 : isStartHover ? 0.014 : 0.009;
+        const anchorGeo = new THREE.CircleGeometry(anchorRadius, 16);
+        const anchorColor = isStartHover
+          ? 0x10b981 // emerald green when ready to close path
+          : isSelected
+            ? 0xfbbf24 // amber gold for selected anchor
+            : 0xffffff; // white for regular anchors
+
+        const anchorMat = new THREE.MeshBasicMaterial({
+          color: anchorColor,
+          depthTest: false,
+          side: THREE.DoubleSide
+        });
+        const anchorMesh = new THREE.Mesh(anchorGeo, anchorMat);
+        anchorMesh.position.set(p.x * 0.005, -p.y * 0.005, 0.002);
+        gizmoGroup.add(anchorMesh);
+
+        // Ring border around anchor
+        const ringGeo = new THREE.RingGeometry(anchorRadius * 0.9, anchorRadius * 1.3, 16);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: isSelected ? 0xd97706 : 0x0f172a,
+          depthTest: false,
+          side: THREE.DoubleSide
+        });
+        const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+        ringMesh.position.set(p.x * 0.005, -p.y * 0.005, 0.0021);
+        gizmoGroup.add(ringMesh);
+      });
+
+      // Render Bézier Tangent Handles for Selected Anchor
+      if (selectedPointIdx !== null && penPoints[selectedPointIdx]) {
+        const selPt = penPoints[selectedPointIdx];
+        const origin3D = new THREE.Vector3(selPt.x * 0.005, -selPt.y * 0.005, 0.003);
+
+        const handleMat = new THREE.LineBasicMaterial({
+          color: 0x38bdf8,
+          linewidth: 2,
+          depthTest: false
+        });
+
+        // handleOut
+        if (selPt.handleOut) {
+          const out3D = new THREE.Vector3(
+            (selPt.x + selPt.handleOut.x) * 0.005,
+            -(selPt.y + selPt.handleOut.y) * 0.005,
+            0.003
+          );
+          const lineGeo = new THREE.BufferGeometry().setFromPoints([origin3D, out3D]);
+          gizmoGroup.add(new THREE.Line(lineGeo, handleMat));
+
+          const knobGeo = new THREE.CircleGeometry(0.007, 12);
+          const knobMat = new THREE.MeshBasicMaterial({
+            color: 0x38bdf8,
+            depthTest: false,
+            side: THREE.DoubleSide
+          });
+          const knobMesh = new THREE.Mesh(knobGeo, knobMat);
+          knobMesh.position.copy(out3D);
+          gizmoGroup.add(knobMesh);
+        }
+
+        // handleIn
+        if (selPt.handleIn) {
+          const in3D = new THREE.Vector3(
+            (selPt.x + selPt.handleIn.x) * 0.005,
+            -(selPt.y + selPt.handleIn.y) * 0.005,
+            0.003
+          );
+          const lineGeo = new THREE.BufferGeometry().setFromPoints([origin3D, in3D]);
+          gizmoGroup.add(new THREE.Line(lineGeo, handleMat));
+
+          const knobGeo = new THREE.CircleGeometry(0.007, 12);
+          const knobMat = new THREE.MeshBasicMaterial({
+            color: 0x38bdf8,
+            depthTest: false,
+            side: THREE.DoubleSide
+          });
+          const knobMesh = new THREE.Mesh(knobGeo, knobMat);
+          knobMesh.position.copy(in3D);
+          gizmoGroup.add(knobMesh);
+        }
+      }
+
+      // Render Hovered Segment Point Insertion Indicator (+)
+      if (hoveredSegment && hoveredSegment.point) {
+        const insertPt3D = new THREE.Vector3(
+          hoveredSegment.point.x * 0.005,
+          -hoveredSegment.point.y * 0.005,
+          0.004
+        );
+
+        // Glowing Emerald Ring
+        const ringGeo = new THREE.RingGeometry(0.009, 0.015, 20);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: 0x10b981,
+          depthTest: false,
+          side: THREE.DoubleSide
+        });
+        const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+        ringMesh.position.copy(insertPt3D);
+        gizmoGroup.add(ringMesh);
+
+        // Crosshairs (+) inside the ring
+        const plusSize = 0.007;
+        const plusGeo = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(insertPt3D.x - plusSize, insertPt3D.y, insertPt3D.z + 0.0005),
+          new THREE.Vector3(insertPt3D.x + plusSize, insertPt3D.y, insertPt3D.z + 0.0005),
+          new THREE.Vector3(insertPt3D.x, insertPt3D.y - plusSize, insertPt3D.z + 0.0005),
+          new THREE.Vector3(insertPt3D.x, insertPt3D.y + plusSize, insertPt3D.z + 0.0005)
+        ]);
+        const plusMat = new THREE.LineBasicMaterial({
+          color: 0xffffff,
+          linewidth: 2,
+          depthTest: false
+        });
+        gizmoGroup.add(new THREE.LineSegments(plusGeo, plusMat));
+      }
     } else {
-      const mesh = new THREE.Mesh(shapeGeo, shapeMat);
-      mesh.position.copy(point).add(normal.clone().multiplyScalar(0.002));
-      mesh.quaternion.copy(quat);
-      previewGroup.add(mesh);
-      sketchMeshRef.current = mesh;
+      // Hide or clear pen gizmo if not polyline
+      if (penGizmoGroupRef.current) {
+        while (penGizmoGroupRef.current.children.length > 0) {
+          const child = penGizmoGroupRef.current.children[0];
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+            else child.material.dispose();
+          }
+          penGizmoGroupRef.current.remove(child);
+        }
+      }
     }
 
-    // Outline line loop on face
-    const linePts = pts.map((p) => new THREE.Vector3(p.x * 0.005, -p.y * 0.005, 0));
-    const lineGeo = new THREE.BufferGeometry().setFromPoints([...linePts, linePts[0]]);
+    if (!pts || pts.length < 2) {
+      if (sketchLineRef.current) sketchLineRef.current.visible = false;
+      if (sketchMeshRef.current) sketchMeshRef.current.visible = false;
+      return;
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Sample Smooth Contour Line (Evaluating Bézier curves for Polyline)
+    // -------------------------------------------------------------------------
+    let displayPts;
+    const shouldClose = isPen ? isPathClosed : true;
+    if (isPen) {
+      displayPts = samplePenPathToPoints(pts, shouldClose, 20);
+    } else {
+      displayPts = pts;
+    }
+
+    if (displayPts.length < 2) return;
+
+    // Outline line
+    const line3DPts = displayPts.map((p) => new THREE.Vector3(p.x * 0.005, -p.y * 0.005, 0));
+    const linePointsArray = shouldClose && displayPts.length >= 3 ? [...line3DPts, line3DPts[0]] : line3DPts;
+    const lineGeo = new THREE.BufferGeometry().setFromPoints(linePointsArray);
     const lineMat = new THREE.LineBasicMaterial({
-      color: 0xfacc15,
+      color: isPen ? (isPathClosed ? 0x10b981 : 0xfacc15) : 0xfacc15,
       linewidth: 3,
       depthTest: false
     });
@@ -807,6 +1216,8 @@ export default function FaceSketchExtrudeStudio({
     if (sketchLineRef.current) {
       sketchLineRef.current.geometry.dispose();
       sketchLineRef.current.geometry = lineGeo;
+      sketchLineRef.current.material = lineMat;
+      sketchLineRef.current.visible = true;
     } else {
       const line = new THREE.Line(lineGeo, lineMat);
       line.position.copy(point).add(normal.clone().multiplyScalar(0.003));
@@ -814,10 +1225,75 @@ export default function FaceSketchExtrudeStudio({
       previewGroup.add(line);
       sketchLineRef.current = line;
     }
-  }, [isOpen, step, faceData, generateContourPoints]);
+
+    // -------------------------------------------------------------------------
+    // 5. Fill Mesh on Face (Semi-transparent face preview when closed)
+    // -------------------------------------------------------------------------
+    if (shouldClose && pts.length >= 3) {
+      const shape = new THREE.Shape();
+      const p0 = pts[0];
+      shape.moveTo(p0.x * 0.005, -p0.y * 0.005);
+
+      for (let i = 0; i < pts.length; i++) {
+        const curr = pts[i];
+        const next = pts[(i + 1) % pts.length];
+        const cp1 = curr.handleOut
+          ? { x: (curr.x + curr.handleOut.x) * 0.005, y: -(curr.y + curr.handleOut.y) * 0.005 }
+          : null;
+        const cp2 = next.handleIn
+          ? { x: (next.x + next.handleIn.x) * 0.005, y: -(next.y + next.handleIn.y) * 0.005 }
+          : null;
+
+        if (cp1 || cp2) {
+          const c1 = cp1 || { x: curr.x * 0.005, y: -curr.y * 0.005 };
+          const c2 = cp2 || { x: next.x * 0.005, y: -next.y * 0.005 };
+          shape.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, next.x * 0.005, -next.y * 0.005);
+        } else {
+          shape.lineTo(next.x * 0.005, -next.y * 0.005);
+        }
+      }
+      shape.closePath();
+
+      const shapeGeo = new THREE.ShapeGeometry(shape);
+      const shapeMat = new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.35,
+        side: THREE.DoubleSide,
+        depthTest: false
+      });
+
+      if (sketchMeshRef.current) {
+        sketchMeshRef.current.geometry.dispose();
+        sketchMeshRef.current.geometry = shapeGeo;
+        sketchMeshRef.current.visible = true;
+      } else {
+        const mesh = new THREE.Mesh(shapeGeo, shapeMat);
+        mesh.position.copy(point).add(normal.clone().multiplyScalar(0.002));
+        mesh.quaternion.copy(quat);
+        previewGroup.add(mesh);
+        sketchMeshRef.current = mesh;
+      }
+    } else {
+      if (sketchMeshRef.current) {
+        sketchMeshRef.current.visible = false;
+      }
+    }
+  }, [
+    isOpen,
+    step,
+    faceData,
+    generateContourPoints,
+    selectedShape,
+    penPoints,
+    isPathClosed,
+    selectedPointIdx,
+    hoveredSegment,
+    hoverStartPoint
+  ]);
 
   // ---------------------------------------------------------------------------
-  // Direct In-Viewport Freehand & Polyline Drawing on Face
+  // Direct In-Viewport Vector Pen & Freehand Drawing on Face
   // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!isOpen || step !== 'draw_shape' || !faceData || canvasInteractionMode !== 'draw') return;
@@ -825,7 +1301,6 @@ export default function FaceSketchExtrudeStudio({
     const sceneEl = document.querySelector('a-scene');
     const canvas = sceneEl?.canvas;
     const camera = sceneEl?.camera || window.__arOrbitCamera;
-    const orbitControls = window.__starwear_orbit_controls || window.__arOrbitControls;
     if (!canvas || !camera) return;
 
     // Face plane definition in 3D: normal * X = normal * point
@@ -834,7 +1309,7 @@ export default function FaceSketchExtrudeStudio({
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
-    const getFaceUV = (e) => {
+    const getFaceCanvasCoords = (e) => {
       const rect = canvas.getBoundingClientRect();
       mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -847,57 +1322,521 @@ export default function FaceSketchExtrudeStudio({
       const delta = hitPt.clone().sub(point);
       const u = delta.dot(uAxis);
       const v = delta.dot(vAxis);
-      return { u, v };
+      return {
+        u,
+        v,
+        x: Math.round(u * 200),
+        y: Math.round(-v * 200),
+        screenX: e.clientX - rect.left,
+        screenY: e.clientY - rect.top
+      };
+    };
+
+    // Keyboard shortcuts & modifier cursor feedback
+    const handleKeyDown = (e) => {
+      if (selectedShape !== 'polyline') return;
+
+      if (e.key === 'Meta' || e.key === 'Control') {
+        canvas.style.cursor = 'move';
+      } else if (e.key === 'Alt') {
+        canvas.style.cursor = 'crosshair';
+      }
+
+      if ((e.key === 'Backspace' || e.key === 'Delete') && selectedPointIdx !== null) {
+        e.preventDefault();
+        if (penPoints[selectedPointIdx]) {
+          pushPenHistory(penPoints, isPathClosed);
+          const nextPoints = penPoints.filter((_, idx) => idx !== selectedPointIdx);
+          setPenPoints(nextPoints);
+          setSelectedPointIdx(null);
+          if (nextPoints.length < 3 && isPathClosed) {
+            setIsPathClosed(false);
+          }
+        }
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        undoPenAction();
+      } else if (e.key === 'Escape') {
+        setSelectedPointIdx(null);
+        setHoveredSegment(null);
+      }
+    };
+
+    const handleKeyUp = (e) => {
+      if (e.key === 'Meta' || e.key === 'Control' || e.key === 'Alt') {
+        canvas.style.cursor = 'default';
+        const orbitControls = findOrbitControls();
+        if (orbitControls && !dragRef.current.isDirectMoving && !dragRef.current.isAltCurvePull) {
+          orbitControls.enabled = true;
+        }
+      }
     };
 
     const handlePointerDown = (e) => {
-      if (e.button !== 0) return; // Only left mouse button
-      const uv = getFaceUV(e);
-      if (!uv) return;
+      if (e.button !== 0) return; // Only primary mouse button
 
-      if (selectedShape === 'polyline') {
-        setCustomPoints((prev) => [...prev, uv]);
-      } else if (selectedShape === 'freehand') {
+      const orbitControls = findOrbitControls();
+      const isCmdCtrl = Boolean(e.metaKey || e.ctrlKey);
+      const isAlt = Boolean(e.altKey);
+
+      if (selectedShape === 'freehand') {
+        const coords = getFaceCanvasCoords(e);
+        if (!coords) return;
         isDrawingStrokeRef.current = true;
-        setCustomPoints([uv]);
+        setCustomPoints([{ u: coords.u, v: coords.v }]);
         if (orbitControls) orbitControls.enabled = false;
+        e.stopImmediatePropagation();
+        return;
+      }
+
+      if (selectedShape !== 'polyline') return;
+
+      const drag = dragRef.current;
+      drag.hasMoved = false;
+      drag.downScreenPos = { x: e.clientX, y: e.clientY };
+      drag.isDirectMoving = false;
+      drag.isAltCurvePull = false;
+      drag.isDrawing = false;
+      drag.dragHandle = null;
+      drag.dragPointIdx = null;
+      drag.potentialClick = false;
+      drag.clickCandidate = null;
+
+      const coords = getFaceCanvasCoords(e);
+      if (!coords) {
+        if (orbitControls) orbitControls.enabled = true;
+        return;
+      }
+
+      drag.downPos = { x: coords.x, y: coords.y };
+
+      // =======================================================================
+      // CASE 1: CMD / CTRL ENGAGED -> POINT MANIPULATION (CAMERA VIEW LOCKED)
+      // =======================================================================
+      if (isCmdCtrl) {
+        if (orbitControls) orbitControls.enabled = false;
+        e.stopImmediatePropagation();
+
+        // Hit test anchor points
+        for (let i = 0; i < penPoints.length; i++) {
+          if (hitAnchor(coords, penPoints[i], 18)) {
+            pushPenHistory(penPoints, isPathClosed);
+            setSelectedPointIdx(i);
+            drag.isDirectMoving = true;
+            drag.dragPointIdx = i;
+            return;
+          }
+        }
+
+        // Also allow moving existing handles with Cmd/Ctrl
+        if (selectedPointIdx !== null && penPoints[selectedPointIdx]) {
+          const selPt = penPoints[selectedPointIdx];
+          if (hitHandle(coords, selPt, selPt.handleOut, 16)) {
+            drag.dragHandle = { pointIdx: selectedPointIdx, type: 'out' };
+            return;
+          }
+          if (hitHandle(coords, selPt, selPt.handleIn, 16)) {
+            drag.dragHandle = { pointIdx: selectedPointIdx, type: 'in' };
+            return;
+          }
+        }
+
+        setSelectedPointIdx(null);
+        return;
+      }
+
+      // =======================================================================
+      // CASE 2: ALT / OPTION ENGAGED -> CURVE MANIPULATION (CAMERA VIEW LOCKED)
+      // =======================================================================
+      if (isAlt) {
+        if (orbitControls) orbitControls.enabled = false;
+        e.stopImmediatePropagation();
+
+        // Alt-click anchor point: pull handles or convert curve
+        for (let i = 0; i < penPoints.length; i++) {
+          if (hitAnchor(coords, penPoints[i], 18)) {
+            pushPenHistory(penPoints, isPathClosed);
+            const currPt = penPoints[i];
+            let hIn = currPt.handleIn;
+            let hOut = currPt.handleOut;
+
+            if (!hIn && !hOut) {
+              const prevPt = penPoints[(i - 1 + penPoints.length) % penPoints.length];
+              const nextPt = penPoints[(i + 1) % penPoints.length];
+              let dirX = 35;
+              let dirY = 0;
+              if (penPoints.length >= 2 && prevPt && nextPt && (prevPt !== currPt || nextPt !== currPt)) {
+                const dx = nextPt.x - prevPt.x;
+                const dy = nextPt.y - prevPt.y;
+                const len = Math.hypot(dx, dy);
+                if (len > 0.001) {
+                  const handleLen = Math.min(55, Math.max(25, len * 0.28));
+                  dirX = (dx / len) * handleLen;
+                  dirY = (dy / len) * handleLen;
+                }
+              }
+              hOut = { x: Math.round(dirX), y: Math.round(dirY) };
+              hIn = { x: -Math.round(dirX), y: -Math.round(dirY) };
+            }
+
+            setPenPoints((prev) =>
+              prev.map((p, idx) =>
+                idx === i
+                  ? {
+                      ...p,
+                      type: 'smooth',
+                      handleIn: hIn,
+                      handleOut: hOut
+                    }
+                  : p
+              )
+            );
+            setSelectedPointIdx(i);
+            drag.isAltCurvePull = true;
+            drag.dragPointIdx = i;
+            return;
+          }
+        }
+
+        // Alt-click existing handle: break symmetry (convert to corner handle)
+        if (selectedPointIdx !== null && penPoints[selectedPointIdx]) {
+          const selPt = penPoints[selectedPointIdx];
+          if (hitHandle(coords, selPt, selPt.handleOut, 16)) {
+            drag.dragHandle = { pointIdx: selectedPointIdx, type: 'out', breakSymmetry: true };
+            return;
+          }
+          if (hitHandle(coords, selPt, selPt.handleIn, 16)) {
+            drag.dragHandle = { pointIdx: selectedPointIdx, type: 'in', breakSymmetry: true };
+            return;
+          }
+        }
+        return;
+      }
+
+      // =======================================================================
+      // CASE 3: NEITHER CMD/CTRL NOR ALT ENGAGED
+      // -> VIEW ANGLE IS FREE TO MANIPULATE (ORBIT CONTROLS ACTIVE)
+      // -> MANIPULATING EXISTING POINTS IS INACTIVE
+      // =======================================================================
+      if (orbitControls) {
+        orbitControls.enabled = true;
+      }
+
+      // Register potential click candidate (executed only if released without dragging)
+      drag.potentialClick = true;
+
+      // 3a. Start point click (to close path)
+      if (!isPathClosed && penPoints.length >= 3 && hitAnchor(coords, penPoints[0], 18)) {
+        drag.clickCandidate = { type: 'close' };
+        return;
+      }
+
+      // 3b. Existing anchor click (selects anchor, but does NOT allow dragging it!)
+      for (let i = 0; i < penPoints.length; i++) {
+        if (hitAnchor(coords, penPoints[i], 18)) {
+          drag.clickCandidate = { type: 'select', index: i };
+          return;
+        }
+      }
+
+      // 3c. Segment hit (inserts new point on edge)
+      const segHit = findSegmentHit(coords, penPoints, isPathClosed, 16);
+      if (segHit) {
+        drag.clickCandidate = { type: 'insert', segHit, coords };
+        return;
+      }
+
+      // 3d. Empty face click (drops new point)
+      if (!isPathClosed) {
+        drag.clickCandidate = { type: 'add', coords };
+      } else {
+        drag.clickCandidate = { type: 'deselect' };
       }
     };
 
     const handlePointerMove = (e) => {
-      if (!isDrawingStrokeRef.current || selectedShape !== 'freehand') return;
-      const uv = getFaceUV(e);
-      if (!uv) return;
+      const drag = dragRef.current;
+      const isCmdCtrl = Boolean(e.metaKey || e.ctrlKey);
+      const isAlt = Boolean(e.altKey);
 
-      setCustomPoints((prev) => {
-        const last = prev[prev.length - 1];
-        if (!last) return [uv];
-        const distSq = (uv.u - last.u) ** 2 + (uv.v - last.v) ** 2;
-        if (distSq > 0.0004) { // Only sample every ~2cm to keep vertex count reasonable
-          return [...prev, uv];
+      // Measure movement distance on screen pixels
+      const screenDist = Math.hypot(e.clientX - drag.downScreenPos.x, e.clientY - drag.downScreenPos.y);
+      if (!drag.hasMoved && screenDist > 4) {
+        drag.hasMoved = true;
+        // When neither Cmd nor Alt is engaged, moving the mouse orbits the camera view!
+        // Cancel any pending point creation/insertion so camera navigation never creates points.
+        if (!isCmdCtrl && !isAlt) {
+          drag.potentialClick = false;
+          drag.clickCandidate = null;
         }
-        return prev;
-      });
-    };
+      }
 
-    const handlePointerUp = () => {
-      if (isDrawingStrokeRef.current) {
-        isDrawingStrokeRef.current = false;
-        if (orbitControls) orbitControls.enabled = true;
+      // Freehand drawing stroke
+      if (selectedShape === 'freehand' && isDrawingStrokeRef.current) {
+        const coords = getFaceCanvasCoords(e);
+        if (!coords) return;
+        setCustomPoints((prev) => {
+          const last = prev[prev.length - 1];
+          if (!last) return [{ u: coords.u, v: coords.v }];
+          const distSq = (coords.u - last.u) ** 2 + (coords.v - last.v) ** 2;
+          if (distSq > 0.0004) {
+            return [...prev, { u: coords.u, v: coords.v }];
+          }
+          return prev;
+        });
+        return;
+      }
+
+      if (selectedShape !== 'polyline') return;
+
+      const coords = getFaceCanvasCoords(e);
+
+      // A. Alt-drag: dynamically adjust curve handles (camera view locked)
+      if (drag.isAltCurvePull && drag.dragPointIdx !== null && coords) {
+        const idx = drag.dragPointIdx;
+        setPenPoints((prev) =>
+          prev.map((p, i) => {
+            if (i !== idx) return p;
+            const dx = coords.x - p.x;
+            const dy = coords.y - p.y;
+            return {
+              ...p,
+              type: 'smooth',
+              handleOut: { x: dx, y: dy },
+              handleIn: { x: -dx, y: -dy }
+            };
+          })
+        );
+        return;
+      }
+
+      // B. Cmd/Ctrl-drag: move anchor point position (camera view locked)
+      if (drag.isDirectMoving && drag.dragPointIdx !== null && coords) {
+        const idx = drag.dragPointIdx;
+        setPenPoints((prev) =>
+          prev.map((p, i) => (i === idx ? { ...p, x: coords.x, y: coords.y } : p))
+        );
+        return;
+      }
+
+      // C. Dragging existing bezier handle (with Alt or Cmd/Ctrl)
+      if (drag.dragHandle && coords) {
+        const { pointIdx, type, breakSymmetry } = drag.dragHandle;
+        setPenPoints((prev) =>
+          prev.map((p, i) => {
+            if (i !== pointIdx) return p;
+            const offset = { x: coords.x - p.x, y: coords.y - p.y };
+            if (breakSymmetry || e.altKey) {
+              return {
+                ...p,
+                type: 'corner',
+                [type === 'out' ? 'handleOut' : 'handleIn']: offset
+              };
+            }
+            if (type === 'out') {
+              return {
+                ...p,
+                handleOut: offset,
+                handleIn: p.type === 'smooth' ? { x: -offset.x, y: -offset.y } : p.handleIn
+              };
+            } else {
+              return {
+                ...p,
+                handleIn: offset,
+                handleOut: p.type === 'smooth' ? { x: -offset.x, y: -offset.y } : p.handleOut
+              };
+            }
+          })
+        );
+        return;
+      }
+
+      // D. Hover cues when not dragging
+      if (!coords) {
+        if (hoverStartPoint) setHoverStartPoint(false);
+        if (hoveredSegment) setHoveredSegment(null);
+        return;
+      }
+
+      if (!isCmdCtrl && !isAlt && !drag.hasMoved) {
+        // Check hover on start point to close path
+        if (!isPathClosed && penPoints.length >= 3 && hitAnchor(coords, penPoints[0], 18)) {
+          if (!hoverStartPoint) setHoverStartPoint(true);
+        } else if (hoverStartPoint) {
+          setHoverStartPoint(false);
+        }
+
+        // Check hover on segment to insert point (+)
+        const nearAnyAnchor = penPoints.some((pt) => hitAnchor(coords, pt, 18));
+        if (!nearAnyAnchor) {
+          const segHit = findSegmentHit(coords, penPoints, isPathClosed, 16);
+          setHoveredSegment(segHit);
+        } else if (hoveredSegment) {
+          setHoveredSegment(null);
+        }
+      } else {
+        if (hoverStartPoint) setHoverStartPoint(false);
+        if (hoveredSegment) setHoveredSegment(null);
       }
     };
 
-    canvas.addEventListener('pointerdown', handlePointerDown);
+    const handlePointerUp = () => {
+      const drag = dragRef.current;
+      const orbitControls = findOrbitControls();
+
+      // If a stationary click occurred without dragging camera (!drag.hasMoved):
+      if (drag.potentialClick && !drag.hasMoved && drag.clickCandidate) {
+        const cand = drag.clickCandidate;
+
+        if (cand.type === 'close') {
+          pushPenHistory(penPoints, true);
+          setIsPathClosed(true);
+          setSelectedPointIdx(0);
+        } else if (cand.type === 'select') {
+          setSelectedPointIdx(cand.index);
+        } else if (cand.type === 'deselect') {
+          setSelectedPointIdx(null);
+        } else if (cand.type === 'insert') {
+          const segHit = cand.segHit;
+          const i = segHit.index;
+          const curr = penPoints[i];
+          const nextIdx = (i + 1) % penPoints.length;
+          const next = penPoints[nextIdx];
+          const hasCurve = Boolean(curr.handleOut || next.handleIn);
+
+          let newPt;
+          let updatedCurr = { ...curr };
+          let updatedNext = { ...next };
+
+          if (hasCurve) {
+            const p0 = { x: curr.x, y: curr.y };
+            const p1 = curr.handleOut ? { x: curr.x + curr.handleOut.x, y: curr.y + curr.handleOut.y } : p0;
+            const p3 = { x: next.x, y: next.y };
+            const p2 = next.handleIn ? { x: next.x + next.handleIn.x, y: next.y + next.handleIn.y } : p3;
+            const t = Math.max(0.01, Math.min(0.99, segHit.t));
+            const u = 1 - t;
+
+            const p01 = { x: u * p0.x + t * p1.x, y: u * p0.y + t * p1.y };
+            const p12 = { x: u * p1.x + t * p2.x, y: u * p1.y + t * p2.y };
+            const p23 = { x: u * p2.x + t * p3.x, y: u * p2.y + t * p3.y };
+
+            const p012 = { x: u * p01.x + t * p12.x, y: u * p01.y + t * p12.y };
+            const p123 = { x: u * p12.x + t * p23.x, y: u * p12.y + t * p23.y };
+
+            const p0123 = { x: u * p012.x + t * p123.x, y: u * p012.y + t * p123.y };
+
+            const insertX = Math.round(p0123.x);
+            const insertY = Math.round(p0123.y);
+
+            updatedCurr.handleOut = {
+              x: Math.round(p01.x - p0.x),
+              y: Math.round(p01.y - p0.y)
+            };
+            updatedNext.handleIn = {
+              x: Math.round(p23.x - p3.x),
+              y: Math.round(p23.y - p3.y)
+            };
+
+            newPt = {
+              id: `pt_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+              x: insertX,
+              y: insertY,
+              handleIn: {
+                x: Math.round(p012.x - p0123.x),
+                y: Math.round(p012.y - p0123.y)
+              },
+              handleOut: {
+                x: Math.round(p123.x - p0123.x),
+                y: Math.round(p123.y - p0123.y)
+              },
+              type: 'smooth'
+            };
+          } else {
+            const insertX = Math.round(segHit.point.x);
+            const insertY = Math.round(segHit.point.y);
+            newPt = {
+              id: `pt_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+              x: insertX,
+              y: insertY,
+              handleIn: null,
+              handleOut: null,
+              type: 'corner'
+            };
+          }
+
+          const nextPointsList = penPoints.map((p, idx) => {
+            if (idx === i) return updatedCurr;
+            if (idx === nextIdx) return updatedNext;
+            return p;
+          });
+          nextPointsList.splice(i + 1, 0, newPt);
+
+          pushPenHistory(penPoints, isPathClosed);
+          setPenPoints(nextPointsList);
+          setSelectedPointIdx(i + 1);
+          setHoveredSegment(null);
+        } else if (cand.type === 'add') {
+          pushPenHistory(penPoints, false);
+          const newPt = {
+            id: `pt_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+            x: cand.coords.x,
+            y: cand.coords.y,
+            handleIn: null,
+            handleOut: null,
+            type: 'corner'
+          };
+          setPenPoints((prev) => [...prev, newPt]);
+          setSelectedPointIdx(penPoints.length);
+        }
+      }
+
+      if (isDrawingStrokeRef.current) {
+        isDrawingStrokeRef.current = false;
+      }
+      drag.isDrawing = false;
+      drag.dragPointIdx = null;
+      drag.dragHandle = null;
+      drag.isDirectMoving = false;
+      drag.isAltCurvePull = false;
+      drag.hasMoved = false;
+      drag.potentialClick = false;
+      drag.clickCandidate = null;
+
+      if (orbitControls) {
+        orbitControls.enabled = true;
+      }
+    };
+
+    canvas.addEventListener('pointerdown', handlePointerDown, { capture: true });
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
 
     return () => {
-      canvas.removeEventListener('pointerdown', handlePointerDown);
+      canvas.removeEventListener('pointerdown', handlePointerDown, { capture: true });
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      const orbitControls = findOrbitControls();
       if (orbitControls) orbitControls.enabled = true;
     };
-  }, [isOpen, step, faceData, selectedShape, canvasInteractionMode]);
+  }, [
+    isOpen,
+    step,
+    faceData,
+    selectedShape,
+    canvasInteractionMode,
+    penPoints,
+    isPathClosed,
+    selectedPointIdx,
+    hoveredSegment,
+    hoverStartPoint,
+    pushPenHistory,
+    undoPenAction,
+    findOrbitControls
+  ]);
 
   // ---------------------------------------------------------------------------
   // STEP 3: Live 3D Extrusion Mesh Preview & Pull Handle
@@ -1233,7 +2172,12 @@ export default function FaceSketchExtrudeStudio({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setStep('extrude')}
+                  onClick={() => {
+                    if (selectedShape === 'polyline' && !isPathClosed && penPoints.length >= 3) {
+                      setIsPathClosed(true);
+                    }
+                    setStep('extrude');
+                  }}
                   className="px-3.5 py-1.5 bg-gradient-to-r from-teal-500 to-emerald-600 hover:from-teal-400 hover:to-emerald-500 text-white font-bold rounded-lg text-xs flex items-center gap-1 shadow-md shadow-emerald-950/40 transition-all cursor-pointer"
                 >
                   <span>Extrude</span>
@@ -1485,15 +2429,215 @@ export default function FaceSketchExtrudeStudio({
               </div>
             </div>
 
-            {/* Polyline / Freehand point status & reset */}
-            {(selectedShape === 'polyline' || selectedShape === 'freehand') && (
+            {/* Polyline / Vector Pen Dock */}
+            {selectedShape === 'polyline' && (
+              <div className="flex flex-col gap-2.5 bg-black/60 border border-neutral-800/80 p-3 rounded-xl text-xs animate-fade-in">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-base text-teal-400">polyline</span>
+                    <span className="font-bold text-white text-xs">Pen Tool (Bézier Vector)</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-neutral-800 text-neutral-300 border border-neutral-700">
+                      {penPoints.length} {penPoints.length === 1 ? 'Anchor' : 'Anchors'}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                        isPathClosed
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                          : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                      }`}
+                    >
+                      {isPathClosed ? 'Closed Loop' : 'Open Path'}
+                    </span>
+                    {selectedPointIdx !== null && penPoints[selectedPointIdx] && (
+                      <span className="text-[11px] text-cyan-300 bg-cyan-950/40 border border-cyan-800/50 px-2 py-0.5 rounded-full font-mono">
+                        Point #{selectedPointIdx + 1} ({penPoints[selectedPointIdx].type === 'smooth' ? 'Smooth Curve' : 'Corner'})
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Actions Bar */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {/* Toggle Close Path */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (penPoints.length >= 3) {
+                          pushPenHistory(penPoints, !isPathClosed);
+                          setIsPathClosed((prev) => !prev);
+                        }
+                      }}
+                      disabled={penPoints.length < 3}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                        isPathClosed
+                          ? 'bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-200 border border-emerald-500/40'
+                          : penPoints.length >= 3
+                            ? 'bg-amber-600/30 hover:bg-amber-600/50 text-amber-200 border border-amber-500/40'
+                            : 'bg-neutral-800/40 text-neutral-500 border border-neutral-800 cursor-not-allowed'
+                      }`}
+                      title={isPathClosed ? "Reopen path loop" : "Close path into closed loop for extrusion"}
+                    >
+                      <span className="material-symbols-outlined text-xs">
+                        {isPathClosed ? 'lock' : 'lock_open'}
+                      </span>
+                      <span>{isPathClosed ? 'Reopen' : 'Close Path'}</span>
+                    </button>
+
+                    {/* Convert Curve (Smooth vs Corner) */}
+                    {selectedPointIdx !== null && penPoints[selectedPointIdx] && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          pushPenHistory(penPoints, isPathClosed);
+                          setPenPoints((prev) =>
+                            prev.map((p, idx) => {
+                              if (idx !== selectedPointIdx) return p;
+                              if (p.type === 'smooth') {
+                                return { ...p, type: 'corner', handleIn: null, handleOut: null };
+                              } else {
+                                const prevPt = prev[(idx - 1 + prev.length) % prev.length];
+                                const nextPt = prev[(idx + 1) % prev.length];
+                                let dirX = 35;
+                                let dirY = 0;
+                                if (prev.length >= 2 && prevPt && nextPt && (prevPt !== p || nextPt !== p)) {
+                                  const dx = nextPt.x - prevPt.x;
+                                  const dy = nextPt.y - prevPt.y;
+                                  const len = Math.hypot(dx, dy);
+                                  if (len > 0.001) {
+                                    const hLen = Math.min(50, Math.max(25, len * 0.28));
+                                    dirX = (dx / len) * hLen;
+                                    dirY = (dy / len) * hLen;
+                                  }
+                                }
+                                return {
+                                  ...p,
+                                  type: 'smooth',
+                                  handleOut: { x: Math.round(dirX), y: Math.round(dirY) },
+                                  handleIn: { x: -Math.round(dirX), y: -Math.round(dirY) }
+                                };
+                              }
+                            })
+                          );
+                        }}
+                        className="px-2.5 py-1 bg-neutral-800 hover:bg-neutral-700 text-cyan-300 hover:text-white border border-neutral-700 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                        title="Toggle point between smooth curve (handles) and sharp corner"
+                      >
+                        <span className="material-symbols-outlined text-xs">gesture</span>
+                        <span>{penPoints[selectedPointIdx].type === 'smooth' ? 'Make Corner' : 'Make Smooth'}</span>
+                      </button>
+                    )}
+
+                    {/* Delete Selected Point */}
+                    {selectedPointIdx !== null && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (penPoints[selectedPointIdx]) {
+                            pushPenHistory(penPoints, isPathClosed);
+                            const nextPoints = penPoints.filter((_, idx) => idx !== selectedPointIdx);
+                            setPenPoints(nextPoints);
+                            setSelectedPointIdx(null);
+                            if (nextPoints.length < 3 && isPathClosed) {
+                              setIsPathClosed(false);
+                            }
+                          }
+                        }}
+                        className="p-1 px-2 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 hover:text-rose-100 border border-rose-800/50 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                        title="Delete selected anchor point (Backspace/Del)"
+                      >
+                        <span className="material-symbols-outlined text-xs">delete</span>
+                        <span>Delete Point</span>
+                      </button>
+                    )}
+
+                    {/* Undo */}
+                    <button
+                      type="button"
+                      onClick={undoPenAction}
+                      disabled={penHistory.length === 0}
+                      className={`px-2 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer ${
+                        penHistory.length > 0
+                          ? 'bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white border border-neutral-700'
+                          : 'bg-neutral-900 text-neutral-600 border border-neutral-800 cursor-not-allowed'
+                      }`}
+                      title="Undo last pen action (Cmd+Z / Ctrl+Z)"
+                    >
+                      <span className="material-symbols-outlined text-xs">undo</span>
+                      <span>Undo</span>
+                    </button>
+
+                    {/* Preset Templates */}
+                    <div className="flex items-center gap-1 pl-1 border-l border-neutral-800">
+                      {PEN_FACE_PRESETS.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => {
+                            pushPenHistory(penPoints, isPathClosed);
+                            setPenPoints(preset.points.map((p) => ({
+                              ...p,
+                              handleIn: p.handleIn ? { ...p.handleIn } : null,
+                              handleOut: p.handleOut ? { ...p.handleOut } : null
+                            })));
+                            setIsPathClosed(true);
+                            setSelectedPointIdx(null);
+                          }}
+                          className="px-2 py-1 bg-neutral-800/80 hover:bg-neutral-700 text-neutral-300 hover:text-white border border-neutral-700/80 rounded-lg text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer"
+                          title={`Load ${preset.name} template`}
+                        >
+                          <span className="material-symbols-outlined text-xs text-teal-400">{preset.icon}</span>
+                          <span>{preset.name}</span>
+                        </button>
+                      ))}
+
+                      {penPoints.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            pushPenHistory(penPoints, isPathClosed);
+                            setPenPoints([]);
+                            setIsPathClosed(false);
+                            setSelectedPointIdx(null);
+                          }}
+                          className="px-2 py-1 bg-neutral-800/80 hover:bg-rose-950/60 text-neutral-400 hover:text-rose-300 border border-neutral-700/80 rounded-lg text-[11px] font-medium transition-all cursor-pointer ml-1"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Photoshop Shortcuts & Interaction Guide */}
+                <div className="flex items-center gap-2 pt-1 border-t border-neutral-800/60 overflow-x-auto text-[11px] text-neutral-400">
+                  <span className="text-neutral-500 font-bold uppercase tracking-wider text-[10px]">Controls:</span>
+                  <span className="bg-neutral-800/80 px-2 py-0.5 rounded text-neutral-300 font-mono">
+                    <strong className="text-cyan-400 font-bold">Cmd / Ctrl + Drag</strong> Move Point (Camera Locked)
+                  </span>
+                  <span className="bg-neutral-800/80 px-2 py-0.5 rounded text-neutral-300 font-mono">
+                    <strong className="text-amber-400 font-bold">Alt + Drag</strong> Adjust Curve (Camera Locked)
+                  </span>
+                  <span className="bg-neutral-800/80 px-2 py-0.5 rounded text-neutral-300 font-mono">
+                    <strong className="text-teal-400 font-bold">Drag</strong> Rotate View Angle
+                  </span>
+                  <span className="bg-neutral-800/80 px-2 py-0.5 rounded text-neutral-300 font-mono">
+                    <strong className="text-emerald-400 font-bold">Click Edge (+)</strong> Insert Point
+                  </span>
+                  <span className="bg-neutral-800/80 px-2 py-0.5 rounded text-neutral-300 font-mono">
+                    <strong className="text-rose-400 font-bold">Del</strong> Delete Point
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Freehand point status & reset */}
+            {selectedShape === 'freehand' && (
               <div className="flex items-center justify-between bg-black/40 p-2 rounded-lg text-xs">
                 <span className="text-neutral-400 flex items-center gap-1.5">
                   <span className="material-symbols-outlined text-sm text-teal-400">touch_app</span>
                   <span>
                     {customPoints.length === 0
-                      ? 'Click on the face in 3D to place polygon vertices'
-                      : `${customPoints.length} points placed on face plane`}
+                      ? 'Click and drag on the face in 3D to sketch freehand'
+                      : `${customPoints.length} freehand points placed on face plane`}
                   </span>
                 </span>
                 {customPoints.length > 0 && (
@@ -1502,7 +2646,7 @@ export default function FaceSketchExtrudeStudio({
                     onClick={() => setCustomPoints([])}
                     className="text-rose-400 hover:text-rose-300 font-semibold cursor-pointer text-[11px]"
                   >
-                    Clear Points
+                    Clear Stroke
                   </button>
                 )}
               </div>
