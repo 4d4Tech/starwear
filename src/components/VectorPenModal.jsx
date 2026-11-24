@@ -11,7 +11,8 @@ import {
   REVOLVE_PRESETS,
   SWEEP_SPINE_PRESETS,
   CARVE_PRESETS,
-  sanitizeHierarchyForGLTFExport
+  sanitizeHierarchyForGLTFExport,
+  samplePointsFromSvgPath
 } from '../utils/geometryHelper';
 
 // Presets with Photoshop-style anchor points and bezier handles
@@ -447,6 +448,49 @@ export default function VectorPenModal({
       setIsClosed(true);
       setSelectedPointIdx(null);
       setShapeName(preset.name);
+    }
+  };
+
+  // Paste SVG Code & Convert to Vector Anchor Points
+  const handlePasteSvgToPen = async () => {
+    let text = '';
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+        text = await navigator.clipboard.readText();
+      }
+    } catch {
+      // Ignore
+    }
+    if (!text) {
+      text = prompt('Paste SVG code or path below to import onto vector canvas:');
+    }
+    if (text && text.trim()) {
+      const sampled = samplePointsFromSvgPath(text.trim(), 28, THREE);
+      if (sampled && sampled.length >= 3) {
+        pushHistory(points, isClosed);
+        const minX = Math.min(...sampled.map((p) => p.x));
+        const maxX = Math.max(...sampled.map((p) => p.x));
+        const minY = Math.min(...sampled.map((p) => p.y));
+        const maxY = Math.max(...sampled.map((p) => p.y));
+        const spanX = maxX - minX || 1;
+        const spanY = maxY - minY || 1;
+        const scale = Math.min(220 / spanX, 220 / spanY);
+        const midX = (minX + maxX) / 2;
+        const midY = (minY + maxY) / 2;
+        const centered = sampled.map((p) => ({
+          x: Math.round((p.x - midX) * scale),
+          y: Math.round((p.y - midY) * scale * -1),
+          handleIn: null,
+          handleOut: null,
+          type: 'smooth'
+        }));
+        setPoints(centered);
+        setIsClosed(true);
+        setSelectedPointIdx(null);
+        setShapeName('Imported SVG Shape');
+      } else {
+        alert('Could not extract closed vector path from provided SVG code.');
+      }
     }
   };
 
@@ -1807,6 +1851,15 @@ export default function VectorPenModal({
               <span>{preset.name}</span>
             </button>
           ))}
+          <button
+            type="button"
+            onClick={handlePasteSvgToPen}
+            className="ml-auto px-2.5 py-1 rounded-lg text-xs font-semibold bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/40 text-purple-300 hover:text-white transition-all flex items-center gap-1.5 shrink-0 cursor-pointer"
+            title="Paste SVG markup or path into vector canvas"
+          >
+            <span className="material-symbols-outlined text-sm">code_blocks</span>
+            <span>Paste SVG</span>
+          </button>
         </div>
 
         {/* Main Canvas & Configuration Split */}

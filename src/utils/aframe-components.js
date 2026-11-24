@@ -5353,8 +5353,10 @@ if (typeof AFRAME !== 'undefined' && !AFRAME.components['ar-additional-geometrie
 
           if (typeChanged || oldParamsJson !== newParamsJson) {
             if (existingMesh.geometry) existingMesh.geometry.dispose();
+            const svgContent = item.svg || item.params?.svg || item.svgPath || item.params?.svgPath || item.svgCode || item.params?.svgCode;
             const mergedParams = {
               ...(item.params || {}),
+              ...(svgContent ? { svg: svgContent, svgPath: svgContent, svgCode: svgContent } : {}),
               ...(item.points ? { points: item.points } : {}),
               ...(item.depth !== undefined ? { depth: item.depth } : {}),
               preserveOrigin: item.preserveOrigin || item.params?.preserveOrigin || item.keepOrigin || item.params?.keepOrigin

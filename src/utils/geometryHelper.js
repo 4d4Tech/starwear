@@ -377,6 +377,31 @@ export const GEOMETRY_DEFINITIONS = [
       { key: 'carveResolution', label: 'Voxel Density', min: 20, max: 44, step: 2 },
       { key: 'carveSmooth', label: 'Laplacian Smoothing', min: 0, max: 4, step: 1 }
     ]
+  },
+  {
+    id: 'svg',
+    name: 'SVG Code / Extruded Vector',
+    category: 'Vector / Pen',
+    icon: 'code_blocks',
+    description: 'Extrude custom 2D SVG vector code or path snippet into a 3D physical mesh with beveling and depth.',
+    defaultParams: {
+      svg: '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><polygon points="50,5 64,36 98,36 70,57 81,91 50,70 19,91 30,57 2,36 36,36" fill="#fbbf24"/></svg>',
+      depth: 0.18,
+      bevelEnabled: true,
+      bevelThickness: 0.02,
+      bevelSize: 0.015,
+      bevelSegments: 3,
+      curveSegments: 24,
+      targetSize: 1.0,
+      invertY: true
+    },
+    paramConfigs: [
+      { key: 'depth', label: 'Extrude Depth', min: 0.01, max: 2.0, step: 0.01, unit: 'm' },
+      { key: 'targetSize', label: 'Object Scale', min: 0.1, max: 4.0, step: 0.1, unit: 'm' },
+      { key: 'bevelThickness', label: 'Bevel Thickness', min: 0.0, max: 0.2, step: 0.005, unit: 'm' },
+      { key: 'bevelSize', label: 'Bevel Size', min: 0.0, max: 0.2, step: 0.005, unit: 'm' },
+      { key: 'curveSegments', label: 'Curve Smoothness', min: 6, max: 48, step: 2 }
+    ]
   }
 ];
 
@@ -400,17 +425,81 @@ export const COLOR_SWATCHES = [
 ];
 
 /**
- * Creates a Three.js ExtrudeGeometry from an SVG path string or SVG XML snippet
- * Supports interior cutouts (params.holes) and Three.js ExtrudeGeometry bevel parameters.
+ * Ensures a BufferGeometry is fully compatible with the destination THREE_LIB instance.
+ * If THREE_LIB is a separate bundle (e.g. AFRAME.THREE super-three), attributes, indices,
+ * groups, and bounding volumes are cloned into an instance of THREE_LIB.BufferGeometry
+ * so that instanceof checks and buffer uploads succeed across Three.js versions.
+ */
+export function ensureCompatibleBufferGeometry(geom, THREE_LIB = THREE) {
+  if (!geom) return null;
+  if (!THREE_LIB || THREE_LIB === THREE || typeof THREE_LIB.BufferGeometry !== 'function') {
+    return geom;
+  }
+  if (geom instanceof THREE_LIB.BufferGeometry) {
+    return geom;
+  }
+  try {
+    const target = new THREE_LIB.BufferGeometry();
+    for (const name in geom.attributes) {
+      const attr = geom.attributes[name];
+      if (attr && attr.array) {
+        target.setAttribute(name, new THREE_LIB.BufferAttribute(attr.array, attr.itemSize, attr.normalized));
+      }
+    }
+    if (geom.index && geom.index.array) {
+      target.setIndex(new THREE_LIB.BufferAttribute(geom.index.array, 1));
+    }
+    if (Array.isArray(geom.groups)) {
+      geom.groups.forEach((g) => target.addGroup(g.start, g.count, g.materialIndex));
+    }
+    if (geom.boundingBox) {
+      target.boundingBox = new THREE_LIB.Box3(
+        new THREE_LIB.Vector3(geom.boundingBox.min.x, geom.boundingBox.min.y, geom.boundingBox.min.z),
+        new THREE_LIB.Vector3(geom.boundingBox.max.x, geom.boundingBox.max.y, geom.boundingBox.max.z)
+      );
+    }
+    if (geom.boundingSphere) {
+      target.boundingSphere = new THREE_LIB.Sphere(
+        new THREE_LIB.Vector3(geom.boundingSphere.center.x, geom.boundingSphere.center.y, geom.boundingSphere.center.z),
+        geom.boundingSphere.radius
+      );
+    }
+    geom.dispose();
+    return target;
+  } catch (err) {
+    console.warn('[geometryHelper] BufferGeometry conversion fallback:', err);
+    return geom;
+  }
+}
+
+/**
+ * Creates a volumetric extruded Three.js BufferGeometry directly from an SVG path string or SVG XML snippet.
+ * Uses SVGLoader from three/examples to parse standard SVG paths, Polygons, and Shapes.
  */
 export function createGeometryFromSvgPath(svgPathStr, options = {}, THREE_LIB = THREE) {
   if (!svgPathStr || typeof svgPathStr !== 'string') return null;
 
   try {
     const rawStr = svgPathStr.trim();
-    let xml = rawStr;
-    if (!rawStr.toLowerCase().startsWith('<svg')) {
-      xml = `<svg xmlns="http://www.w3.org/2000/svg"><path d="${rawStr}" /></svg>`;
+    if (!rawStr) return null;
+
+    let cleanStr = rawStr;
+    const svgTagIdx = cleanStr.toLowerCase().indexOf('<svg');
+    if (svgTagIdx !== -1) {
+      cleanStr = cleanStr.slice(svgTagIdx);
+      const closeIdx = cleanStr.toLowerCase().lastIndexOf('</svg>');
+      if (closeIdx !== -1) {
+        cleanStr = cleanStr.slice(0, closeIdx + 6);
+      }
+    }
+
+    let xml = cleanStr;
+    if (!cleanStr.toLowerCase().startsWith('<svg')) {
+      if (cleanStr.startsWith('<')) {
+        xml = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000">${cleanStr}</svg>`;
+      } else {
+        xml = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000"><path d="${cleanStr}" /></svg>`;
+      }
     }
 
     const loader = new SVGLoader();
@@ -429,13 +518,35 @@ export function createGeometryFromSvgPath(svgPathStr, options = {}, THREE_LIB = 
       }
     });
 
+    // Fallback: If createShapes returned 0 shapes (e.g. stroke-only or open paths), convert subpaths
+    if (shapes.length === 0 && svgData.paths.length > 0) {
+      svgData.paths.forEach((p) => {
+        if (p.subPaths && p.subPaths.length > 0) {
+          p.subPaths.forEach((sp) => {
+            const pts = sp.getPoints();
+            if (pts.length >= 3) {
+              const sh = new THREE.Shape();
+              sh.moveTo(pts[0].x, pts[0].y);
+              for (let i = 1; i < pts.length; i++) {
+                sh.lineTo(pts[i].x, pts[i].y);
+              }
+              sh.closePath();
+              shapes.push(sh);
+            }
+          });
+        }
+      });
+    }
+
     if (shapes.length === 0) {
       console.warn('[geometryHelper] SVGLoader produced 0 shapes from path.');
       return null;
     }
 
     const preserveOrigin = Boolean(options.preserveOrigin ?? options.keepOrigin);
-    const invertY = options.invertY !== undefined ? Boolean(options.invertY) : false;
+    // Standard SVG coordinates: +Y is downward, while in Three.js +Y is upward.
+    // Default invertY to true so the extruded shape renders right side up.
+    const invertY = options.invertY !== undefined ? Boolean(options.invertY) : true;
     const ySign = invertY ? -1 : 1;
     const scale = Number(options.scaleFactor ?? 1.0) || 1.0;
 
@@ -447,7 +558,7 @@ export function createGeometryFromSvgPath(svgPathStr, options = {}, THREE_LIB = 
         if (!Array.isArray(holePts) || holePts.length < 3) return;
         const normHole = normalizeVectorPointsList(holePts);
         if (normHole.length < 3) return;
-        const holePath = new THREE_LIB.Path();
+        const holePath = new THREE.Path();
         const hp0 = normHole[0];
         holePath.moveTo(hp0.x * scale, hp0.y * ySign * scale);
         for (let j = 0; j < normHole.length; j++) {
@@ -485,9 +596,11 @@ export function createGeometryFromSvgPath(svgPathStr, options = {}, THREE_LIB = 
     if (isNaN(bevelSize)) bevelSize = 0.015;
     const bevelEnabled = reqBevelEnabled && bevelSize >= 0.001;
 
+    // IMPORTANT: Always build the geometry using THREE.ExtrudeGeometry from 'three'
+    // (100% compatible with SVGLoader & Shape from 'three')
     let geom = null;
     try {
-      geom = new THREE_LIB.ExtrudeGeometry(shapes, {
+      geom = new THREE.ExtrudeGeometry(shapes, {
         depth,
         bevelEnabled,
         bevelThickness,
@@ -499,7 +612,7 @@ export function createGeometryFromSvgPath(svgPathStr, options = {}, THREE_LIB = 
       });
       if (hasNaNPositions(geom)) {
         if (geom) geom.dispose();
-        geom = new THREE_LIB.ExtrudeGeometry(shapes, {
+        geom = new THREE.ExtrudeGeometry(shapes, {
           depth,
           bevelEnabled: false,
           curveSegments,
@@ -508,7 +621,7 @@ export function createGeometryFromSvgPath(svgPathStr, options = {}, THREE_LIB = 
       }
     } catch (extrErr) {
       console.warn('[geometryHelper] SVGLoader ExtrudeGeometry fallback:', extrErr);
-      geom = new THREE_LIB.ExtrudeGeometry(shapes, {
+      geom = new THREE.ExtrudeGeometry(shapes, {
         depth,
         bevelEnabled: false,
         curveSegments: 12,
@@ -534,17 +647,36 @@ export function createGeometryFromSvgPath(svgPathStr, options = {}, THREE_LIB = 
         geom.index.needsUpdate = true;
       }
     }
-    if (scale !== 1.0) {
-      geom.scale(scale, scale, 1.0);
+
+    // Auto-fit scale or user requested targetSize
+    geom.computeBoundingBox();
+    const bb = geom.boundingBox;
+    if (bb) {
+      const sizeX = Math.abs(bb.max.x - bb.min.x);
+      const sizeY = Math.abs(bb.max.y - bb.min.y);
+      const maxDim = Math.max(sizeX, sizeY);
+
+      if (options.targetSize && maxDim > 1e-4) {
+        const factor = Number(options.targetSize) / maxDim;
+        geom.scale(factor, factor, 1.0);
+      } else if (options.autoScale !== false && maxDim > 4.0) {
+        // Standardize pixel coordinates (e.g. 100-1024px) down to unit scale (~1m)
+        const factor = 1.0 / maxDim;
+        geom.scale(factor, factor, 1.0);
+      } else if (scale !== 1.0) {
+        geom.scale(scale, scale, 1.0);
+      }
     }
 
     if (!preserveOrigin && typeof geom.center === 'function') {
       geom.center();
     }
     geom.computeVertexNormals();
-    return geom;
+
+    // Ensure the resulting BufferGeometry is compatible with THREE_LIB
+    return ensureCompatibleBufferGeometry(geom, THREE_LIB);
   } catch (err) {
-    console.warn('[geometryHelper] createGeometryFromSvgPath error:', err);
+    console.error('[geometryHelper] createGeometryFromSvgPath error:', err);
     return null;
   }
 }
@@ -557,9 +689,24 @@ export function samplePointsFromSvgPath(svgPathStr, segments = 32, THREE_LIB = T
   if (!svgPathStr || typeof svgPathStr !== 'string') return [];
   try {
     const rawStr = svgPathStr.trim();
-    let xml = rawStr;
-    if (!rawStr.toLowerCase().startsWith('<svg')) {
-      xml = `<svg xmlns="http://www.w3.org/2000/svg"><path d="${rawStr}" /></svg>`;
+    if (!rawStr) return [];
+    let cleanStr = rawStr;
+    const svgTagIdx = cleanStr.toLowerCase().indexOf('<svg');
+    if (svgTagIdx !== -1) {
+      cleanStr = cleanStr.slice(svgTagIdx);
+      const closeIdx = cleanStr.toLowerCase().lastIndexOf('</svg>');
+      if (closeIdx !== -1) {
+        cleanStr = cleanStr.slice(0, closeIdx + 6);
+      }
+    }
+
+    let xml = cleanStr;
+    if (!cleanStr.toLowerCase().startsWith('<svg')) {
+      if (cleanStr.startsWith('<')) {
+        xml = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000">${cleanStr}</svg>`;
+      } else {
+        xml = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000"><path d="${cleanStr}" /></svg>`;
+      }
     }
 
     const loader = new SVGLoader();
@@ -1053,10 +1200,34 @@ export function createPrimitiveThreeGeometry(type, params, THREE_LIB = THREE) {
       }
       break;
     }
+    case 'svg':
+    case 'svgExtrude':
+    case 'svgPath': {
+      const svgCode = p.svg || p.svgCode || p.svgPath || p.params?.svg || p.params?.svgCode || p.params?.svgPath;
+      if (svgCode && typeof svgCode === 'string') {
+        geom = createGeometryFromSvgPath(svgCode, p, THREE_LIB);
+      }
+      if (!geom && svgCode && typeof svgCode === 'string') {
+        console.warn('[geometryHelper] createGeometryFromSvgPath returned null. Attempting samplePoints fallback.');
+        const samplePts = samplePointsFromSvgPath(svgCode, p.curveSegments || 32, THREE);
+        if (Array.isArray(samplePts) && samplePts.length >= 3) {
+          try {
+            geom = createAdvancedExtrudeGeometry(samplePts, p, THREE_LIB);
+          } catch (sampleErr) {
+            console.warn('[geometryHelper] samplePoints extrusion fallback failed:', sampleErr);
+          }
+        }
+      }
+      if (!geom) {
+        console.error('[geometryHelper] SVG geometry creation failed for type:', type, p);
+        geom = new THREE_LIB.BoxGeometry(1, 1, 0.2);
+      }
+      break;
+    }
     case 'vectorExtrude':
     case 'extrude': {
-      if (p.svgPath || p.svg) {
-        geom = createGeometryFromSvgPath(p.svgPath || p.svg, p, THREE_LIB);
+      if (p.svgPath || p.svg || p.svgCode) {
+        geom = createGeometryFromSvgPath(p.svgPath || p.svg || p.svgCode, p, THREE_LIB);
       }
 
       if (!geom) {
@@ -1386,8 +1557,10 @@ export function createPrimitiveMaterial(options = {}, THREE_LIB = THREE) {
 
 export function createPrimitiveMesh(geomConfig, THREE_LIB = THREE) {
   if (!geomConfig) return null;
+  const svgContent = geomConfig.svg || geomConfig.params?.svg || geomConfig.svgPath || geomConfig.params?.svgPath || geomConfig.svgCode || geomConfig.params?.svgCode;
   const mergedParams = {
     ...(geomConfig.params || {}),
+    ...(svgContent ? { svg: svgContent, svgPath: svgContent, svgCode: svgContent } : {}),
     ...(geomConfig.preserveOrigin !== undefined ? { preserveOrigin: geomConfig.preserveOrigin } : {}),
     ...(geomConfig.points ? { points: geomConfig.points } : {}),
     ...(geomConfig.depth !== undefined ? { depth: geomConfig.depth } : {})

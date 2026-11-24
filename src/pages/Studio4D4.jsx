@@ -20,10 +20,11 @@ import MeshTemplateBrowser from '../components/MeshTemplateBrowser';
 import ThreeDAIStudioModal from '../components/ThreeDAIStudioModal';
 import InstagramIngestionModal from '../components/InstagramIngestionModal';
 import AddGeometryModal from '../components/AddGeometryModal';
+import PasteSvgModal from '../components/PasteSvgModal';
 import { createInstagramFrameMesh } from '../utils/instagramFrameRenderer';
 import { getMeshTemplates, fetchTemplatesFromBucket } from '../utils/meshTemplates';
 import { CharacterAnimationManager } from '../utils/CharacterAnimationManager';
-import { sanitizeHierarchyForGLTFExport } from '../utils/geometryHelper';
+import { sanitizeHierarchyForGLTFExport, createPrimitiveThreeGeometry } from '../utils/geometryHelper';
 import {
   DEFAULT_TRIPO_KEY,
   TRIPO_ANIMATION_PRESETS,
@@ -1877,6 +1878,8 @@ export default function Studio4D4() {
   const [videoModalOpen, setVideoModalOpen] = useState(false);
   const [instagramModalOpen, setInstagramModalOpen] = useState(false);
   const [geometryModalOpen, setGeometryModalOpen] = useState(false);
+  const [pasteSvgModalOpen, setPasteSvgModalOpen] = useState(false);
+  const [pastedSvgInitialCode, setPastedSvgInitialCode] = useState('');
   const [exportFileName, setExportFileName] = useState('Studio_Export');
   const [videoTab, setVideoTab] = useState('webgl');
   const [videoUrlInput, setVideoUrlInput] = useState('');
@@ -1983,6 +1986,33 @@ export default function Studio4D4() {
     };
     window.addEventListener('3dtemplates-updated', handleUpdate);
     return () => window.removeEventListener('3dtemplates-updated', handleUpdate);
+  }, []);
+
+  // Global SVG code paste listener for Studio4D4
+  useEffect(() => {
+    const handleGlobalPaste = (e) => {
+      const tag = e.target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) {
+        return;
+      }
+      const text = e.clipboardData?.getData('text/plain')?.trim();
+      if (!text) return;
+
+      const lower = text.toLowerCase();
+      if (
+        (lower.includes('<svg') && lower.includes('</svg>')) ||
+        lower.startsWith('<svg') ||
+        lower.startsWith('<path') ||
+        (lower.startsWith('m') && /^[mzlhvcsqta0-9\s,\.\-]+$/i.test(text.slice(0, 100)))
+      ) {
+        e.preventDefault();
+        setPastedSvgInitialCode(text);
+        setPasteSvgModalOpen(true);
+      }
+    };
+
+    window.addEventListener('paste', handleGlobalPaste);
+    return () => window.removeEventListener('paste', handleGlobalPaste);
   }, []);
 
   useEffect(() => {
@@ -4021,10 +4051,33 @@ export default function Studio4D4() {
 
       addPrimitiveGeometry(type, options = {}) {
         let geometry;
-        const p = options.params || {};
+        const svgContent = options.svg || options.params?.svg || options.svgCode || options.params?.svgCode || options.svgPath || options.params?.svgPath;
+        const p = {
+          ...(options || {}),
+          ...(options.params || {}),
+          ...(svgContent ? { svg: svgContent, svgCode: svgContent, svgPath: svgContent } : {})
+        };
 
-        switch (type) {
-          case 'box':
+        if (
+          type === 'svg' ||
+          type === 'svgExtrude' ||
+          type === 'svgPath' ||
+          type === 'vectorExtrude' ||
+          type === 'vectorInflate' ||
+          type === 'vectorRevolve' ||
+          type === 'vectorSweep' ||
+          type === 'vectorCarve' ||
+          svgContent
+        ) {
+          try {
+            geometry = createPrimitiveThreeGeometry(type, p, THREE);
+          } catch (err) {
+            console.error('[Studio4D4] createPrimitiveThreeGeometry error:', err);
+            geometry = new THREE.BoxGeometry(1, 1, 0.2);
+          }
+        } else {
+          switch (type) {
+            case 'box':
             geometry = new THREE.BoxGeometry(
               p.width || 1,
               p.height || 1,
@@ -4119,6 +4172,7 @@ export default function Studio4D4() {
             geometry = new THREE.BoxGeometry(1, 1, 1);
             break;
         }
+      }
 
         const color = options.color || '#526373';
         const roughness = options.roughness !== undefined ? options.roughness : 0.35;
@@ -4953,6 +5007,22 @@ export default function Studio4D4() {
 
             <button
               type="button"
+              onClick={() => {
+                setPastedSvgInitialCode('');
+                setPasteSvgModalOpen(true);
+              }}
+              className="p-2.5 border border-purple-500/40 hover:border-purple-400 bg-gradient-to-br from-purple-950/60 to-indigo-950/40 hover:from-purple-900/60 hover:to-indigo-900/60 rounded-xl text-center transition-all cursor-pointer group flex flex-col items-center justify-center gap-1 shadow-sm"
+              title="Paste SVG vector markup to extrude into an interactive 3D shape"
+            >
+              <span className="material-symbols-outlined text-2xl text-purple-400 group-hover:scale-110 transition-transform">
+                code_blocks
+              </span>
+              <span className="text-[11px] font-bold text-purple-200">Paste SVG</span>
+              <span className="text-[8px] text-purple-400/90 font-mono">Vector to 3D</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => appRef.current?.characterAnimationManager?.autoRigSelected()}
               className="p-2.5 border border-emerald-500/40 hover:border-emerald-400 bg-gradient-to-b from-emerald-950/40 to-teal-950/30 hover:from-emerald-900/50 hover:to-teal-900/40 rounded-xl text-center transition-all cursor-pointer group flex flex-col items-center justify-center gap-1 shadow-sm"
               title="Add standard 19-bone biped armature & character animations to selected humanoid 3D object"
@@ -5043,6 +5113,18 @@ export default function Studio4D4() {
                 >
                   <span className="material-symbols-outlined text-xs">deployed_code</span>
                   <span>+ Shape</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPastedSvgInitialCode('');
+                    setPasteSvgModalOpen(true);
+                  }}
+                  className="text-xs bg-purple-600 hover:bg-purple-500 text-white font-semibold px-2 py-1 rounded border border-purple-500 transition-colors flex items-center gap-1 cursor-pointer shadow-xs"
+                  title="Paste SVG code to extrude into 3D shape"
+                >
+                  <span className="material-symbols-outlined text-xs">code_blocks</span>
+                  <span>+ SVG</span>
                 </button>
                 <button
                   id="btn-add-light"
@@ -6153,6 +6235,26 @@ export default function Studio4D4() {
           isOpen={geometryModalOpen}
           onClose={() => setGeometryModalOpen(false)}
           appInstance={appRef.current}
+        />
+      )}
+
+      {/* Paste SVG to 3D Shape Modal */}
+      {pasteSvgModalOpen && (
+        <PasteSvgModal
+          isOpen={pasteSvgModalOpen}
+          initialSvgCode={pastedSvgInitialCode}
+          onClose={() => {
+            setPasteSvgModalOpen(false);
+            setPastedSvgInitialCode('');
+          }}
+          appInstance={appRef.current}
+          onAddShape={(payload) => {
+            if (appRef.current && typeof appRef.current.addPrimitiveGeometry === 'function') {
+              appRef.current.addPrimitiveGeometry('svg', payload);
+            }
+            setPasteSvgModalOpen(false);
+            setPastedSvgInitialCode('');
+          }}
         />
       )}
 

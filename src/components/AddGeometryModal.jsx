@@ -6,6 +6,7 @@ import {
   COLOR_SWATCHES
 } from '../utils/geometryHelper';
 import VectorPenModal from './VectorPenModal';
+import PasteSvgModal from './PasteSvgModal';
 
 export default function AddGeometryModal({
   isOpen = false,
@@ -22,6 +23,7 @@ export default function AddGeometryModal({
   const [isWireframe, setIsWireframe] = useState(false);
   const [isFlatShading, setIsFlatShading] = useState(false);
   const [isVectorPenOpen, setIsVectorPenOpen] = useState(false);
+  const [isPasteSvgOpen, setIsPasteSvgOpen] = useState(false);
 
   if (!isOpen) return null;
 
@@ -45,7 +47,9 @@ export default function AddGeometryModal({
   const handleSelectGeometry = (geom) => {
     setSelectedGeometryId(geom.id);
     setParams({ ...geom.defaultParams });
-    if (isVectorTool(geom.id)) {
+    if (geom.id === 'svg') {
+      setIsPasteSvgOpen(true);
+    } else if (isVectorTool(geom.id)) {
       setIsVectorPenOpen(true);
     }
   };
@@ -144,11 +148,20 @@ export default function AddGeometryModal({
               {cat}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={() => setIsPasteSvgOpen(true)}
+            className="ml-auto px-2.5 py-1 rounded-lg text-xs font-semibold bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 border border-purple-500/40 flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+            title="Paste SVG vector markup or path to extrude into 3D shape"
+          >
+            <span className="material-symbols-outlined text-sm">code_blocks</span>
+            <span>Paste SVG Code</span>
+          </button>
           {typeof onOpenAddModelModal === 'function' && (
             <button
               type="button"
               onClick={onOpenAddModelModal}
-              className="ml-auto px-2.5 py-1 rounded-lg text-xs font-semibold bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 border border-purple-500/40 flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+              className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/40 flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
               title="Upload or import external 3D model (.GLB / .GLTF)"
             >
               <span className="material-symbols-outlined text-sm">view_in_ar</span>
@@ -386,7 +399,16 @@ export default function AddGeometryModal({
             >
               Cancel
             </button>
-            {selectedGeometryId === 'vectorExtrude' || selectedGeometryId === 'vectorInflate' ? (
+            {selectedGeometryId === 'svg' ? (
+              <button
+                type="button"
+                onClick={() => setIsPasteSvgOpen(true)}
+                className="flex-1 sm:flex-none py-2.5 px-6 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-600 hover:opacity-95 text-white text-xs font-bold shadow-lg shadow-purple-500/25 transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+              >
+                <span className="material-symbols-outlined text-base">code_blocks</span>
+                <span>Open SVG Code Extrusion Studio</span>
+              </button>
+            ) : selectedGeometryId === 'vectorExtrude' || selectedGeometryId === 'vectorInflate' ? (
               <button
                 type="button"
                 onClick={() => setIsVectorPenOpen(true)}
@@ -427,6 +449,24 @@ export default function AddGeometryModal({
               onClose();
             } else if (appInstance && typeof appInstance.addPrimitiveGeometry === 'function') {
               appInstance.addPrimitiveGeometry(payload.type, payload);
+              onClose();
+            }
+          }}
+        />
+      )}
+
+      {isPasteSvgOpen && (
+        <PasteSvgModal
+          isOpen={isPasteSvgOpen}
+          onClose={() => setIsPasteSvgOpen(false)}
+          initialColor={selectedColor}
+          onAddShape={(payload) => {
+            setIsPasteSvgOpen(false);
+            if (typeof onAddGeometry === 'function') {
+              onAddGeometry(payload);
+              onClose();
+            } else if (appInstance && typeof appInstance.addPrimitiveGeometry === 'function') {
+              appInstance.addPrimitiveGeometry('svg', payload);
               onClose();
             }
           }}

@@ -46,6 +46,7 @@ import {
 import AddGeometryModal from '../components/AddGeometryModal';
 import AddModelModal from '../components/AddModelModal';
 import VectorPenModal from '../components/VectorPenModal';
+import PasteSvgModal from '../components/PasteSvgModal';
 import Add3DTextModal from '../components/Add3DTextModal';
 import GoogleFontSelector from '../components/GoogleFontSelector';
 import ArSceneApiModal from '../components/ArSceneApiModal';
@@ -234,15 +235,14 @@ const InfoTooltip = ({ title, text, position = 'top' }) => {
         help
       </span>
       <div
-        className={`absolute z-50 hidden group-hover:flex flex-col w-64 p-2.5 rounded-lg bg-neutral-900/95 border border-cyan-500/40 text-neutral-200 shadow-2xl backdrop-blur-md pointer-events-none transition-opacity duration-200 ${
-          position === 'bottom'
-            ? 'top-full mt-2 left-1/2 -translate-x-1/2'
-            : position === 'right'
+        className={`absolute z-50 hidden group-hover:flex flex-col w-64 p-2.5 rounded-lg bg-neutral-900/95 border border-cyan-500/40 text-neutral-200 shadow-2xl backdrop-blur-md pointer-events-none transition-opacity duration-200 ${position === 'bottom'
+          ? 'top-full mt-2 left-1/2 -translate-x-1/2'
+          : position === 'right'
             ? 'left-full ml-2 top-1/2 -translate-y-1/2'
             : position === 'left'
-            ? 'right-full mr-2 top-1/2 -translate-y-1/2'
-            : 'bottom-full mb-2 left-1/2 -translate-x-1/2'
-        }`}
+              ? 'right-full mr-2 top-1/2 -translate-y-1/2'
+              : 'bottom-full mb-2 left-1/2 -translate-x-1/2'
+          }`}
       >
         {finalTitle && (
           <span className="text-[11px] font-bold text-cyan-300 pb-1 mb-1 border-b border-neutral-800 flex items-center gap-1">
@@ -933,6 +933,34 @@ const ARTest = () => {
     };
   }, []);
 
+  // Global SVG code paste listener for 3D Scene
+  useEffect(() => {
+    const handleGlobalPaste = (e) => {
+      const tag = e.target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) {
+        return;
+      }
+      const text = e.clipboardData?.getData('text/plain')?.trim();
+      if (!text) return;
+
+      const lower = text.toLowerCase();
+      if (
+        (lower.includes('<svg') && lower.includes('</svg>')) ||
+        lower.startsWith('<svg') ||
+        lower.startsWith('<path') ||
+        (lower.startsWith('m') && /^[mzlhvcsqta0-9\s,\.\-]+$/i.test(text.slice(0, 100)))
+      ) {
+        e.preventDefault();
+        setEditingSvgGeom(null);
+        setPastedSvgInitialCode(text);
+        setPasteSvgModalOpen(true);
+      }
+    };
+
+    window.addEventListener('paste', handleGlobalPaste);
+    return () => window.removeEventListener('paste', handleGlobalPaste);
+  }, []);
+
   const sceneGroupsRef = useRef(sceneGroups);
   useEffect(() => {
     sceneGroupsRef.current = sceneGroups;
@@ -1005,7 +1033,7 @@ const ARTest = () => {
           if (Array.isArray(parsed.customLights)) {
             setCustomLights(parsed.customLights);
           }
-        } catch {}
+        } catch { }
       }
     };
     window.addEventListener('storage', handleStorageChange);
@@ -2088,19 +2116,33 @@ const ARTest = () => {
   const [faceSketchStudioOpen, setFaceSketchStudioOpen] = useState(false);
   const [editingVectorGeom, setEditingVectorGeom] = useState(null);
   const [vectorPenInitialMode, setVectorPenInitialMode] = useState('extrude');
+  const [pasteSvgModalOpen, setPasteSvgModalOpen] = useState(false);
+  const [pastedSvgInitialCode, setPastedSvgInitialCode] = useState('');
+  const [editingSvgGeom, setEditingSvgGeom] = useState(null);
 
   const handleAddGeometry = (payload) => {
     triggerUndoSnapshot();
     const count = additionalGeometries.length;
     const newId = `geom_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const type = payload.type || 'box';
-    const cleanTypeName = type === 'vectorInflate' ? 'Inflated Vector' : (type === 'vectorExtrude' ? 'Vector Extrude' : (type.charAt(0).toUpperCase() + type.slice(1)));
+    const cleanTypeName = type === 'svg'
+      ? 'SVG Shape'
+      : (type === 'vectorInflate'
+        ? 'Inflated Vector'
+        : (type === 'vectorExtrude'
+          ? 'Vector Extrude'
+          : (type.charAt(0).toUpperCase() + type.slice(1))));
     const geomName = payload.name || `${cleanTypeName} ${count + 1}`;
+    const svgData = payload.svg || payload.params?.svg || payload.svgCode || payload.params?.svgCode || payload.svgPath || payload.params?.svgPath;
     const newGeom = {
       id: newId,
       name: geomName,
       type,
-      params: { ...(payload.params || {}) },
+      params: {
+        ...(payload.params || {}),
+        ...(svgData ? { svg: svgData, svgCode: svgData, svgPath: svgData } : {})
+      },
+      ...(svgData ? { svg: svgData, svgCode: svgData, svgPath: svgData } : {}),
       color: payload.color || '#38bdf8',
       preset: payload.preset || 'default',
       roughness: payload.roughness !== undefined ? Number(payload.roughness) : 0.35,
@@ -2157,6 +2199,40 @@ const ARTest = () => {
     } else {
       handleAddGeometry(payload);
       setVectorPenModalOpen(false);
+    }
+  };
+
+  const handleCommitSvgShape = (payload) => {
+    triggerUndoSnapshot();
+    const svgData = payload.svg || payload.params?.svg || payload.svgCode || payload.params?.svgCode || payload.svgPath || payload.params?.svgPath;
+    if (editingSvgGeom) {
+      handleUpdateGeometry(editingSvgGeom.id, {
+        name: payload.name || editingSvgGeom.name,
+        type: 'svg',
+        params: {
+          ...(editingSvgGeom.params || {}),
+          ...payload.params,
+          ...(svgData ? { svg: svgData, svgCode: svgData, svgPath: svgData } : {})
+        },
+        ...(svgData ? { svg: svgData, svgCode: svgData, svgPath: svgData } : {}),
+        color: payload.color || editingSvgGeom.color,
+        roughness: payload.roughness !== undefined ? payload.roughness : editingSvgGeom.roughness,
+        metalness: payload.metalness !== undefined ? payload.metalness : editingSvgGeom.metalness,
+        emissive: payload.emissive !== undefined ? payload.emissive : editingSvgGeom.emissive,
+        emissiveIntensity: payload.emissiveIntensity !== undefined ? payload.emissiveIntensity : editingSvgGeom.emissiveIntensity,
+        wireframe: payload.wireframe !== undefined ? payload.wireframe : editingSvgGeom.wireframe,
+        flatShading: payload.flatShading !== undefined ? payload.flatShading : editingSvgGeom.flatShading,
+        preset: payload.preset || editingSvgGeom.preset
+      });
+      setSaveSuccessMsg(`Updated SVG Shape: ${payload.name || editingSvgGeom.name}`);
+      setTimeout(() => setSaveSuccessMsg(''), 4000);
+      setEditingSvgGeom(null);
+      setPasteSvgModalOpen(false);
+      setPastedSvgInitialCode('');
+    } else {
+      handleAddGeometry(payload);
+      setPasteSvgModalOpen(false);
+      setPastedSvgInitialCode('');
     }
   };
 
@@ -8094,7 +8170,7 @@ const ARTest = () => {
             const mats = Array.isArray(node.material) ? node.material : [node.material];
             mats.forEach((m) => {
               if (m[mapSlot] && typeof m[mapSlot].dispose === 'function') {
-                try { m[mapSlot].dispose(); } catch {}
+                try { m[mapSlot].dispose(); } catch { }
               }
               m[mapSlot] = texture;
               if (mapSlot === 'normalMap' && !m.normalScale) {
@@ -8116,14 +8192,14 @@ const ARTest = () => {
         prev.map((m) =>
           (m.uuid === mesh.uuid || m.name === mesh.name)
             ? {
-                ...m,
-                material: {
-                  ...m.material,
-                  [urlKey]: finalMapUrl,
-                  [storageKey]: storagePath,
-                  [fileKey]: file.name
-                }
+              ...m,
+              material: {
+                ...m.material,
+                [urlKey]: finalMapUrl,
+                [storageKey]: storagePath,
+                [fileKey]: file.name
               }
+            }
             : m
         )
       );
@@ -8180,7 +8256,7 @@ const ARTest = () => {
           const mats = Array.isArray(node.material) ? node.material : [node.material];
           mats.forEach((m) => {
             if (m[mapSlot] && typeof m[mapSlot].dispose === 'function') {
-              try { m[mapSlot].dispose(); } catch {}
+              try { m[mapSlot].dispose(); } catch { }
             }
             m[mapSlot] = null;
             m.needsUpdate = true;
@@ -8194,14 +8270,14 @@ const ARTest = () => {
       prev.map((m) =>
         (m.uuid === uuid || m.name === targetName)
           ? {
-              ...m,
-              material: {
-                ...m.material,
-                [urlKey]: null,
-                [storageKey]: null,
-                [fileKey]: null
-              }
+            ...m,
+            material: {
+              ...m.material,
+              [urlKey]: null,
+              [storageKey]: null,
+              [fileKey]: null
             }
+          }
           : m
       )
     );
@@ -8313,7 +8389,7 @@ const ARTest = () => {
           const mats = Array.isArray(node.material) ? node.material : [node.material];
           mats.forEach((m) => {
             if (m[mapSlot] && typeof m[mapSlot].dispose === 'function') {
-              try { m[mapSlot].dispose(); } catch {}
+              try { m[mapSlot].dispose(); } catch { }
             }
             m[mapSlot] = null;
             m.needsUpdate = true;
@@ -11840,11 +11916,10 @@ const ARTest = () => {
                 onClick={() =>
                   setPreviewRenderMode((prev) => (prev === 'studio' ? 'ar-experience' : 'studio'))
                 }
-                className={`px-2.5 py-1.5 font-bold uppercase tracking-wider transition-all rounded-lg text-xs flex items-center gap-1 shadow-md cursor-pointer shrink-0 ${
-                  isRenderPreviewActive
-                    ? 'bg-gradient-to-r from-amber-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-white ring-1 ring-amber-300/60 shadow-amber-950/50'
-                    : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-950/40'
-                }`}
+                className={`px-2.5 py-1.5 font-bold uppercase tracking-wider transition-all rounded-lg text-xs flex items-center gap-1 shadow-md cursor-pointer shrink-0 ${isRenderPreviewActive
+                  ? 'bg-gradient-to-r from-amber-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-white ring-1 ring-amber-300/60 shadow-amber-950/50'
+                  : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-950/40'
+                  }`}
                 title={
                   isRenderPreviewActive
                     ? 'Exit Render Preview and return to Studio Edit Mode (Shortcut: P)'
@@ -11880,7 +11955,7 @@ const ARTest = () => {
                   <span>{savingConfig ? 'Saving...' : 'Save'}</span>
                 </button>
               ) : (
-                <div ref={saveMenuRef} className="relative flex items-stretch shrink-0">
+                <div ref={saveMenuRef} className="relative save-button flex items-stretch shrink-0">
                   <button
                     type="button"
                     onClick={() => {
@@ -12594,6 +12669,19 @@ const ARTest = () => {
                     >
                       <span className="material-symbols-outlined text-xs">deployed_code</span>
                       <span>+ Shape</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingSvgGeom(null);
+                        setPastedSvgInitialCode('');
+                        setPasteSvgModalOpen(true);
+                      }}
+                      className="px-2 py-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-90 text-white rounded text-[10px] font-semibold flex items-center gap-1 cursor-pointer shadow-xs border border-purple-400 transition-colors"
+                      title="Paste SVG vector code to extrude into 3D shape"
+                    >
+                      <span className="material-symbols-outlined text-xs">code_blocks</span>
+                      <span>+ SVG</span>
                     </button>
                   </div>
                 </div>
@@ -14268,6 +14356,19 @@ const ARTest = () => {
                   <button
                     type="button"
                     onClick={() => {
+                      setEditingSvgGeom(null);
+                      setPastedSvgInitialCode('');
+                      setPasteSvgModalOpen(true);
+                    }}
+                    className="px-2 py-1.5 bg-gradient-to-r from-purple-600 via-fuchsia-600 to-indigo-600 hover:opacity-95 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1 shadow-md shadow-purple-950/40 transition-all cursor-pointer"
+                    title="Paste SVG vector code or path to extrude into 3D shape"
+                  >
+                    <span className="material-symbols-outlined text-sm">code_blocks</span>
+                    <span>+ Paste SVG</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
                       setEditingVectorGeom(null);
                       setVectorPenInitialMode('extrude');
                       setVectorPenModalOpen(true);
@@ -14355,6 +14456,18 @@ const ARTest = () => {
                     >
                       <span className="material-symbols-outlined text-sm">add</span>
                       <span>Add 3D Shape</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingSvgGeom(null);
+                        setPastedSvgInitialCode('');
+                        setPasteSvgModalOpen(true);
+                      }}
+                      className="px-3.5 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-90 text-white font-bold text-xs rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer shadow-md"
+                    >
+                      <span className="material-symbols-outlined text-sm">code_blocks</span>
+                      <span>Paste SVG Shape</span>
                     </button>
                   </div>
                 </div>
@@ -14515,6 +14628,99 @@ const ARTest = () => {
                             </button>
                           </div>
                         </div>
+
+                        {/* Extruded SVG Vector Code Inspector */}
+                        {(currentGeom.type === 'svg' || Boolean(currentGeom.params?.svg)) && (
+                          <div className="p-3.5 bg-gradient-to-b from-purple-950/40 via-neutral-900 to-indigo-950/30 border border-purple-500/40 rounded-xl space-y-3.5 shadow-md">
+                            <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
+                              <div className="flex items-center gap-2">
+                                <span className="material-symbols-outlined text-base text-purple-400">code_blocks</span>
+                                <div>
+                                  <div className="text-xs font-bold text-neutral-100 flex items-center gap-1.5">
+                                    <span>Extruded SVG Vector Shape</span>
+                                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 font-mono">
+                                      SVG 3D
+                                    </span>
+                                  </div>
+                                  <span className="text-[10px] text-neutral-400 font-mono">
+                                    Depth: {(Number(currentGeom.params?.depth) || 0.18).toFixed(2)}m • Scale: {(Number(currentGeom.params?.targetSize) || 1.0).toFixed(1)}m
+                                  </span>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingSvgGeom(currentGeom);
+                                  setPastedSvgInitialCode(currentGeom.params?.svg || '');
+                                  setPasteSvgModalOpen(true);
+                                }}
+                                className="px-2.5 py-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-90 text-white font-semibold text-[11px] rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-sm"
+                                title="Edit or replace SVG vector markup"
+                              >
+                                <span className="material-symbols-outlined text-xs">edit</span>
+                                <span>Edit SVG Code</span>
+                              </button>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3 text-xs">
+                              <div>
+                                <div className="flex justify-between text-neutral-300 mb-1">
+                                  <span>Extrude Depth:</span>
+                                  <span className="font-mono text-purple-300">
+                                    {(Number(currentGeom.params?.depth) || 0.18).toFixed(2)}m
+                                  </span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min="0.01"
+                                  max="1.5"
+                                  step="0.02"
+                                  value={Number(currentGeom.params?.depth) || 0.18}
+                                  onChange={(e) => handleUpdateGeometryParam(currentGeom.id, 'depth', parseFloat(e.target.value))}
+                                  className="w-full accent-purple-500 cursor-pointer"
+                                />
+                              </div>
+                              <div>
+                                <div className="flex justify-between text-neutral-300 mb-1">
+                                  <span>Target Scale:</span>
+                                  <span className="font-mono text-purple-300">
+                                    {(Number(currentGeom.params?.targetSize) || 1.0).toFixed(1)}m
+                                  </span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min="0.2"
+                                  max="4.0"
+                                  step="0.1"
+                                  value={Number(currentGeom.params?.targetSize) || 1.0}
+                                  onChange={(e) => handleUpdateGeometryParam(currentGeom.id, 'targetSize', parseFloat(e.target.value))}
+                                  className="w-full accent-purple-500 cursor-pointer"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="pt-2 border-t border-neutral-800 flex items-center justify-between text-xs">
+                              <label className="flex items-center gap-1.5 text-neutral-300 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={currentGeom.params?.bevelEnabled !== false}
+                                  onChange={(e) => handleUpdateGeometryParam(currentGeom.id, 'bevelEnabled', e.target.checked)}
+                                  className="rounded border-neutral-700 text-purple-600 focus:ring-0 cursor-pointer"
+                                />
+                                <span>Beveled Chamfer Edges</span>
+                              </label>
+                              <label className="flex items-center gap-1.5 text-neutral-300 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={currentGeom.params?.invertY !== false}
+                                  onChange={(e) => handleUpdateGeometryParam(currentGeom.id, 'invertY', e.target.checked)}
+                                  className="rounded border-neutral-700 text-purple-600 focus:ring-0 cursor-pointer"
+                                />
+                                <span>Invert Y (Right Side Up)</span>
+                              </label>
+                            </div>
+                          </div>
+                        )}
 
                         {/* Procedural Vector-to-3D Geometry Inspector (5 Modes) */}
                         {(() => {
@@ -16888,15 +17094,14 @@ const ARTest = () => {
                         key={modeOpt.id}
                         type="button"
                         onClick={() => setPreviewRenderMode(modeOpt.id)}
-                        className={`py-1.5 px-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-1 transition-all cursor-pointer ${
-                          active
-                            ? modeOpt.id === 'ar-experience'
-                              ? 'bg-emerald-600 text-white shadow-sm'
-                              : modeOpt.id === 'product-preview'
-                                ? 'bg-cyan-600 text-white shadow-sm'
-                                : 'bg-indigo-600 text-white shadow-sm'
-                            : 'text-neutral-400 hover:text-white hover:bg-neutral-800/80'
-                        }`}
+                        className={`py-1.5 px-2 rounded-md text-[11px] font-bold flex items-center justify-center gap-1 transition-all cursor-pointer ${active
+                          ? modeOpt.id === 'ar-experience'
+                            ? 'bg-emerald-600 text-white shadow-sm'
+                            : modeOpt.id === 'product-preview'
+                              ? 'bg-cyan-600 text-white shadow-sm'
+                              : 'bg-indigo-600 text-white shadow-sm'
+                          : 'text-neutral-400 hover:text-white hover:bg-neutral-800/80'
+                          }`}
                       >
                         <span className="material-symbols-outlined text-[13px]">{modeOpt.icon}</span>
                         <span className="truncate">{modeOpt.label}</span>
@@ -20070,11 +20275,10 @@ const ARTest = () => {
                       <button
                         type="button"
                         onClick={() => setShowTrackingMarkerLibrary((v) => !v)}
-                        className={`flex-1 py-1.5 px-2 border rounded text-xs font-semibold flex items-center justify-center gap-1 transition-all cursor-pointer ${
-                          showTrackingMarkerLibrary
-                            ? 'bg-cyan-900/70 text-cyan-200 border-cyan-400/60'
-                            : 'bg-neutral-800 hover:bg-cyan-950/60 text-neutral-200 hover:text-cyan-200 border-neutral-700 hover:border-cyan-500/50'
-                        }`}
+                        className={`flex-1 py-1.5 px-2 border rounded text-xs font-semibold flex items-center justify-center gap-1 transition-all cursor-pointer ${showTrackingMarkerLibrary
+                          ? 'bg-cyan-900/70 text-cyan-200 border-cyan-400/60'
+                          : 'bg-neutral-800 hover:bg-cyan-950/60 text-neutral-200 hover:text-cyan-200 border-neutral-700 hover:border-cyan-500/50'
+                          }`}
                         title="Choose an existing marker image from Admin Inventory or built-in calibration targets"
                       >
                         <span className="material-symbols-outlined text-xs">photo_library</span>
@@ -23441,9 +23645,8 @@ const ARTest = () => {
 
         {/* Floating Viewport Controls: Always-Visible Render Preview Switcher + Camera Views + Studio Gizmos */}
         <div
-          className={`absolute top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 pointer-events-none select-none px-2 ${
-            previewFullscreen ? 'max-w-[calc(100vw-240px)]' : 'max-w-[calc(100vw-480px)]'
-          }`}
+          className={`absolute top-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 pointer-events-none select-none px-2 ${previewFullscreen ? 'max-w-[calc(100vw-240px)]' : 'max-w-[calc(100vw-480px)]'
+            }`}
         >
           {/* Always-Visible Render Preview Mode Switcher Pill */}
           <div className="pointer-events-auto flex items-center gap-1 p-1 bg-slate-950/95 backdrop-blur-md border border-slate-700/80 rounded-xl shadow-2xl max-w-full overflow-x-auto scrollbar-none">
@@ -23454,11 +23657,10 @@ const ARTest = () => {
             <button
               type="button"
               onClick={() => setPreviewRenderMode('studio')}
-              className={`px-2.5 py-1 text-xs font-semibold rounded-lg flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
-                previewRenderMode === 'studio'
-                  ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-950/50'
-                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white'
-              }`}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg flex items-center gap-1 transition-all cursor-pointer shrink-0 ${previewRenderMode === 'studio'
+                ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-950/50'
+                : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white'
+                }`}
               title="Studio Edit Mode — Transform gizmos, marker calibration plane & light bulb helpers enabled (Shortcut: P)"
             >
               <span className="material-symbols-outlined text-xs">tune</span>
@@ -23467,11 +23669,10 @@ const ARTest = () => {
             <button
               type="button"
               onClick={() => setPreviewRenderMode('ar-experience')}
-              className={`px-2.5 py-1 text-xs font-semibold rounded-lg flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
-                previewRenderMode === 'ar-experience'
-                  ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-950/50 ring-1 ring-emerald-400/50'
-                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white'
-              }`}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg flex items-center gap-1 transition-all cursor-pointer shrink-0 ${previewRenderMode === 'ar-experience'
+                ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-950/50 ring-1 ring-emerald-400/50'
+                : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white'
+                }`}
               title="ARExperience Render Preview — 1:1 /ar lighting, tone mapping & clean AR presentation without studio helpers (Shortcut: P)"
             >
               <span className="material-symbols-outlined text-xs">view_in_ar</span>
@@ -23480,11 +23681,10 @@ const ARTest = () => {
             <button
               type="button"
               onClick={() => setPreviewRenderMode('product-preview')}
-              className={`px-2.5 py-1 text-xs font-semibold rounded-lg flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
-                previewRenderMode === 'product-preview'
-                  ? 'bg-cyan-600 text-white shadow-sm shadow-cyan-950/50 ring-1 ring-cyan-400/50'
-                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white'
-              }`}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-lg flex items-center gap-1 transition-all cursor-pointer shrink-0 ${previewRenderMode === 'product-preview'
+                ? 'bg-cyan-600 text-white shadow-sm shadow-cyan-950/50 ring-1 ring-cyan-400/50'
+                : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white'
+                }`}
               title="Product Preview Render — 1:1 Storefront ProductViewer lighting, #0d1117 backdrop & showroom grid (Shortcut: P)"
             >
               <span className="material-symbols-outlined text-xs">storefront</span>
@@ -23509,11 +23709,10 @@ const ARTest = () => {
                 <button
                   type="button"
                   onClick={() => setPreviewFullscreen((v) => !v)}
-                  className={`px-2 py-1 text-xs font-semibold rounded-lg border flex items-center gap-1 transition-all cursor-pointer shrink-0 ${
-                    previewFullscreen
-                      ? 'bg-indigo-600 border-indigo-400 text-white'
-                      : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
-                  }`}
+                  className={`px-2 py-1 text-xs font-semibold rounded-lg border flex items-center gap-1 transition-all cursor-pointer shrink-0 ${previewFullscreen
+                    ? 'bg-indigo-600 border-indigo-400 text-white'
+                    : 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+                    }`}
                   title={previewFullscreen ? 'Show Editor Sidebar' : 'Expand Fullscreen Render Preview'}
                 >
                   <span className="material-symbols-outlined text-xs">
@@ -23541,9 +23740,8 @@ const ARTest = () => {
           {isRenderPreviewActive && (
             <div className="pointer-events-auto flex items-center gap-2 px-3 py-1.5 bg-black/85 backdrop-blur-md border border-white/15 rounded-xl shadow-2xl text-[11px] max-w-full overflow-x-auto scrollbar-none">
               <span
-                className={`w-2 h-2 rounded-full shrink-0 animate-pulse ${
-                  previewRenderMode === 'ar-experience' ? 'bg-emerald-400' : 'bg-cyan-400'
-                }`}
+                className={`w-2 h-2 rounded-full shrink-0 animate-pulse ${previewRenderMode === 'ar-experience' ? 'bg-emerald-400' : 'bg-cyan-400'
+                  }`}
               />
               <span className="font-mono font-bold text-white shrink-0">
                 {previewRenderMode === 'ar-experience'
@@ -23573,11 +23771,10 @@ const ARTest = () => {
                         key={bg.id}
                         type="button"
                         onClick={() => setArPreviewBackdrop(bg.id)}
-                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold transition-all cursor-pointer ${
-                          arPreviewBackdrop === bg.id
-                            ? 'bg-emerald-600/30 border border-emerald-400/60 text-emerald-200'
-                            : 'bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-white'
-                        }`}
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold transition-all cursor-pointer ${arPreviewBackdrop === bg.id
+                          ? 'bg-emerald-600/30 border border-emerald-400/60 text-emerald-200'
+                          : 'bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-white'
+                          }`}
                       >
                         {bg.label}
                       </button>
@@ -23815,209 +24012,209 @@ const ARTest = () => {
 
           {/* Beneath: 3D Transform Controls Gizmo Toolbar (Studio Mode Only) */}
           {!isRenderPreviewActive && (
-          <div className="pointer-events-auto flex items-center gap-1.5 p-1.5 bg-neutral-900/90 backdrop-blur-md border border-neutral-700/80 rounded-xl shadow-2xl max-w-full overflow-x-auto scrollbar-none">
-            {/* Viewport Undo & Redo Controls */}
-            <div className="flex items-center bg-black/60 p-0.5 rounded-lg border border-neutral-800 shrink-0">
-              <button
-                type="button"
-                onClick={handleUndo}
-                disabled={!canUndo}
-                title="Undo last action (Ctrl+Z / Cmd+Z)"
-                className="px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all disabled:opacity-25 disabled:cursor-not-allowed text-neutral-300 hover:text-white hover:bg-neutral-800 active:scale-95 cursor-pointer"
-              >
-                <span className="material-symbols-outlined text-sm">undo</span>
-                <span className="hidden sm:inline">Undo</span>
-              </button>
-              <div className="w-[1px] h-3.5 bg-neutral-800" />
-              <button
-                type="button"
-                onClick={handleRedo}
-                disabled={!canRedo}
-                title="Redo action (Ctrl+Shift+Z / Cmd+Shift+Z)"
-                className="px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all disabled:opacity-25 disabled:cursor-not-allowed text-neutral-300 hover:text-white hover:bg-neutral-800 active:scale-95 cursor-pointer"
-              >
-                <span className="material-symbols-outlined text-sm">redo</span>
-                <span className="hidden sm:inline">Redo</span>
-              </button>
-            </div>
-
-            {/* Gizmo Mode Toggle Buttons */}
-            <div className="flex items-center gap-0.5 bg-black/60 p-0.5 rounded-lg border border-neutral-800 shrink-0">
-              <button
-                type="button"
-                onClick={() => setGizmoMode('translate')}
-                title="Translate / Move (W)"
-                className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${gizmoMode === 'translate'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
-                  }`}
-              >
-                <span className="material-symbols-outlined text-sm">open_with</span>
-                <span className="hidden sm:inline">Move</span>
-                <span className="text-[10px] font-mono opacity-60">W</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setGizmoMode('rotate')}
-                title="Rotate / Turn (E)"
-                className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${gizmoMode === 'rotate'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
-                  }`}
-              >
-                <span className="material-symbols-outlined text-sm">rotate_right</span>
-                <span className="hidden sm:inline">Rotate</span>
-                <span className="text-[10px] font-mono opacity-60">E</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setGizmoMode('scale')}
-                title="Scale / Resize (R)"
-                className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${gizmoMode === 'scale'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
-                  }`}
-              >
-                <span className="material-symbols-outlined text-sm">aspect_ratio</span>
-                <span className="hidden sm:inline">Scale</span>
-                <span className="text-[10px] font-mono opacity-60">R</span>
-              </button>
-            </div>
-
-            {/* Coordinate Space Toggle */}
-            <button
-              type="button"
-              onClick={() => setGizmoSpace((prev) => (prev === 'world' ? 'local' : 'world'))}
-              title={`Transform Coordinate Space (${gizmoSpace.toUpperCase()})`}
-              className="px-2 py-1 bg-black/60 hover:bg-neutral-800 border border-neutral-800 rounded-lg text-xs font-mono font-semibold text-neutral-300 transition-all uppercase"
-            >
-              {gizmoSpace}
-            </button>
-
-            {/* Snapping Toggle */}
-            <button
-              type="button"
-              onClick={() => setGizmoSnap((prev) => (prev === null ? 0.1 : prev === 0.1 ? 0.5 : null))}
-              title="Toggle Transform Snapping"
-              className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold border transition-all ${gizmoSnap
-                ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
-                : 'bg-black/60 border-neutral-800 text-neutral-400 hover:text-neutral-200'
-                }`}
-            >
-              {gizmoSnap ? `Snap: ${gizmoSnap}m` : 'Snap: Off'}
-            </button>
-
-            {/* Draw on Face & Extrude Studio Toggle (X) */}
-            <button
-              type="button"
-              onClick={() => setFaceSketchStudioOpen((prev) => !prev)}
-              title="Click any object face to draw a 2D shape on it and extrude into 3D (X)"
-              className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${faceSketchStudioOpen
-                ? 'bg-gradient-to-r from-teal-500 to-emerald-600 text-white shadow-md ring-2 ring-teal-400'
-                : 'bg-black/60 hover:bg-neutral-800 border border-teal-500/40 text-teal-300 hover:text-white'
-                }`}
-            >
-              <span className="material-symbols-outlined text-sm">draw</span>
-              <span className="hidden sm:inline">Draw on Face</span>
-              <span className="text-[10px] font-mono opacity-60">X</span>
-            </button>
-
-            {/* Multi-Select Mode Toggle */}
-            <button
-              type="button"
-              onClick={() => setIsMultiSelectMode((prev) => !prev)}
-              title={isMultiSelectMode ? 'Multi-Select Mode: ON (Click objects to add/remove)' : 'Toggle Multi-Select Mode'}
-              className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold border transition-all flex items-center gap-1 cursor-pointer ${isMultiSelectMode
-                ? 'bg-indigo-600/90 border-indigo-400 text-white shadow-md ring-1 ring-indigo-400/50'
-                : 'bg-black/60 border-neutral-800 text-neutral-400 hover:text-neutral-200'
-                }`}
-            >
-              <span className="material-symbols-outlined text-xs">
-                {isMultiSelectMode ? 'checklist' : 'select_all'}
-              </span>
-              <span>{isMultiSelectMode ? 'Multi: ON' : 'Multi'}</span>
-            </button>
-
-            {/* Group Selected Objects Button (when multiple items selected) */}
-            {selectedObjects.length > 1 && (
-              <button
-                type="button"
-                onClick={() => handleCreateGroupFromSelection()}
-                title="Group selected objects into a movable group (Ctrl+G)"
-                className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white border border-purple-400 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-sm transition-all"
-              >
-                <span className="material-symbols-outlined text-xs">workspaces</span>
-                <span>Group ({selectedObjects.length})</span>
-              </button>
-            )}
-
-            {/* Duplicate & Ungroup Buttons (when a group is selected) */}
-            {selectedTargetType === 'group' && selectedGroupId && (
-              <>
+            <div className="pointer-events-auto flex items-center gap-1.5 p-1.5 bg-neutral-900/90 backdrop-blur-md border border-neutral-700/80 rounded-xl shadow-2xl max-w-full overflow-x-auto scrollbar-none">
+              {/* Viewport Undo & Redo Controls */}
+              <div className="flex items-center bg-black/60 p-0.5 rounded-lg border border-neutral-800 shrink-0">
                 <button
                   type="button"
-                  onClick={() => handleDuplicateGroup(selectedGroupId)}
-                  title="Duplicate Group (Ctrl+D)"
-                  className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-cyan-300 border border-cyan-500/40 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-all"
+                  onClick={handleUndo}
+                  disabled={!canUndo}
+                  title="Undo last action (Ctrl+Z / Cmd+Z)"
+                  className="px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all disabled:opacity-25 disabled:cursor-not-allowed text-neutral-300 hover:text-white hover:bg-neutral-800 active:scale-95 cursor-pointer"
                 >
-                  <span className="material-symbols-outlined text-xs">content_copy</span>
-                  <span>Duplicate</span>
+                  <span className="material-symbols-outlined text-sm">undo</span>
+                  <span className="hidden sm:inline">Undo</span>
                 </button>
+                <div className="w-[1px] h-3.5 bg-neutral-800" />
                 <button
                   type="button"
-                  onClick={() => handleUngroup(selectedGroupId)}
-                  title="Ungroup (Ctrl+Shift+G)"
-                  className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-purple-300 border border-purple-500/40 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-all"
+                  onClick={handleRedo}
+                  disabled={!canRedo}
+                  title="Redo action (Ctrl+Shift+Z / Cmd+Shift+Z)"
+                  className="px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all disabled:opacity-25 disabled:cursor-not-allowed text-neutral-300 hover:text-white hover:bg-neutral-800 active:scale-95 cursor-pointer"
                 >
-                  <span className="material-symbols-outlined text-xs">folder_off</span>
-                  <span>Ungroup</span>
-                </button>
-              </>
-            )}
-
-            {/* Selection Info Badge */}
-            {currentSelectedObjectInfo && (
-              <div className="flex items-center gap-1.5 pl-1.5 border-l border-neutral-800 shrink-0">
-                <div className="flex items-center gap-1 px-2 py-1 bg-neutral-800/90 border border-neutral-700/80 rounded-lg text-xs text-neutral-200 max-w-[130px] truncate shrink-0">
-                  <span className="material-symbols-outlined text-xs text-indigo-400 shrink-0">
-                    {currentSelectedObjectInfo.icon}
-                  </span>
-                  <span className="truncate font-semibold">{currentSelectedObjectInfo.name}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleExportShapeAsGLB()}
-                  title={
-                    selectedTargetType === 'group'
-                      ? 'Export Selected Group as .GLB'
-                      : selectedTargetType === 'multi'
-                        ? 'Export Selected Objects as .GLB'
-                        : 'Export Selected Object as .GLB'
-                  }
-                  className="p-1 px-2 rounded-lg bg-teal-950/80 hover:bg-teal-900 border border-teal-500/40 text-teal-300 hover:text-white transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer"
-                >
-                  <span className="material-symbols-outlined text-sm">download</span>
-                  <span className="hidden sm:inline">.GLB</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={focusCameraOnSelectedObject}
-                  title="Focus Camera on Selected Object (F)"
-                  className="p-1 rounded-lg bg-black/60 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-indigo-300 transition-colors"
-                >
-                  <span className="material-symbols-outlined text-sm">filter_center_focus</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={clearSelectionAndDetachGizmo}
-                  title="Deselect Object (Esc)"
-                  className="p-1 rounded-lg bg-black/60 hover:bg-red-950/60 border border-neutral-800 hover:border-red-500/40 text-neutral-400 hover:text-red-400 transition-colors"
-                >
-                  <span className="material-symbols-outlined text-sm">close</span>
+                  <span className="material-symbols-outlined text-sm">redo</span>
+                  <span className="hidden sm:inline">Redo</span>
                 </button>
               </div>
-            )}
-          </div>
+
+              {/* Gizmo Mode Toggle Buttons */}
+              <div className="flex items-center gap-0.5 bg-black/60 p-0.5 rounded-lg border border-neutral-800 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setGizmoMode('translate')}
+                  title="Translate / Move (W)"
+                  className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${gizmoMode === 'translate'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+                    }`}
+                >
+                  <span className="material-symbols-outlined text-sm">open_with</span>
+                  <span className="hidden sm:inline">Move</span>
+                  <span className="text-[10px] font-mono opacity-60">W</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGizmoMode('rotate')}
+                  title="Rotate / Turn (E)"
+                  className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${gizmoMode === 'rotate'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+                    }`}
+                >
+                  <span className="material-symbols-outlined text-sm">rotate_right</span>
+                  <span className="hidden sm:inline">Rotate</span>
+                  <span className="text-[10px] font-mono opacity-60">E</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGizmoMode('scale')}
+                  title="Scale / Resize (R)"
+                  className={`px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${gizmoMode === 'scale'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+                    }`}
+                >
+                  <span className="material-symbols-outlined text-sm">aspect_ratio</span>
+                  <span className="hidden sm:inline">Scale</span>
+                  <span className="text-[10px] font-mono opacity-60">R</span>
+                </button>
+              </div>
+
+              {/* Coordinate Space Toggle */}
+              <button
+                type="button"
+                onClick={() => setGizmoSpace((prev) => (prev === 'world' ? 'local' : 'world'))}
+                title={`Transform Coordinate Space (${gizmoSpace.toUpperCase()})`}
+                className="px-2 py-1 bg-black/60 hover:bg-neutral-800 border border-neutral-800 rounded-lg text-xs font-mono font-semibold text-neutral-300 transition-all uppercase"
+              >
+                {gizmoSpace}
+              </button>
+
+              {/* Snapping Toggle */}
+              <button
+                type="button"
+                onClick={() => setGizmoSnap((prev) => (prev === null ? 0.1 : prev === 0.1 ? 0.5 : null))}
+                title="Toggle Transform Snapping"
+                className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold border transition-all ${gizmoSnap
+                  ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
+                  : 'bg-black/60 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                  }`}
+              >
+                {gizmoSnap ? `Snap: ${gizmoSnap}m` : 'Snap: Off'}
+              </button>
+
+              {/* Draw on Face & Extrude Studio Toggle (X) */}
+              <button
+                type="button"
+                onClick={() => setFaceSketchStudioOpen((prev) => !prev)}
+                title="Click any object face to draw a 2D shape on it and extrude into 3D (X)"
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${faceSketchStudioOpen
+                  ? 'bg-gradient-to-r from-teal-500 to-emerald-600 text-white shadow-md ring-2 ring-teal-400'
+                  : 'bg-black/60 hover:bg-neutral-800 border border-teal-500/40 text-teal-300 hover:text-white'
+                  }`}
+              >
+                <span className="material-symbols-outlined text-sm">draw</span>
+                <span className="hidden sm:inline">Draw on Face</span>
+                <span className="text-[10px] font-mono opacity-60">X</span>
+              </button>
+
+              {/* Multi-Select Mode Toggle */}
+              <button
+                type="button"
+                onClick={() => setIsMultiSelectMode((prev) => !prev)}
+                title={isMultiSelectMode ? 'Multi-Select Mode: ON (Click objects to add/remove)' : 'Toggle Multi-Select Mode'}
+                className={`px-2 py-1 rounded-lg text-xs font-mono font-semibold border transition-all flex items-center gap-1 cursor-pointer ${isMultiSelectMode
+                  ? 'bg-indigo-600/90 border-indigo-400 text-white shadow-md ring-1 ring-indigo-400/50'
+                  : 'bg-black/60 border-neutral-800 text-neutral-400 hover:text-neutral-200'
+                  }`}
+              >
+                <span className="material-symbols-outlined text-xs">
+                  {isMultiSelectMode ? 'checklist' : 'select_all'}
+                </span>
+                <span>{isMultiSelectMode ? 'Multi: ON' : 'Multi'}</span>
+              </button>
+
+              {/* Group Selected Objects Button (when multiple items selected) */}
+              {selectedObjects.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => handleCreateGroupFromSelection()}
+                  title="Group selected objects into a movable group (Ctrl+G)"
+                  className="px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white border border-purple-400 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer shadow-sm transition-all"
+                >
+                  <span className="material-symbols-outlined text-xs">workspaces</span>
+                  <span>Group ({selectedObjects.length})</span>
+                </button>
+              )}
+
+              {/* Duplicate & Ungroup Buttons (when a group is selected) */}
+              {selectedTargetType === 'group' && selectedGroupId && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleDuplicateGroup(selectedGroupId)}
+                    title="Duplicate Group (Ctrl+D)"
+                    className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-cyan-300 border border-cyan-500/40 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-all"
+                  >
+                    <span className="material-symbols-outlined text-xs">content_copy</span>
+                    <span>Duplicate</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleUngroup(selectedGroupId)}
+                    title="Ungroup (Ctrl+Shift+G)"
+                    className="px-2 py-1 bg-neutral-800 hover:bg-neutral-700 text-purple-300 border border-purple-500/40 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-all"
+                  >
+                    <span className="material-symbols-outlined text-xs">folder_off</span>
+                    <span>Ungroup</span>
+                  </button>
+                </>
+              )}
+
+              {/* Selection Info Badge */}
+              {currentSelectedObjectInfo && (
+                <div className="flex items-center gap-1.5 pl-1.5 border-l border-neutral-800 shrink-0">
+                  <div className="flex items-center gap-1 px-2 py-1 bg-neutral-800/90 border border-neutral-700/80 rounded-lg text-xs text-neutral-200 max-w-[130px] truncate shrink-0">
+                    <span className="material-symbols-outlined text-xs text-indigo-400 shrink-0">
+                      {currentSelectedObjectInfo.icon}
+                    </span>
+                    <span className="truncate font-semibold">{currentSelectedObjectInfo.name}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleExportShapeAsGLB()}
+                    title={
+                      selectedTargetType === 'group'
+                        ? 'Export Selected Group as .GLB'
+                        : selectedTargetType === 'multi'
+                          ? 'Export Selected Objects as .GLB'
+                          : 'Export Selected Object as .GLB'
+                    }
+                    className="p-1 px-2 rounded-lg bg-teal-950/80 hover:bg-teal-900 border border-teal-500/40 text-teal-300 hover:text-white transition-colors flex items-center gap-1 text-xs font-semibold cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-sm">download</span>
+                    <span className="hidden sm:inline">.GLB</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={focusCameraOnSelectedObject}
+                    title="Focus Camera on Selected Object (F)"
+                    className="p-1 rounded-lg bg-black/60 hover:bg-neutral-800 border border-neutral-800 text-neutral-400 hover:text-indigo-300 transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-sm">filter_center_focus</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearSelectionAndDetachGizmo}
+                    title="Deselect Object (Esc)"
+                    className="p-1 rounded-lg bg-black/60 hover:bg-red-950/60 border border-neutral-800 hover:border-red-500/40 text-neutral-400 hover:text-red-400 transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-sm">close</span>
+                  </button>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
@@ -24234,9 +24431,8 @@ const ARTest = () => {
           {isRenderPreviewActive ? (
             <div className="px-3 py-1.5 rounded-full bg-black/80 backdrop-blur-md border border-white/10 text-xs font-mono font-bold tracking-wider uppercase shadow-xl flex items-center gap-2">
               <span
-                className={`w-2 h-2 rounded-full animate-pulse ${
-                  previewRenderMode === 'ar-experience' ? 'bg-emerald-400' : 'bg-cyan-400'
-                }`}
+                className={`w-2 h-2 rounded-full animate-pulse ${previewRenderMode === 'ar-experience' ? 'bg-emerald-400' : 'bg-cyan-400'
+                  }`}
               />
               <span className={previewRenderMode === 'ar-experience' ? 'text-emerald-300' : 'text-cyan-300'}>
                 {previewRenderMode === 'ar-experience' ? 'STAR WEAR • AR RENDER' : '3D INTERACTIVE PREVIEW'}
@@ -24501,6 +24697,21 @@ const ARTest = () => {
                     ? 'Visual Hull Carve'
                     : 'Extruded Vector Shape')
           }
+        />
+      )}
+
+      {/* Paste SVG to 3D Shape Modal */}
+      {pasteSvgModalOpen && (
+        <PasteSvgModal
+          isOpen={pasteSvgModalOpen}
+          initialSvgCode={pastedSvgInitialCode || editingSvgGeom?.params?.svg || ''}
+          initialColor={editingSvgGeom?.color || '#38bdf8'}
+          onClose={() => {
+            setPasteSvgModalOpen(false);
+            setEditingSvgGeom(null);
+            setPastedSvgInitialCode('');
+          }}
+          onAddShape={handleCommitSvgShape}
         />
       )}
 
