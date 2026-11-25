@@ -47,6 +47,7 @@ import AddGeometryModal from '../components/AddGeometryModal';
 import AddModelModal from '../components/AddModelModal';
 import VectorPenModal from '../components/VectorPenModal';
 import PasteSvgModal from '../components/PasteSvgModal';
+import EditGeometryModal from '../components/EditGeometryModal';
 import Add3DTextModal from '../components/Add3DTextModal';
 import GoogleFontSelector from '../components/GoogleFontSelector';
 import ArSceneApiModal from '../components/ArSceneApiModal';
@@ -2119,6 +2120,27 @@ const ARTest = () => {
   const [pasteSvgModalOpen, setPasteSvgModalOpen] = useState(false);
   const [pastedSvgInitialCode, setPastedSvgInitialCode] = useState('');
   const [editingSvgGeom, setEditingSvgGeom] = useState(null);
+  const [editGeometryModalOpen, setEditGeometryModalOpen] = useState(false);
+  const [editingGeometryTarget, setEditingGeometryTarget] = useState(null);
+
+  const handleSaveGeometryTopology = (id, updatedTopology) => {
+    triggerUndoSnapshot();
+    setAdditionalGeometries((prev) =>
+      prev.map((g) => {
+        if (g.id !== id) return g;
+        return {
+          ...g,
+          params: {
+            ...(g.params || {}),
+            customTopology: updatedTopology
+          },
+          customTopology: updatedTopology
+        };
+      })
+    );
+    setSaveSuccessMsg(`Updated geometry topology: ${editingGeometryTarget?.name || 'Shape'}`);
+    setTimeout(() => setSaveSuccessMsg(''), 4000);
+  };
 
   const handleAddGeometry = (payload) => {
     triggerUndoSnapshot();
@@ -13876,6 +13898,17 @@ const ARTest = () => {
                             )}
                             <button
                               type="button"
+                              onClick={() => {
+                                setEditingGeometryTarget(geom);
+                                setEditGeometryModalOpen(true);
+                              }}
+                              className="w-6 h-6 rounded flex items-center justify-center text-teal-400 hover:text-teal-200 hover:bg-teal-950/60 transition-colors cursor-pointer"
+                              title={`Edit vertices, edges, and faces for ${geom.name}`}
+                            >
+                              <span className="material-symbols-outlined text-xs">shape_line</span>
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => handleExportShapeAsGLB(geom.id)}
                               className="w-6 h-6 rounded flex items-center justify-center text-teal-400 hover:text-teal-300 hover:bg-teal-950/40 transition-colors cursor-pointer"
                               title="Export shape as .GLB"
@@ -14548,6 +14581,18 @@ const ARTest = () => {
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  setEditingGeometryTarget(g);
+                                  setEditGeometryModalOpen(true);
+                                }}
+                                className="p-1 rounded text-teal-400 hover:text-teal-200 hover:bg-teal-950/40 transition-colors cursor-pointer"
+                                title="Edit geometry vertices, edges, and faces"
+                              >
+                                <span className="material-symbols-outlined text-xs">shape_line</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   handleExportShapeAsGLB(g.id);
                                 }}
                                 className="p-1 rounded text-neutral-400 hover:text-teal-300 hover:bg-teal-950/40 transition-colors cursor-pointer"
@@ -14603,6 +14648,18 @@ const ARTest = () => {
                           <div className="flex items-center gap-1.5 shrink-0">
                             <button
                               type="button"
+                              onClick={() => {
+                                setEditingGeometryTarget(currentGeom);
+                                setEditGeometryModalOpen(true);
+                              }}
+                              className="h-7 px-2.5 rounded bg-gradient-to-r from-teal-600 to-cyan-600 hover:opacity-95 text-white flex items-center gap-1 text-xs font-bold transition-all cursor-pointer shadow-xs border border-teal-400 active:scale-98"
+                              title="Edit vertices, edges, and faces (Add center vertex, expand vertex to circle)"
+                            >
+                              <span className="material-symbols-outlined text-xs">shape_line</span>
+                              <span>Edit Geometry</span>
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => handleExportShapeAsGLB(currentGeom.id)}
                               className="h-7 px-2.5 rounded bg-teal-950/60 hover:bg-teal-900 border border-teal-500/40 text-teal-300 flex items-center gap-1 text-xs font-semibold transition-colors cursor-pointer"
                               title="Export Shape as .GLB File"
@@ -14625,6 +14682,39 @@ const ARTest = () => {
                               title="Delete Shape"
                             >
                               <span className="material-symbols-outlined text-xs">delete</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Sub-Element Mesh Topology & Vertex/Edge/Face Inspector */}
+                        <div className="p-3 bg-gradient-to-r from-teal-950/50 via-neutral-900 to-cyan-950/40 border border-teal-500/40 rounded-xl space-y-2 shadow-sm">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="material-symbols-outlined text-lg text-teal-400">shape_line</span>
+                              <div>
+                                <div className="text-xs font-bold text-neutral-100 flex items-center gap-1.5">
+                                  <span>Sub-Element Mesh Editor</span>
+                                  {Boolean(currentGeom.params?.customTopology || currentGeom.customTopology) && (
+                                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-teal-500/20 text-teal-300 font-mono font-bold">
+                                      Customized Topology
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-[10px] text-neutral-400">
+                                  Edit vertices, edges & faces • Poke face (View 2) • Raise peak (View 3) • Circle expander (View 4)
+                                </span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingGeometryTarget(currentGeom);
+                                setEditGeometryModalOpen(true);
+                              }}
+                              className="px-3 py-1.5 bg-gradient-to-r from-teal-500 to-cyan-600 hover:opacity-95 text-black font-bold text-xs rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-md active:scale-98"
+                            >
+                              <span className="material-symbols-outlined text-sm">edit_square</span>
+                              <span>Open Edit View</span>
                             </button>
                           </div>
                         </div>
@@ -24712,6 +24802,19 @@ const ARTest = () => {
             setPastedSvgInitialCode('');
           }}
           onAddShape={handleCommitSvgShape}
+        />
+      )}
+
+      {/* Interactive Sub-Element Geometry Editor (Vertices, Edges, Faces) */}
+      {editGeometryModalOpen && editingGeometryTarget && (
+        <EditGeometryModal
+          isOpen={editGeometryModalOpen}
+          targetGeometry={editingGeometryTarget}
+          onClose={() => {
+            setEditGeometryModalOpen(false);
+            setEditingGeometryTarget(null);
+          }}
+          onSaveTopology={handleSaveGeometryTopology}
         />
       )}
 

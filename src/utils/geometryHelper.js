@@ -21,6 +21,18 @@ import {
   SWEEP_SPINE_PRESETS,
   CARVE_PRESETS
 } from './vectorMeshEngine.js';
+import {
+  extractMeshTopology,
+  buildBufferGeometryFromTopology,
+  pokeFace,
+  expandVertexToCircle,
+  moveVertices,
+  extrudeFace,
+  insetFace,
+  deleteFace,
+  deleteVertex,
+  recomputeTopologyEdges
+} from './geometryTopologyEngine.js';
 
 export {
   INFLATION_PROFILES,
@@ -35,7 +47,17 @@ export {
   VECTOR_GENERATION_MODES,
   REVOLVE_PRESETS,
   SWEEP_SPINE_PRESETS,
-  CARVE_PRESETS
+  CARVE_PRESETS,
+  extractMeshTopology,
+  buildBufferGeometryFromTopology,
+  pokeFace,
+  expandVertexToCircle,
+  moveVertices,
+  extrudeFace,
+  insetFace,
+  deleteFace,
+  deleteVertex,
+  recomputeTopologyEdges
 };
 
 export const GEOMETRY_DEFINITIONS = [
@@ -1015,6 +1037,24 @@ export function createProceduralPatternTexture(patternType, options = {}, THREE_
 export function createPrimitiveThreeGeometry(type, params, THREE_LIB = THREE) {
   const p = params || {};
   let geom;
+
+  // Custom Topology (Sub-element edited vertices, edges, faces)
+  const customTopo = p.customTopology || p.customMesh || (type === 'customMesh' ? p : null);
+  if (customTopo && Array.isArray(customTopo.vertices) && customTopo.vertices.length > 0) {
+    try {
+      geom = buildBufferGeometryFromTopology(customTopo, THREE_LIB);
+      if (geom) {
+        if (!p.preserveOrigin && !p.keepOrigin && typeof geom.center === 'function') {
+          geom.center();
+        }
+        geom.computeVertexNormals();
+        return geom;
+      }
+    } catch (topoErr) {
+      console.warn('[geometryHelper] Failed to build geometry from customTopology:', topoErr);
+    }
+  }
+
   switch (type) {
     case 'box':
       geom = new THREE_LIB.BoxGeometry(
@@ -1558,8 +1598,10 @@ export function createPrimitiveMaterial(options = {}, THREE_LIB = THREE) {
 export function createPrimitiveMesh(geomConfig, THREE_LIB = THREE) {
   if (!geomConfig) return null;
   const svgContent = geomConfig.svg || geomConfig.params?.svg || geomConfig.svgPath || geomConfig.params?.svgPath || geomConfig.svgCode || geomConfig.params?.svgCode;
+  const customTopo = geomConfig.customTopology || geomConfig.params?.customTopology || geomConfig.customMesh || geomConfig.params?.customMesh;
   const mergedParams = {
     ...(geomConfig.params || {}),
+    ...(customTopo ? { customTopology: customTopo } : {}),
     ...(svgContent ? { svg: svgContent, svgPath: svgContent, svgCode: svgContent } : {}),
     ...(geomConfig.preserveOrigin !== undefined ? { preserveOrigin: geomConfig.preserveOrigin } : {}),
     ...(geomConfig.points ? { points: geomConfig.points } : {}),
