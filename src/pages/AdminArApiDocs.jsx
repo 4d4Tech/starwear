@@ -32,7 +32,7 @@ export default function AdminArApiDocs() {
   // ---------------------------------------------------------------------------
   const GEMINI_SYSTEM_PROMPT = `### ROLE & MISSION
 You are the Lead 3D Spatial Computing Architect and Vision Reconstruction AI for Star weAR's WebAR engine ("AR-Test").
-Your mission is to look at any 2D photograph, illustration, logo, or concept art (e.g., a tree, vehicle, chair, statue, sneaker, emblem, building, or fantasy environment), analyze its visual geometry, materials, and lighting, and translate it into an executable 3D AR Scene specification strictly formatted in AR-Test API JSON (v1.2.0).
+Your mission is to look at any 2D photograph, illustration, logo, or concept art (e.g., a tree, vehicle, chair, statue, sneaker, emblem, building, or fantasy environment), analyze its visual geometry, materials, and lighting, and translate it into an executable 3D AR Scene specification strictly formatted in AR-Test API JSON (v1.3.0).
 
 ---
 
@@ -46,6 +46,8 @@ When humans look at an image, they see continuous surfaces. In 3D AR:
    - Example (Plush/Badge/Pillow): vectorInflate with pillowed or elliptic curvature profile.
    - Example (Horn/Pipe/Vine): vectorSweep along helix or arc spine guide rail with twist and taper.
    - Example (Logo/Emblem/Seal): Use single-piece \`vectorExtrude\` with \`svgPath\` + \`holes\` + \`preserveOrigin: true\` for zero-seam precision, with dual-material cap/bevel shading (\`bevelColor\`, \`bevelMetalness\`).
+   - Example (Direct SVG Code): Use \`type: "svg"\` with raw \`svgCode\` for instant multi-path 3D extrusion of 2D vector logos and icons.
+   - Example (Peaked Roof / Frustum / Multi-Faceted Architecture): Use \`topologyOperations\` (pokeFace, elevateVertex, expandVertexToCircle) on base solids to build custom sub-element meshes without external modeling software!
 
 2. PEN TOOL & CUSTOM 3D GEOMETRY SYSTEM (THE 5 VECTOR MODES):
    When reconstructing custom silhouettes, organic forms, lathe objects, swept tubes, or multi-view carved figures:
@@ -118,7 +120,45 @@ When humans look at an image, they see continuous surfaces. In 3D AR:
       - "carveResolution": 24 to 48.
       - "carveSmooth": 1 to 4.
 
-3. CURVED PATH TYPOGRAPHY & TEXT BANNERS (text3d[]):
+3. SUB-ELEMENT MESH TOPOLOGY & PROCEDURAL MODIFIERS (THE 4-STAGE DIAGRAM SYSTEM):
+   When reconstructing faceted, peaked, architectural, or truncated geometric forms (roofs, towers, pyramids, circular caps, diamond cuts):
+   You can attach declarative \`topologyOperations\` to any base shape, or output direct \`customTopology\`:
+   - Stage 1 (View 1): Quad polygon base primitive (e.g. \`type: "box"\` with top face).
+   - Stage 2 (View 2 - "pokeFace"): Subdivides the face into triangular facets radiating to a new center vertex.
+   - Stage 3 (View 3 - "moveVertices" / "height"): Elevates the center vertex along its normal/Y axis to form a peak.
+   - Stage 4 (View 4.a & 4.b - "expandVertexToCircle"): Expands the peak vertex into a circular face with radius, segments, and height offset, forming a truncated frustum with circular top cap and radiating diagonal corner edges.
+   Example JSON:
+   \`\`\`json
+   {
+     "name": "Peaked Frustum Tower",
+     "type": "box",
+     "params": { "width": 1.2, "height": 0.9, "depth": 1.2 },
+     "topologyOperations": [
+       { "op": "pokeFace", "face": "top", "height": 0.55 },
+       { "op": "expandVertexToCircle", "vertex": "last", "radius": 0.32, "segments": 16, "heightOffset": 0.05 }
+     ],
+     "color": "#0284c7"
+   }
+   \`\`\`
+
+4. DIRECT RAW SVG CODE INGESTION (\`type: "svg"\`):
+   When the user provides or references raw SVG code (vector logos, icons, badges, heraldic marks):
+   Set \`"type": "svg"\` and embed the SVG XML string in \`"svgCode"\`.
+   Configure \`params.depth\` (extrusion thickness), \`params.targetSize\` (scales to physical meters, e.g. 1.0m), \`params.bevelEnabled\`, \`params.bevelThickness\`, \`params.bevelSize\`, and \`params.invertY: true\`.
+   Example JSON:
+   \`\`\`json
+   {
+     "name": "SVG Shield Crest",
+     "type": "svg",
+     "svgCode": "<svg viewBox=\\"0 0 100 100\\"><path d=\\"M50 5 L85 20 C85 60 50 95 50 95 C50 95 15 60 15 20 Z\\" fill=\\"#38bdf8\\"/></svg>",
+     "params": { "depth": 0.14, "targetSize": 1.1, "bevelEnabled": true, "bevelThickness": 0.02, "bevelSize": 0.015, "invertY": true },
+     "color": "#0f172a",
+     "bevelColor": "#38bdf8",
+     "bevelMetalness": 0.95
+   }
+   \`\`\`
+
+5. CURVED PATH TYPOGRAPHY & TEXT BANNERS (text3d[]):
    To recreate arched headers, round seal text, or curved ribbon slogans:
    - "curveRadius": Bends text along a circular arc in physical meters.
      - Positive (+1.2): Arch bends downward like a rainbow / arched header banner over a logo.
@@ -126,11 +166,11 @@ When humans look at an image, they see continuous surfaces. In 3D AR:
    - "letterSpacing": Kerning distance in meters (e.g. 0.015 to 0.04) to space out letters along the curve.
    - "startAngle" & "endAngle" (Optional): Manual sweep angles in radians (e.g. -0.8 to +0.8). If omitted, the engine automatically centers text symmetrically along the arc apex.
 
-4. TACTILE PATTERNS & MIRROR CHROME REFLECTIONS:
+6. TACTILE PATTERNS & MIRROR CHROME REFLECTIONS:
    - PROCEDURAL SURFACE PATTERNS (\`pattern\`): Apply \`"pattern": "honeycomb" | "carbon-fiber" | "brushed-metal" | "grid" | "dots" | "camo" | "gingham" | "checkerboard" | "twill-crosshatch"\` with \`patternScale\` (4-16), \`patternColor\`, and \`patternSecondaryColor\` (e.g. for gingham check or racing flag checkerboard) to give surfaces rich physical texture without extra geometry.
    - ENVIRONMENT REFLECTION MAPS (\`scene.envPreset\`): When using high metalness (0.85-1.0), ALWAYS set \`scene.envPreset: "studio-chrome" | "city" | "sunset" | "forest" | "cyber" | "neutral"\` with \`envIntensity: 1.0-2.0\` to produce real mirror reflections!
 
-5. NEVER MANUALLY SPAWN HUNDREDS OF MESHES FOR FOLIAGE/PARTICLES:
+7. NEVER MANUALLY SPAWN HUNDREDS OF MESHES FOR FOLIAGE/PARTICLES:
    - Use our Hardware-Instanced Multi-Layer Scatter System (\`scatterLayers\`).
    - Define a host shape with a descriptive \`name\` (e.g. \`"Tree Canopy Core"\` or \`"Ground Mound"\`).
    - Create a \`scatterLayers\` entry targeting that exact name (\`target: "Tree Canopy Core"\`).
@@ -139,7 +179,7 @@ When humans look at an image, they see continuous surfaces. In 3D AR:
    - Set \`normalAlign: true\` so leaves grow outward along the surface normals.
    - Set \`colorVariation: 0.25\` to produce natural multi-tone botanical coloration.
 
-6. SPATIAL & METRIC CONVENTIONS:
+8. SPATIAL & METRIC CONVENTIONS:
    - 1.0 unit = 1.0 meter in real-world physical space.
    - Tabletop objects (shoes, logos, small plants, mugs): 0.15m to 0.5m tall.
    - Full-scale objects (trees, people, furniture, portals): 1.2m to 3.0m tall.
@@ -151,7 +191,7 @@ When humans look at an image, they see continuous surfaces. In 3D AR:
 
 ### STRICT ENUM VOCABULARY (DO NOT INVENT NON-EXISTENT TYPES)
 - Shapes (shapes[].type):
-  ["box", "sphere", "cylinder", "cone", "torus", "torusKnot", "capsule", "plane", "ring", "icosahedron", "dodecahedron", "tetrahedron", "vectorExtrude", "vectorInflate", "vectorRevolve", "vectorSweep", "vectorCarve"]
+  ["box", "sphere", "cylinder", "cone", "torus", "torusKnot", "capsule", "plane", "ring", "icosahedron", "dodecahedron", "tetrahedron", "vectorExtrude", "vectorInflate", "vectorRevolve", "vectorSweep", "vectorCarve", "svg", "svgExtrude", "customMesh"]
 - Environment Presets (scene.envPreset):
   ["studio-chrome", "city", "sunset", "forest", "night", "cyber", "neutral", "none"]
 - Procedural Patterns (shapes[].pattern):
@@ -377,10 +417,10 @@ Follow this root structure:
       feature: 'Shapes (shapes[])',
       category: 'shapes',
       param: 'type',
-      type: 'Enum (17 types)',
-      range: 'box, sphere, cylinder, cone, torus, torusKnot, capsule, plane, ring, icosahedron, dodecahedron, tetrahedron, vectorExtrude, vectorInflate, vectorRevolve, vectorSweep, vectorCarve',
+      type: 'Enum (20 types)',
+      range: 'box, sphere, cylinder, cone, torus, torusKnot, capsule, plane, ring, icosahedron, dodecahedron, tetrahedron, vectorExtrude, vectorInflate, vectorRevolve, vectorSweep, vectorCarve, svg, svgExtrude, customMesh',
       default: '"box"',
-      description: '3D geometry primitive or procedural vector path generator.'
+      description: '3D geometry primitive, custom topology mesh, SVG vector extrusion, or procedural vector path generator.'
     },
     {
       feature: 'Shapes (shapes[])',
@@ -1056,6 +1096,93 @@ Follow this root structure:
       range: 'Valid .glb / .gltf URL',
       default: '"" / 0, 0, 0, 0, 0, 0, 1',
       description: 'Direct HTTPS link to an external GLB/GLTF 3D model asset to composite into the scene alongside procedural shapes.'
+    },
+
+    // Feature 12: Mesh Topology Operations (topologyOperations[]) - The 4-Stage Diagram System
+    {
+      feature: 'Topology Operations (topologyOperations[])',
+      category: 'topology',
+      param: 'topologyOperations[].op',
+      type: 'Enum (12 actions)',
+      range: 'pokeFace, expandVertexToCircle, moveVertices, elevateVertex, raisePeak, extrudeFace, insetFace, deleteFace, deleteVertex, subdivideEdge',
+      default: '"pokeFace"',
+      description: 'Procedural topological modeling action applied sequentially to the shape manifold. Implements Views 1–4 from technical specification.'
+    },
+    {
+      feature: 'Topology Operations (topologyOperations[])',
+      category: 'topology',
+      param: 'op: "pokeFace" / face / height',
+      type: 'Enum / Integer / Float (meters)',
+      range: 'face: "top", "bottom", "front", "back", "left", "right" or face index. height: -5.0 to +5.0',
+      default: '"top" / 0.0',
+      description: 'View 2 & View 3: Subdivides the specified face by creating a center vertex with radiating diagonal edges and 4 triangular sub-faces. Optional height immediately elevates the vertex along its normal to create a peak.'
+    },
+    {
+      feature: 'Topology Operations (topologyOperations[])',
+      category: 'topology',
+      param: 'op: "expandVertexToCircle" / vertex / radius / segments / heightOffset',
+      type: 'Enum / Float (meters) / Integer / Float',
+      range: 'vertex: "last", "peak", "highest" or vertex index. radius: 0.01-5.0. segments: 4-64',
+      default: '"last" / 0.25 / 16 / 0.0',
+      description: 'View 4 (4.a & 4.b): Expands a vertex into a flat N-segment circular cap face, automatically bridging the perimeter to surrounding boundary vertices to form a truncated frustum with corner radiating struts.'
+    },
+    {
+      feature: 'Topology Operations (topologyOperations[])',
+      category: 'topology',
+      param: 'op: "moveVertices" / vertexIndices / delta',
+      type: 'Array of indices / [dx, dy, dz]',
+      range: 'vertexIndices: ["last"] or [0, 1, 2]. delta: [0, 0.4, 0]',
+      default: '["last"] / [0, 0.35, 0]',
+      description: 'View 3: Translates targeted vertices in Cartesian space or along surface normals to form peaks, ridges, or custom geometric offsets.'
+    },
+    {
+      feature: 'Topology Operations (topologyOperations[])',
+      category: 'topology',
+      param: 'op: "extrudeFace" / op: "insetFace"',
+      type: 'Face Index / Distance / Inset Factor',
+      range: 'distance: 0.01 to 2.0. insetFactor: 0.05 to 0.8',
+      default: '0.2 / 0.15',
+      description: 'Extrudes faces outward along normals or insets face perimeters inward for architectural paneling, windows, or stepped pedestals.'
+    },
+
+    // Feature 13: Direct Custom Manifold Topology (customTopology)
+    {
+      feature: 'Direct Custom Topology (customTopology)',
+      category: 'topology',
+      param: 'customTopology.vertices / faces / edges',
+      type: 'Array of [x, y, z] / Array of indices [v0, v1, v2...]',
+      range: 'Manifold polygon mesh definitions',
+      default: 'Box or custom topology',
+      description: 'Full custom manifold representation with welded shared vertices and N-gon polygonal faces for precision mesh modeling.'
+    },
+
+    // Feature 14: Direct SVG Vector Code Ingestion (type: "svg")
+    {
+      feature: 'Direct SVG Ingestion (type: "svg")',
+      category: 'svg',
+      param: 'svgCode / svg',
+      type: 'Raw SVG XML String',
+      range: '<svg ...><path .../></svg> or polygon/rect/circle tags',
+      default: '""',
+      description: 'Direct embedded SVG code string parsed and extruded into 3D. Supports multi-path contours, viewBox scaling, and SVG shape primitives.'
+    },
+    {
+      feature: 'Direct SVG Ingestion (type: "svg")',
+      category: 'svg',
+      param: 'params.depth / targetSize / autoScale',
+      type: 'Float (meters) / Float (meters) / Boolean',
+      range: 'depth: 0.01-2.0. targetSize: 0.1-10.0',
+      default: '0.15 / 1.0 / true',
+      description: 'Extrusion thickness in meters and automatic bounding box normalization to fit physical AR space.'
+    },
+    {
+      feature: 'Direct SVG Ingestion (type: "svg")',
+      category: 'svg',
+      param: 'params.invertY / curveSegments',
+      type: 'Boolean / Integer',
+      range: 'curveSegments: 8 to 64',
+      default: 'true / 24',
+      description: 'Inverts SVG screen space (+Y down) to 3D Cartesian space (+Y up) and sets Bezier arc smoothness.'
     }
   ];
 
@@ -1065,7 +1192,7 @@ Follow this root structure:
       const matchesCategory =
         activeCategory === 'all' ||
         p.category === activeCategory ||
-        (activeCategory === 'shapes' && p.category === 'vector');
+        (activeCategory === 'shapes' && (p.category === 'vector' || p.category === 'topology' || p.category === 'svg'));
       const q = paramSearch.toLowerCase().trim();
       const matchesSearch =
         !q ||
@@ -1088,6 +1215,8 @@ Follow this root structure:
   const INFLATE_CASE_STUDY_JSON = JSON.stringify(BUILTIN_API_PRESETS[5]?.payload || {}, null, 2);
   const SWEEP_CASE_STUDY_JSON = JSON.stringify(BUILTIN_API_PRESETS[6]?.payload || {}, null, 2);
   const DESIGNER_BADGE_CASE_STUDY_JSON = JSON.stringify(BUILTIN_API_PRESETS[7]?.payload || {}, null, 2);
+  const DIAGRAM_FRUSTUM_CASE_STUDY_JSON = JSON.stringify(BUILTIN_API_PRESETS[8]?.payload || {}, null, 2);
+  const SVG_CYBER_CASE_STUDY_JSON = JSON.stringify(BUILTIN_API_PRESETS[9]?.payload || {}, null, 2);
 
   // ---------------------------------------------------------------------------
   // 4. NOTEBOOK LM FULL SINGLE-PAGE RAW MARKDOWN DUMP GENERATOR
@@ -1308,6 +1437,31 @@ Demonstrates:
 
 \`\`\`json
 ${DESIGNER_BADGE_CASE_STUDY_JSON}
+\`\`\`
+
+---
+
+## 10. DIAGRAM SHOWCASE: TRUNCATED FRUSTUM WITH CIRCULAR CAP (Views 1–4)
+Demonstrates the complete sub-element modeling sequence from the technical diagram:
+- **View 1**: Base cube quad face (4 vertices, 4 edges, 1 face)
+- **View 2**: \`pokeFace\` adds a center vertex and subdivides the face into 4 triangles with radiating diagonal edges
+- **View 3**: Elevates the center vertex above its initial position along the normal to form a 3D pyramid/roof peak
+- **View 4 (4.a & 4.b)**: \`expandVertexToCircle\` expands the peak vertex into an N-segment circular face with radius R and height offset H, bridging to the base corners to form a truncated frustum with a circular top cap
+
+\`\`\`json
+${DIAGRAM_FRUSTUM_CASE_STUDY_JSON}
+\`\`\`
+
+---
+
+## 11. MULTI-PATH SVG VECTOR CODE INGESTION (\`type: "svg"\`)
+Demonstrates direct embedded SVG vector XML code ingestion:
+- Direct parsing of \`<svg>\`, \`<path>\`, and \`<polygon>\` code strings into 3D manifold geometry
+- Automatic bounding box fitting and metric scaling via \`params.targetSize\`
+- Bevel chamfering and dual-tone metallic shaders
+
+\`\`\`json
+${SVG_CYBER_CASE_STUDY_JSON}
 \`\`\`
 `;
   };
@@ -1558,7 +1712,9 @@ ${DESIGNER_BADGE_CASE_STUDY_JSON}
                 { id: 'inflate', label: '🎈 Inflate (Poisson 3D)', mode: 'vectorInflate' },
                 { id: 'sweep', label: '🎷 Sweep & Loft', mode: 'vectorSweep' },
                 { id: 'extrude', label: '🛡️ Extrude & Shell', mode: 'vectorExtrude' },
-                { id: 'carve', label: '🗿 Silhouette Carve', mode: 'vectorCarve' }
+                { id: 'carve', label: '🗿 Silhouette Carve', mode: 'vectorCarve' },
+                { id: 'topology', label: '📐 Topology Modifiers (Views 1–4)', mode: 'topologyOperations' },
+                { id: 'svg', label: '⚡ SVG Code Ingestion', mode: 'svg' }
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -1898,6 +2054,161 @@ ${DESIGNER_BADGE_CASE_STUDY_JSON}
               </div>
             </div>
           )}
+
+          {activeVectorTab === 'topology' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="p-6 rounded-2xl bg-neutral-900/80 border border-neutral-800 space-y-4 text-xs text-neutral-300">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xl">📐</span>
+                    <div>
+                      <h3 className="text-base font-bold text-sky-300">Sub-Element Mesh Topology & Modifiers (The 4 Diagram Views)</h3>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-sky-500/20 text-sky-300">
+                        POKE FACE • ELEVATE VERTEX • CIRCLE EXPANDER (VIEWS 1–4)
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <p className="text-neutral-300 leading-relaxed">
+                  Directly proceduralizes sub-element mesh manipulation (vertices, edges, faces) without external CAD or DCC tools. Implements the 4 exact views from the technical specification and user diagram:
+                </p>
+
+                <div className="space-y-3 pt-2">
+                  <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1">
+                    <div className="flex items-center gap-2 text-sky-400 font-bold text-xs">
+                      <span className="px-1.5 py-0.5 rounded bg-sky-500/20 text-[10px]">VIEW 1</span>
+                      <span>Top View of Cube Geometry</span>
+                    </div>
+                    <p className="text-[11px] text-neutral-400">
+                      Standard quad face with 4 vertices, 4 edges (line segments), and 1 planar top face.
+                    </p>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1">
+                    <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs">
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-[10px]">VIEW 2</span>
+                      <span>Add Vertex to Center of Face ("pokeFace")</span>
+                    </div>
+                    <p className="text-[11px] text-neutral-400">
+                      Subdivides the face into 4 triangular sub-faces by creating a new central vertex connected by 4 radiating diagonal edges.
+                    </p>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1">
+                    <div className="flex items-center gap-2 text-amber-400 font-bold text-xs">
+                      <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-[10px]">VIEW 3</span>
+                      <span>Elevate Vertex Above Face ("height" / "elevateVertex")</span>
+                    </div>
+                    <p className="text-[11px] text-neutral-400">
+                      Translates the newly added central vertex upwards along the surface normal or Y-axis to create a 3D peaked roof or tent canopy.
+                    </p>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1">
+                    <div className="flex items-center gap-2 text-purple-400 font-bold text-xs">
+                      <span className="px-1.5 py-0.5 rounded bg-purple-500/20 text-[10px]">VIEW 4 (4.a & 4.b)</span>
+                      <span>Expand Vertex into Circular Face ("expandVertexToCircle")</span>
+                    </div>
+                    <p className="text-[11px] text-neutral-400">
+                      Takes the peak vertex and expands it into an N-segment circular face with customizable radius <code className="text-purple-300">R</code> and height offset <code className="text-purple-300">H</code>. <strong>View 4.a</strong> shows the top view with corner diagonal struts radiating to the perimeter; <strong>View 4.b</strong> shows the side view of the resulting truncated frustum with flat circular top cap.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Code Example */}
+              <div className="flex flex-col h-full">
+                <div className="flex items-center justify-between p-3 rounded-t-xl bg-neutral-900 border border-b-0 border-neutral-800">
+                  <span className="text-xs font-mono font-bold text-sky-400 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm">code</span>
+                    <span>diagram_frustum_showcase.json</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(DIAGRAM_FRUSTUM_CASE_STUDY_JSON, 'diagram-frustum-json')}
+                    className="px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium flex items-center gap-1 cursor-pointer border border-neutral-700"
+                  >
+                    <span className="material-symbols-outlined text-xs">
+                      {copiedSection === 'diagram-frustum-json' ? 'done' : 'content_copy'}
+                    </span>
+                    <span>{copiedSection === 'diagram-frustum-json' ? 'Copied!' : 'Copy'}</span>
+                  </button>
+                </div>
+                <pre className="flex-1 p-4 rounded-b-xl bg-neutral-950 border border-neutral-800 text-xs font-mono text-sky-300 overflow-x-auto whitespace-pre-wrap max-h-[520px] scrollbar-thin">
+                  {DIAGRAM_FRUSTUM_CASE_STUDY_JSON}
+                </pre>
+              </div>
+            </div>
+          )}
+
+          {activeVectorTab === 'svg' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="p-6 rounded-2xl bg-neutral-900/80 border border-neutral-800 space-y-4 text-xs text-neutral-300">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xl">⚡</span>
+                    <div>
+                      <h3 className="text-base font-bold text-cyan-300">Direct SVG & Vector Code Ingestion (type: "svg")</h3>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300">
+                        RAW SVG XML • MULTI-CONTOUR PARSING • AUTO-SCALING
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <p className="text-neutral-300 leading-relaxed">
+                  Embed raw SVG XML vector code directly into the scene specification. The engine parses arbitrary <code className="text-cyan-300">&lt;path&gt;</code>, <code className="text-cyan-300">&lt;polygon&gt;</code>, <code className="text-cyan-300">&lt;circle&gt;</code>, or composite vector documents into 3D manifold extrusions with high-precision chamfered bevels and auto-bounding box scaling.
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                  <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-2">
+                    <span className="font-bold text-white text-[11px] uppercase tracking-wider text-cyan-400">Key Features:</span>
+                    <ul className="list-disc list-inside space-y-1 text-neutral-400 font-mono text-[11px]">
+                      <li>Direct inline <strong className="text-white">svgCode</strong> or <strong className="text-white">svgPath</strong></li>
+                      <li>Multi-path support with holes & nested islands</li>
+                      <li>Automatic metric normalization (<strong className="text-white">targetSize</strong>)</li>
+                      <li>Dual-material cap & bevel rim shading</li>
+                      <li>Automatic Y-axis orientation (<strong className="text-white">invertY: true</strong>)</li>
+                    </ul>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-2">
+                    <span className="font-bold text-white text-[11px] uppercase tracking-wider text-cyan-400">Core Parameters:</span>
+                    <ul className="list-disc list-inside space-y-1 text-neutral-400 font-mono text-[11px]">
+                      <li><strong className="text-white">depth</strong>: Extrusion thickness (0.05 - 0.5m)</li>
+                      <li><strong className="text-white">targetSize</strong>: Physical size in meters (e.g. 1.0m)</li>
+                      <li><strong className="text-white">bevelThickness / bevelSize</strong>: Edge chamfers</li>
+                      <li><strong className="text-white">bevelColor / bevelMetalness</strong>: Rim styling</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              {/* Code Example */}
+              <div className="flex flex-col h-full">
+                <div className="flex items-center justify-between p-3 rounded-t-xl bg-neutral-900 border border-b-0 border-neutral-800">
+                  <span className="text-xs font-mono font-bold text-cyan-400 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-sm">code</span>
+                    <span>svg_cyber_insignia.json</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(SVG_CYBER_CASE_STUDY_JSON, 'svg-cyber-json')}
+                    className="px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium flex items-center gap-1 cursor-pointer border border-neutral-700"
+                  >
+                    <span className="material-symbols-outlined text-xs">
+                      {copiedSection === 'svg-cyber-json' ? 'done' : 'content_copy'}
+                    </span>
+                    <span>{copiedSection === 'svg-cyber-json' ? 'Copied!' : 'Copy'}</span>
+                  </button>
+                </div>
+                <pre className="flex-1 p-4 rounded-b-xl bg-neutral-950 border border-neutral-800 text-xs font-mono text-cyan-300 overflow-x-auto whitespace-pre-wrap max-h-[520px] scrollbar-thin">
+                  {SVG_CYBER_CASE_STUDY_JSON}
+                </pre>
+              </div>
+            </div>
+          )}
         </section>
 
         {/* SECTION 4: EXHAUSTIVE PARAMETER DICTIONARY */}
@@ -1946,6 +2257,8 @@ ${DESIGNER_BADGE_CASE_STUDY_JSON}
           <div className="flex flex-wrap gap-1.5 pb-2">
             {[
               { id: 'all', label: 'All Parameters' },
+              { id: 'topology', label: '📐 Mesh Topology (Views 1–4)' },
+              { id: 'svg', label: '⚡ SVG Code Ingestion' },
               { id: 'vector', label: 'Pen Tool & Vectors (5 Modes)' },
               { id: 'shapes', label: 'Shapes & Extrusions' },
               { id: 'transform', label: 'Transform & Scale' },
@@ -2128,6 +2441,62 @@ ${DESIGNER_BADGE_CASE_STUDY_JSON}
               </div>
               <pre className="p-3.5 rounded-xl bg-neutral-950 text-xs font-mono text-purple-300 overflow-x-auto whitespace-pre-wrap max-h-72 scrollbar-thin">
                 {PORTAL_CASE_STUDY_JSON}
+              </pre>
+            </div>
+
+            {/* Diagram Frustum Example (Views 1-4) */}
+            <div className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-sky-400 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-base">architecture</span>
+                    <span>Diagram Frustum with Circular Cap (Views 1–4)</span>
+                  </h3>
+                  <p className="text-[11px] text-neutral-400">
+                    Cube base with poked top face, elevated peak, and circular top cap with radiating diagonal corner struts.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard(DIAGRAM_FRUSTUM_CASE_STUDY_JSON, 'cs-frustum-json')}
+                  className="px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium flex items-center gap-1 cursor-pointer border border-neutral-700"
+                >
+                  <span className="material-symbols-outlined text-xs">
+                    {copiedSection === 'cs-frustum-json' ? 'done' : 'content_copy'}
+                  </span>
+                  <span>{copiedSection === 'cs-frustum-json' ? 'Copied!' : 'Copy'}</span>
+                </button>
+              </div>
+              <pre className="p-3.5 rounded-xl bg-neutral-950 text-xs font-mono text-sky-300 overflow-x-auto whitespace-pre-wrap max-h-72 scrollbar-thin">
+                {DIAGRAM_FRUSTUM_CASE_STUDY_JSON}
+              </pre>
+            </div>
+
+            {/* SVG Vector Crest Example */}
+            <div className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-cyan-400 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-base">polyline</span>
+                    <span>Multi-Path Vector SVG Crest</span>
+                  </h3>
+                  <p className="text-[11px] text-neutral-400">
+                    Raw SVG XML shield and lightning bolt with 3D extrusion, chamfered bevels, and cyber neon lighting.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard(SVG_CYBER_CASE_STUDY_JSON, 'cs-svg-json')}
+                  className="px-2.5 py-1 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium flex items-center gap-1 cursor-pointer border border-neutral-700"
+                >
+                  <span className="material-symbols-outlined text-xs">
+                    {copiedSection === 'cs-svg-json' ? 'done' : 'content_copy'}
+                  </span>
+                  <span>{copiedSection === 'cs-svg-json' ? 'Copied!' : 'Copy'}</span>
+                </button>
+              </div>
+              <pre className="p-3.5 rounded-xl bg-neutral-950 text-xs font-mono text-cyan-300 overflow-x-auto whitespace-pre-wrap max-h-72 scrollbar-thin">
+                {SVG_CYBER_CASE_STUDY_JSON}
               </pre>
             </div>
           </div>

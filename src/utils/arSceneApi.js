@@ -5,13 +5,27 @@
  * and multi-modal 3D AR scene generation via Google Gemini and LLMs.
  */
 
+import * as THREE from 'three';
 import { normalizeVectorPointsList } from './inflationEngine.js';
+import {
+  extractMeshTopology,
+  buildBufferGeometryFromTopology,
+  pokeFace,
+  expandVertexToCircle,
+  moveVertices,
+  extrudeFace,
+  insetFace,
+  deleteFace,
+  deleteVertex,
+  recomputeTopologyEdges
+} from './geometryTopologyEngine.js';
+import { createPrimitiveThreeGeometry } from './geometryHelper.js';
 
 // =========================================================================
 // 1. API SCHEMA SPECIFICATION CONSTANTS
 // =========================================================================
 
-export const AR_SCENE_API_VERSION = '1.1.0';
+export const AR_SCENE_API_VERSION = '1.3.0';
 
 export const VALID_PRIMITIVE_TYPES = [
   'box',
@@ -30,7 +44,25 @@ export const VALID_PRIMITIVE_TYPES = [
   'vectorInflate',
   'vectorRevolve',
   'vectorSweep',
-  'vectorCarve'
+  'vectorCarve',
+  'svg',
+  'svgExtrude',
+  'customMesh'
+];
+
+export const VALID_TOPOLOGY_OPERATIONS = [
+  'pokeFace',
+  'addVertexToFace',
+  'expandVertexToCircle',
+  'vertexCircleExpander',
+  'moveVertices',
+  'elevateVertex',
+  'raisePeak',
+  'extrudeFace',
+  'insetFace',
+  'deleteFace',
+  'deleteVertex',
+  'subdivideEdge'
 ];
 
 export const VALID_SCENE_ENV_PRESETS = [
@@ -170,7 +202,338 @@ export function parseArSceneInput(rawInput) {
 }
 
 // =========================================================================
-// 3. VALIDATOR & NORMALIZER
+// 3. TOPOLOGY OPERATIONS & PROCEDURAL MESH EXTENSION ENGINE
+// =========================================================================
+
+/**
+ * Executes a list of procedural topology operations on a base topology or mesh.
+ * Implements full support for the user's diagram:
+ * - View 1: Quad/polygon base
+ * - View 2: pokeFace (add vertex to face center, creating radiating edges)
+ * - View 3: moveVertices / elevateVertex (raise vertex above face along normal / Y axis to create a peak)
+ * - View 4 (4.a & 4.b): expandVertexToCircle (expand peak vertex into a circular face with radius and height offset)
+ * - Extrude, Inset, Subdivide, Delete Face / Vertex
+ */
+export function executeTopologyOperations(baseInput, operations = [], THREE_LIB = THREE) {
+  let topology = null;
+  if (baseInput && Array.isArray(baseInput.vertices)) {
+    // Deep clone topology so we don't mutate input
+    topology = JSON.parse(JSON.stringify(baseInput));
+  } else if (baseInput && baseInput.isBufferGeometry) {
+    topology = extractMeshTopology(baseInput);
+  } else if (typeof baseInput === 'string' || (baseInput && typeof baseInput === 'object' && baseInput.type)) {
+    // Generate primitive Three geometry first
+    const type = typeof baseInput === 'string' ? baseInput : (baseInput.type || 'box');
+    const params = typeof baseInput === 'object' ? (baseInput.params || baseInput) : {};
+    const geom = createPrimitiveThreeGeometry(type, params, THREE_LIB);
+    if (geom) {
+      topology = extractMeshTopology(geom);
+    }
+  }
+
+  if (!topology || !Array.isArray(topology.vertices) || topology.vertices.length === 0) {
+    // Fallback: create unit box topology
+    const boxGeom = new THREE_LIB.BoxGeometry(1, 1, 1);
+    topology = extractMeshTopology(boxGeom);
+  }
+
+  if (!operations || !Array.isArray(operations) || operations.length === 0) {
+    return topology;
+  }
+
+  // Helper to find face by semantic name ('top', 'bottom', 'front', 'back', 'left', 'right')
+  const resolveFaceIndex = (spec) => {
+    if (typeof spec === 'number') {
+      return spec >= 0 && spec < topology.faces.length ? spec : 0;
+    }
+    if (typeof spec !== 'string') return 0;
+    const name = spec.toLowerCase().trim();
+    if (name === 'last') return Math.max(0, topology.faces.length - 1);
+    if (name === 'first') return 0;
+
+    // Search for face with normal closest to direction
+    let bestIdx = 0;
+    let bestScore = -Infinity;
+
+    for (let f = 0; f < topology.faces.length; f++) {
+      const faceVerts = topology.faces[f];
+      if (!faceVerts || faceVerts.length < 3) continue;
+      const v0 = topology.vertices[faceVerts[0]];
+      const v1 = topology.vertices[faceVerts[1]];
+      const v2 = topology.vertices[faceVerts[2]];
+      if (!v0 || !v1 || !v2) continue;
+
+      const e1 = new THREE_LIB.Vector3(v1.x - v0.x, v1.y - v0.y, v1.z - v0.z);
+      const e2 = new THREE_LIB.Vector3(v2.x - v0.x, v2.y - v0.y, v2.z - v0.z);
+      const normal = new THREE_LIB.Vector3().crossVectors(e1, e2).normalize();
+
+      let score = 0;
+      if (name === 'top' || name === 'up') score = normal.y;
+      else if (name === 'bottom' || name === 'down') score = -normal.y;
+      else if (name === 'front') score = normal.z;
+      else if (name === 'back') score = -normal.z;
+      else if (name === 'right') score = normal.x;
+      else if (name === 'left') score = -normal.x;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = f;
+      }
+    }
+    return bestIdx;
+  };
+
+  // Helper to resolve vertex index by semantic name
+  const resolveVertexIndex = (spec) => {
+    if (typeof spec === 'number') {
+      return spec >= 0 && spec < topology.vertices.length ? spec : topology.vertices.length - 1;
+    }
+    if (typeof spec === 'string') {
+      const s = spec.toLowerCase().trim();
+      if (s === 'last' || s === 'center' || s === 'peak') return topology.vertices.length - 1;
+      if (s === 'first') return 0;
+      if (s === 'highest' || s === 'top') {
+        let maxIdx = 0;
+        let maxY = -Infinity;
+        topology.vertices.forEach((v, idx) => {
+          if (v.y > maxY) {
+            maxY = v.y;
+            maxIdx = idx;
+          }
+        });
+        return maxIdx;
+      }
+    }
+    return topology.vertices.length - 1;
+  };
+
+  for (let i = 0; i < operations.length; i++) {
+    const op = operations[i];
+    if (!op || typeof op !== 'object') continue;
+    const action = op.op || op.action || op.type;
+
+    try {
+      switch (action) {
+        case 'pokeFace':
+        case 'addVertexToFace': {
+          const faceIdx = resolveFaceIndex(op.face ?? op.faceIndex);
+          const customCenter = op.center || null;
+          const result = pokeFace(topology, faceIdx, customCenter);
+          if (result && result.topology) {
+            topology = result.topology;
+            // If height is provided, immediately elevate the new center vertex (View 2 -> View 3!)
+            if (typeof op.height === 'number' && op.height !== 0 && result.centerVertexIndex !== undefined) {
+              const faceNormal = result.faceNormal || { x: 0, y: 1, z: 0 };
+              const dx = (faceNormal.x || 0) * op.height;
+              const dy = (faceNormal.y !== undefined ? faceNormal.y : 1) * op.height;
+              const dz = (faceNormal.z || 0) * op.height;
+              topology = moveVertices(topology, [result.centerVertexIndex], [dx, dy, dz]);
+            }
+          }
+          break;
+        }
+
+        case 'moveVertices':
+        case 'elevateVertex':
+        case 'raisePeak': {
+          let vertIndices = [];
+          if (op.vertexIndices && Array.isArray(op.vertexIndices)) {
+            vertIndices = op.vertexIndices.map((v) => resolveVertexIndex(v));
+          } else if (op.vertex !== undefined || op.vertexIndex !== undefined) {
+            vertIndices = [resolveVertexIndex(op.vertex ?? op.vertexIndex)];
+          } else {
+            vertIndices = [topology.vertices.length - 1];
+          }
+
+          let delta = [0, 0, 0];
+          if (Array.isArray(op.delta)) {
+            delta = op.delta;
+          } else if (typeof op.height === 'number') {
+            delta = [0, op.height, 0];
+          } else if (typeof op.y === 'number' || typeof op.x === 'number' || typeof op.z === 'number') {
+            delta = [op.x || 0, op.y || 0, op.z || 0];
+          }
+          topology = moveVertices(topology, vertIndices, delta);
+          break;
+        }
+
+        case 'expandVertexToCircle':
+        case 'vertexCircleExpander':
+        case 'expandVertex': {
+          const vertIdx = resolveVertexIndex(op.vertex ?? op.vertexIndex);
+          const radius = typeof op.radius === 'number' ? op.radius : 0.25;
+          const segments = typeof op.segments === 'number' ? op.segments : 16;
+          const heightOffset = typeof op.heightOffset === 'number' ? op.heightOffset : 0;
+          const expandRes = expandVertexToCircle(topology, vertIdx, { radius, segments, heightOffset });
+          if (expandRes && expandRes.topology) {
+            topology = expandRes.topology;
+          }
+          break;
+        }
+
+        case 'extrudeFace': {
+          const faceIdx = resolveFaceIndex(op.face ?? op.faceIndex);
+          const distance = typeof op.distance === 'number' ? op.distance : 0.2;
+          const extrudeRes = extrudeFace(topology, faceIdx, distance, 0);
+          if (extrudeRes && extrudeRes.topology) {
+            topology = extrudeRes.topology;
+          }
+          break;
+        }
+
+        case 'insetFace': {
+          const faceIdx = resolveFaceIndex(op.face ?? op.faceIndex);
+          const insetFactor = typeof op.insetFactor === 'number' ? op.insetFactor : 0.15;
+          const insetRes = insetFace(topology, faceIdx, insetFactor);
+          if (insetRes && insetRes.topology) {
+            topology = insetRes.topology;
+          }
+          break;
+        }
+
+        case 'deleteFace': {
+          const faceIdx = resolveFaceIndex(op.face ?? op.faceIndex);
+          topology = deleteFace(topology, faceIdx);
+          break;
+        }
+
+        case 'deleteVertex': {
+          const vertIdx = resolveVertexIndex(op.vertex ?? op.vertexIndex);
+          topology = deleteVertex(topology, vertIdx);
+          break;
+        }
+
+        default:
+          console.warn(`[executeTopologyOperations] Unknown operation: "${action}"`);
+          break;
+      }
+    } catch (opErr) {
+      console.warn(`[executeTopologyOperations] Error running operation "${action}":`, opErr);
+    }
+  }
+
+  return topology;
+}
+
+/**
+ * Procedurally generates the 3D geometry shown in the user's diagram:
+ * - View 1: Quad face / cube
+ * - View 2: "Poke Face" (Center vertex added with radiating diagonals)
+ * - View 3: "Raise Peak" (Center vertex elevated into tent peak)
+ * - View 4 (4.a & 4.b): "Expand Vertex into Circle Face" (Frustum with circular top cap)
+ */
+export function createDiagramModel({
+  stage = 4, // 1, 2, 3, or 4
+  baseWidth = 1.0,
+  baseHeight = 1.0,
+  baseDepth = 1.0,
+  peakHeight = 0.45,
+  circleRadius = 0.28,
+  circleSegments = 16,
+  color = '#38bdf8',
+  bevelColor = '#f59e0b',
+  roughness = 0.3,
+  metalness = 0.2
+} = {}) {
+  const operations = [];
+
+  if (stage >= 2) {
+    operations.push({
+      op: 'pokeFace',
+      face: 'top',
+      height: stage >= 3 ? peakHeight : 0
+    });
+  }
+
+  if (stage >= 4) {
+    operations.push({
+      op: 'expandVertexToCircle',
+      vertex: 'last',
+      radius: circleRadius,
+      segments: circleSegments,
+      heightOffset: 0.05
+    });
+  }
+
+  const topology = executeTopologyOperations(
+    { type: 'box', params: { width: baseWidth, height: baseHeight, depth: baseDepth } },
+    operations
+  );
+
+  return {
+    id: `diagram_model_view${stage}_${Date.now()}`,
+    name: `Diagram Model (View ${stage})`,
+    type: 'customMesh',
+    customTopology: topology,
+    params: {
+      customTopology: topology,
+      stage,
+      baseWidth,
+      baseHeight,
+      baseDepth,
+      peakHeight,
+      circleRadius,
+      circleSegments
+    },
+    color,
+    bevelColor,
+    roughness,
+    metalness,
+    posX: 0,
+    posY: baseHeight / 2,
+    posZ: 0
+  };
+}
+
+/**
+ * Procedurally creates a 3D extruded SVG shape definition for the AR Scene API.
+ * Cleans SVG tags, extracts dimensions, and formats the shape params for rendering.
+ */
+export function createSvgShapeDefinition(svgCodeOrPath, options = {}) {
+  const code = String(svgCodeOrPath || '').trim();
+  const shapeId = options.id || `svg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+  return {
+    id: shapeId,
+    name: options.name || 'Extruded SVG Crest',
+    type: 'svg',
+    svgCode: code,
+    params: {
+      svg: code,
+      svgCode: code,
+      svgPath: code,
+      depth: typeof options.depth === 'number' ? options.depth : 0.15,
+      targetSize: typeof options.targetSize === 'number' ? options.targetSize : 1.0,
+      autoScale: options.autoScale !== false,
+      bevelEnabled: options.bevelEnabled !== false,
+      bevelThickness: typeof options.bevelThickness === 'number' ? options.bevelThickness : 0.02,
+      bevelSize: typeof options.bevelSize === 'number' ? options.bevelSize : 0.015,
+      bevelSegments: typeof options.bevelSegments === 'number' ? options.bevelSegments : 3,
+      curveSegments: typeof options.curveSegments === 'number' ? options.curveSegments : 24,
+      invertY: options.invertY !== false,
+      bevelColor: options.bevelColor || '#fbbf24',
+      bevelMetalness: typeof options.bevelMetalness === 'number' ? options.bevelMetalness : 0.9,
+      bevelRoughness: typeof options.bevelRoughness === 'number' ? options.bevelRoughness : 0.1
+    },
+    color: options.color || '#0284c7',
+    bevelColor: options.bevelColor || '#fbbf24',
+    bevelMetalness: typeof options.bevelMetalness === 'number' ? options.bevelMetalness : 0.9,
+    bevelRoughness: typeof options.bevelRoughness === 'number' ? options.bevelRoughness : 0.1,
+    roughness: typeof options.roughness === 'number' ? options.roughness : 0.25,
+    metalness: typeof options.metalness === 'number' ? options.metalness : 0.2,
+    posX: typeof options.posX === 'number' ? options.posX : 0,
+    posY: typeof options.posY === 'number' ? options.posY : 0.35,
+    posZ: typeof options.posZ === 'number' ? options.posZ : 0,
+    rotX: typeof options.rotX === 'number' ? options.rotX : 0,
+    rotY: typeof options.rotY === 'number' ? options.rotY : 0,
+    rotZ: typeof options.rotZ === 'number' ? options.rotZ : 0,
+    scale: typeof options.scale === 'number' ? options.scale : 1.0,
+    visible: options.visible !== false
+  };
+}
+
+// =========================================================================
+// 4. VALIDATOR & NORMALIZER
 // =========================================================================
 
 /**
@@ -254,12 +617,18 @@ export function validateArSceneInput(data) {
 
       const shapeId = s.id || `geom_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`;
 
+      const rawSvg = s.svgCode || s.params?.svgCode || s.svg || s.params?.svg || s.svgPath || s.params?.svgPath;
+
       // Merge root-level shape attributes into params if placed directly on the shape
       const shapeParams = {
         ...(s.params && typeof s.params === 'object' ? s.params : {}),
         preserveOrigin: Boolean(s.preserveOrigin ?? s.params?.preserveOrigin),
         invertY: s.invertY !== undefined ? s.invertY : s.params?.invertY,
-        svgPath: s.svgPath || s.params?.svgPath || s.svg || s.params?.svg,
+        svg: rawSvg,
+        svgCode: rawSvg,
+        svgPath: rawSvg,
+        targetSize: typeof (s.targetSize ?? s.params?.targetSize) === 'number' ? (s.targetSize ?? s.params?.targetSize) : 1.0,
+        autoScale: (s.autoScale ?? s.params?.autoScale) !== false,
         holes: s.holes || s.params?.holes || [],
         ...(s.points ? { points: s.points } : {}),
         ...(s.rawPoints ? { points: s.rawPoints } : {}),
@@ -335,6 +704,25 @@ export function validateArSceneInput(data) {
         patternOpacity: typeof (s.patternOpacity ?? s.params?.patternOpacity) === 'number' ? (s.patternOpacity ?? s.params?.patternOpacity) : 0.65
       };
 
+      // Check for custom topology and procedural topology operations (View 1, 2, 3, 4)
+      const incomingOps = s.topologyOperations || s.params?.topologyOperations || s.modifiers || s.params?.modifiers;
+      let bakedTopology = s.customTopology || s.params?.customTopology || null;
+
+      if (Array.isArray(incomingOps) && incomingOps.length > 0) {
+        try {
+          bakedTopology = executeTopologyOperations(
+            bakedTopology || { type, params: shapeParams },
+            incomingOps
+          );
+        } catch (opErr) {
+          warnings.push(`Shape #${idx + 1} (${s.name || 'unnamed'}): Topology operations failed to execute: ${opErr.message}`);
+        }
+      }
+
+      if (bakedTopology && Array.isArray(bakedTopology.vertices)) {
+        shapeParams.customTopology = bakedTopology;
+      }
+
       // Sanitize vector contour points if points are used
       if (['vectorExtrude', 'vectorInflate', 'vectorRevolve', 'vectorSweep', 'extrude'].includes(type) && !shapeParams.svgPath) {
         if (shapeParams.points) {
@@ -364,9 +752,14 @@ export function validateArSceneInput(data) {
       normalized.shapes.push({
         id: shapeId,
         name: s.name || `${type.charAt(0).toUpperCase() + type.slice(1)} ${idx + 1}`,
-        type: VALID_PRIMITIVE_TYPES.includes(type) ? type : 'box',
+        type: VALID_PRIMITIVE_TYPES.includes(type) ? type : (bakedTopology ? 'customMesh' : 'box'),
         preserveOrigin: shapeParams.preserveOrigin,
         params: shapeParams,
+        customTopology: bakedTopology || shapeParams.customTopology,
+        topologyOperations: Array.isArray(incomingOps) ? incomingOps : undefined,
+        svg: shapeParams.svg,
+        svgCode: shapeParams.svgCode,
+        svgPath: shapeParams.svgPath,
         color: s.color || '#38bdf8',
         roughness: typeof s.roughness === 'number' ? s.roughness : 0.35,
         metalness: typeof s.metalness === 'number' ? s.metalness : 0.15,
@@ -768,6 +1161,11 @@ export function exportCurrentSceneToArApi(state) {
         type: g.type,
         preserveOrigin: Boolean(g.preserveOrigin ?? g.params?.preserveOrigin),
         params: g.params || {},
+        customTopology: g.customTopology || g.params?.customTopology,
+        topologyOperations: g.topologyOperations || g.params?.topologyOperations,
+        svg: g.svg || g.params?.svg || g.params?.svgCode,
+        svgCode: g.svgCode || g.params?.svgCode || g.params?.svg,
+        svgPath: g.svgPath || g.params?.svgPath,
         color: g.color || '#38bdf8',
         roughness: g.roughness ?? 0.35,
         metalness: g.metalness ?? 0.15,
@@ -1712,6 +2110,255 @@ export const BUILTIN_API_PRESETS = [
             posZ: 0
           }
         ]
+      }
+    }
+  },
+  {
+    id: 'diagram_frustum_showcase',
+    name: '🏛️ Diagram Showcase: Frustum with Circular Cap (Views 1–4)',
+    description: 'Showcases all 4 stages from the user diagram: Cube base -> Poke Face (View 2) -> Raise Peak (View 3) -> Expand Vertex into Circular Face (View 4.a & 4.b) with corner radiating diagonals.',
+    payload: {
+      ar_scene: {
+        metadata: {
+          name: 'Diagram Frustum & Circular Cap Showcase',
+          version: '1.3.0',
+          description: 'Procedurally generated sub-element mesh following Views 1, 2, 3, and 4.'
+        },
+        scene: {
+          ambientColor: '#ffffff',
+          ambientIntensity: 1.4,
+          envPreset: 'studio-chrome',
+          envIntensity: 1.5,
+          exposure: 1.15
+        },
+        transform: {
+          scale: 0.5,
+          posX: 0,
+          posY: 0,
+          posZ: 0,
+          rotX: 90,
+          rotY: 0,
+          rotZ: 0
+        },
+        lighting: {
+          ambientColor: '#ffffff',
+          ambientIntensity: 1.2,
+          dir1Color: '#ffffff',
+          dir1Intensity: 3.0,
+          dir1Position: '2 4 3',
+          dir2Color: '#38bdf8',
+          dir2Intensity: 1.5,
+          dir2Position: '-2 1 -2',
+          rimColor: '#f59e0b',
+          rimIntensity: 1.8,
+          rimPosition: '0 3 -3'
+        },
+        shapes: [
+          {
+            id: 'diagram_frustum_shape',
+            name: 'Peaked Frustum with Circular Cap',
+            type: 'box',
+            params: {
+              width: 1.2,
+              height: 0.9,
+              depth: 1.2,
+              pattern: 'brushed-metal',
+              patternScale: 6.0,
+              patternColor: '#0369a1',
+              patternOpacity: 0.4
+            },
+            topologyOperations: [
+              {
+                op: 'pokeFace',
+                face: 'top',
+                height: 0.55
+              },
+              {
+                op: 'expandVertexToCircle',
+                vertex: 'last',
+                radius: 0.32,
+                segments: 16,
+                heightOffset: 0.05
+              }
+            ],
+            color: '#0284c7',
+            roughness: 0.22,
+            metalness: 0.75,
+            bevelColor: '#fbbf24',
+            bevelMetalness: 0.9,
+            bevelRoughness: 0.1,
+            posX: 0,
+            posY: 0.45,
+            posZ: 0
+          },
+          {
+            id: 'pedestal_base',
+            name: 'Hexagonal Plinth',
+            type: 'cylinder',
+            params: {
+              radiusTop: 1.1,
+              radiusBottom: 1.2,
+              height: 0.1,
+              radialSegments: 6
+            },
+            color: '#0f172a',
+            roughness: 0.8,
+            metalness: 0.3,
+            posX: 0,
+            posY: -0.05,
+            posZ: 0
+          }
+        ],
+        text3d: [
+          {
+            id: 'diagram_banner',
+            name: 'Diagram Stage Banner',
+            text: 'CIRCULAR FRUSTUM',
+            fontFamily: 'helvetiker_bold',
+            size: 0.09,
+            depth: 0.03,
+            curveRadius: 0.8,
+            color: '#fbbf24',
+            metalness: 0.9,
+            roughness: 0.15,
+            emissive: '#d97706',
+            emissiveIntensity: 0.4,
+            posX: 0,
+            posY: 0.05,
+            posZ: 0.65
+          }
+        ],
+        particles: {
+          enabled: true,
+          preset: 'golden-sparkles',
+          count: 120,
+          size: 0.03,
+          color: '#fbbf24',
+          speed: 0.8
+        }
+      }
+    }
+  },
+  {
+    id: 'svg_cyber_insignia',
+    name: '⚡ Multi-Path Vector SVG Cyber Crest',
+    description: 'Direct embedded SVG code converted into 3D geometry with beveling, metallic dual-tone shading, and glowing typography.',
+    payload: {
+      ar_scene: {
+        metadata: {
+          name: 'Vector SVG Cyber Crest',
+          version: '1.3.0',
+          description: 'Demonstrating inline SVG vector XML code ingestion and 3D extrusion.'
+        },
+        scene: {
+          ambientColor: '#0f172a',
+          ambientIntensity: 0.9,
+          envPreset: 'cyber',
+          envIntensity: 1.4
+        },
+        transform: {
+          scale: 0.5,
+          posX: 0,
+          posY: 0,
+          posZ: 0,
+          rotX: 90,
+          rotY: 0,
+          rotZ: 0
+        },
+        lighting: {
+          ambientColor: '#1e1b4b',
+          ambientIntensity: 1.0,
+          dir1Color: '#38bdf8',
+          dir1Intensity: 3.2,
+          dir1Position: '2 3 2',
+          dir2Color: '#ec4899',
+          dir2Intensity: 2.5,
+          dir2Position: '-2 1 -2'
+        },
+        shapes: [
+          {
+            id: 'svg_shield_emblem',
+            name: 'SVG Cyber Shield Emblem',
+            type: 'svg',
+            svgCode: '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><path d="M50 5 L85 20 C85 60 50 95 50 95 C50 95 15 60 15 20 Z" fill="#38bdf8"/></svg>',
+            params: {
+              depth: 0.14,
+              targetSize: 1.1,
+              autoScale: true,
+              bevelEnabled: true,
+              bevelThickness: 0.02,
+              bevelSize: 0.015,
+              bevelSegments: 3,
+              curveSegments: 32,
+              invertY: true,
+              bevelColor: '#38bdf8',
+              bevelMetalness: 0.95,
+              bevelRoughness: 0.1
+            },
+            color: '#0f172a',
+            roughness: 0.25,
+            metalness: 0.85,
+            bevelColor: '#38bdf8',
+            bevelMetalness: 0.95,
+            bevelRoughness: 0.1,
+            posX: 0,
+            posY: 0,
+            posZ: 0
+          },
+          {
+            id: 'svg_bolt_core',
+            name: 'SVG Lightning Core',
+            type: 'svg',
+            svgCode: '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><polygon points="55,5 15,55 45,55 35,95 85,45 55,45" fill="#f59e0b"/></svg>',
+            params: {
+              depth: 0.08,
+              targetSize: 0.65,
+              autoScale: true,
+              bevelEnabled: true,
+              bevelThickness: 0.015,
+              bevelSize: 0.01,
+              bevelSegments: 2,
+              invertY: true
+            },
+            color: '#fbbf24',
+            emissive: '#d97706',
+            emissiveIntensity: 0.5,
+            roughness: 0.15,
+            metalness: 0.9,
+            posX: 0,
+            posY: 0.08,
+            posZ: 0
+          }
+        ],
+        text3d: [
+          {
+            id: 'svg_crest_text',
+            name: 'SVG Crest Label',
+            text: 'STAR weAR VECTOR',
+            fontFamily: 'helvetiker_bold',
+            size: 0.075,
+            depth: 0.025,
+            curveRadius: 0.6,
+            startAngle: -45,
+            endAngle: 45,
+            color: '#38bdf8',
+            emissive: '#0284c7',
+            emissiveIntensity: 0.4,
+            metalness: 0.8,
+            roughness: 0.2,
+            posX: 0,
+            posY: -0.15,
+            posZ: 0.08
+          }
+        ],
+        particles: {
+          enabled: true,
+          preset: 'cyber-matrix',
+          count: 140,
+          size: 0.035,
+          color: '#38bdf8',
+          colorSecondary: '#ec4899'
+        }
       }
     }
   }

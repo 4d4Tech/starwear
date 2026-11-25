@@ -604,6 +604,7 @@ export function expandVertexToCircle(topology, vertexIndex, options = {}) {
   recomputeTopologyEdges(topology);
 
   return {
+    topology,
     circleVertexIndices,
     circleFaceIndex: topology.faces.length - 1 - K
   };
@@ -613,10 +614,10 @@ export function expandVertexToCircle(topology, vertexIndex, options = {}) {
  * Move specified vertices by a delta offset vector
  */
 export function moveVertices(topology, vertexIndices, delta) {
-  if (!topology || !Array.isArray(topology.vertices) || !Array.isArray(vertexIndices)) return;
-  const dx = Number(delta.x) || 0;
-  const dy = Number(delta.y) || 0;
-  const dz = Number(delta.z) || 0;
+  if (!topology || !Array.isArray(topology.vertices) || !Array.isArray(vertexIndices)) return topology;
+  const dx = Array.isArray(delta) ? (Number(delta[0]) || 0) : (Number(delta?.x) || 0);
+  const dy = Array.isArray(delta) ? (Number(delta[1]) || 0) : (Number(delta?.y) || 0);
+  const dz = Array.isArray(delta) ? (Number(delta[2]) || 0) : (Number(delta?.z) || 0);
 
   vertexIndices.forEach((idx) => {
     if (idx >= 0 && idx < topology.vertices.length) {
@@ -628,6 +629,7 @@ export function moveVertices(topology, vertexIndices, delta) {
   });
 
   recomputeTopologyEdges(topology);
+  return topology;
 }
 
 /**
