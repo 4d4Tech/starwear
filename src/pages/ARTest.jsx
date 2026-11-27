@@ -10396,219 +10396,137 @@ const ARTest = () => {
         exportContainer.add(clonedPrimary);
       }
 
-      // 1b. Additional Geometries (Shapes, Planes, Vector Extrusions)
-      if (Array.isArray(additionalGeometries)) {
-        additionalGeometries.forEach((g) => {
-          if (g.visible === false) return;
-          const liveObj = findThreeObject('geometry', g.id);
-          let primNode = null;
-          if (liveObj) {
-            liveObj.updateWorldMatrix(true, true);
-            primNode = liveObj.clone(true);
-            const toRemove = [];
-            primNode.traverse((c) => {
-              if (c.name && /helper|picker|gizmo|__starwear/i.test(c.name)) toRemove.push(c);
-            });
-            toRemove.forEach((c) => c.parent && c.parent.remove(c));
-            primNode.position.set(0, 0, 0);
-            primNode.quaternion.set(0, 0, 0, 1);
-            primNode.scale.set(1, 1, 1);
-            liveObj.matrixWorld.decompose(primNode.position, primNode.quaternion, primNode.scale);
-          } else {
-            primNode = createPrimitiveMesh(g, THREE);
-            primNode.position.set(g.posX || 0, g.posY || 0, g.posZ || 0);
-            primNode.rotation.set(
-              THREE.MathUtils.degToRad(g.rotX || 0),
-              THREE.MathUtils.degToRad(g.rotY || 0),
-              THREE.MathUtils.degToRad(g.rotZ || 0)
-            );
-            primNode.scale.set(g.scaleX ?? g.scale ?? 1, g.scaleY ?? g.scale ?? 1, g.scaleZ ?? g.scale ?? 1);
-          }
+      const hasPrimaryModel = Boolean(primaryModel3D && !(portalEnabled && portalHideOutsideModel));
+      let glbBlob = null;
+      let sceneGlbFileName = '';
+      let glbStoragePath = '';
+      let glbDownloadUrl = '';
 
-          const uniqueShapeName = makeUniqueExportName(g.name || g.type || 'shape', 'shape');
-          primNode.name = uniqueShapeName;
-          if (!primNode.isMesh) {
-            let firstMesh = null;
-            primNode.traverse((c) => {
-              if (!firstMesh && c.isMesh) firstMesh = c;
-            });
-            if (firstMesh) firstMesh.name = uniqueShapeName;
-          }
+      // Only export the primary root 3D model if one is present in the scene.
+      // Shapes, extruded vectors, custom meshes, 3D texts, and custom models remain parametric entities
+      // in additionalGeometries / customModels / custom3DTexts and are NOT baked as static child sub-meshes!
+      if (hasPrimaryModel && exportContainer.children.length > 0) {
+        exportScene.updateMatrixWorld(true);
+        sanitizeHierarchyForGLTFExport(exportScene, THREE);
+        exportScene.userData = { preserveSceneOrigin: true };
+        exportContainer.userData = { preserveSceneOrigin: true };
 
-          const geomPrefix = `geom:${g.id}`;
-          if (videoTargetMesh === geomPrefix) {
-            remappedVideoTargetMesh = uniqueShapeName;
-          } else if (typeof videoTargetMesh === 'string' && videoTargetMesh.startsWith(`${geomPrefix}:slot:`)) {
-            const slotSuffix = videoTargetMesh.slice(geomPrefix.length);
-            remappedVideoTargetMesh = `${uniqueShapeName}${slotSuffix}`;
-          }
+        setSaveAsProgressMsg('Encoding 3D model into binary .glb...');
+        setUploadProgress('Encoding 3D model into binary .glb...');
 
-          exportContainer.add(primNode);
+        glbBlob = await new Promise((resolve, reject) => {
+          const exporter = new GLTFExporter();
+          const exportOptions = {
+            binary: true,
+            embedImages: true
+          };
+          if (primaryModel3D?.animations?.length > 0) {
+            exportOptions.animations = primaryModel3D.animations;
+          }
+          exporter.parse(
+            exportScene,
+            (result) => {
+              if (result instanceof ArrayBuffer) {
+                resolve(new Blob([result], { type: 'model/gltf-binary' }));
+              } else {
+                resolve(new Blob([JSON.stringify(result)], { type: 'application/json' }));
+              }
+            },
+            (err) => reject(err),
+            exportOptions
+          );
         });
+
+        sceneGlbFileName = `${cleanId}_scene.glb`;
+        glbStoragePath = `assets/${cleanId}/${sceneGlbFileName}`;
+        setSaveAsProgressMsg(`Uploading 3D model to ${glbStoragePath}...`);
+        setUploadProgress(`Uploading 3D model to ${glbStoragePath}...`);
+
+        const glbStorageRef = ref(storage, glbStoragePath);
+        await uploadBytes(glbStorageRef, glbBlob, {
+          contentType: 'model/gltf-binary',
+          customMetadata: {
+            batchId: cleanId,
+            assetName: name,
+            exportedFrom: 'ar-test-studio'
+          }
+        });
+        glbDownloadUrl = await getDownloadURL(glbStorageRef);
       }
 
-      // 1c. Custom 3D Typography Texts
-      const textAnchor = document.getElementById('ar-3d-texts-anchor');
-      const textsRoot = textAnchor?.getObject3D('texts3DRoot') || textAnchor?.object3D;
-      if (textsRoot && Array.isArray(custom3DTexts)) {
-        custom3DTexts.forEach((t) => {
-          if (t.visible === false) return;
-          textsRoot.traverse((node) => {
-            if (node.userData?.textId === t.id) {
-              node.updateWorldMatrix(true, true);
-              const clonedText = node.clone(true);
-              const toRemove = [];
-              clonedText.traverse((c) => {
-                if (c.name && /helper|picker|gizmo|__starwear/i.test(c.name)) toRemove.push(c);
-              });
-              toRemove.forEach((c) => c.parent && c.parent.remove(c));
-              node.matrixWorld.decompose(clonedText.position, clonedText.quaternion, clonedText.scale);
-
-              const uniqueTextName = makeUniqueExportName(t.text || 'text3d', 'text3d');
-              clonedText.name = uniqueTextName;
-              let primaryTextMesh = clonedText.isMesh ? clonedText : null;
-              if (!primaryTextMesh) {
-                clonedText.traverse((c) => {
-                  if (!primaryTextMesh && c.isMesh) primaryTextMesh = c;
-                });
-              }
-              if (primaryTextMesh) {
-                primaryTextMesh.name = uniqueTextName;
-              }
-
-              const textPrefix = `text3d:${t.id}`;
-              if (videoTargetMesh === textPrefix) {
-                remappedVideoTargetMesh = uniqueTextName;
-              } else if (typeof videoTargetMesh === 'string' && videoTargetMesh.startsWith(`${textPrefix}:slot:`)) {
-                const slotSuffix = videoTargetMesh.slice(textPrefix.length);
-                remappedVideoTargetMesh = `${uniqueTextName}${slotSuffix}`;
-              }
-
-              exportContainer.add(clonedText);
+      // 1b. Upload any staged custom shape textures to Firebase Storage (preserving all parametric shape properties)
+      let cleanedAdditionalGeometries = additionalGeometries || [];
+      if (Array.isArray(additionalGeometries) && additionalGeometries.length > 0) {
+        setSaveAsProgressMsg('Uploading shape textures to Storage...');
+        setUploadProgress('Uploading shape textures to Storage...');
+        cleanedAdditionalGeometries = await Promise.all(
+          additionalGeometries.map(async (g) => {
+            let finalTexUrl = g.textureUrl || '';
+            let finalStoragePath = g.textureStoragePath || '';
+            const pending = pendingShapeTexturesRef.current?.get(g.id);
+            if (pending?.file) {
+              setUploadProgress(`Uploading shape texture for ${g.name || g.id} to Storage...`);
+              const cleanFileName = (pending.file.name || `${g.id}.png`).replace(/[^a-zA-Z0-9._-]/g, '_');
+              const storagePath = `assets/${cleanId}/textures/shapes/${g.id}_${Date.now()}_${cleanFileName}`;
+              const shapeTexRef = ref(storage, storagePath);
+              await uploadBytes(shapeTexRef, pending.file);
+              finalTexUrl = await getDownloadURL(shapeTexRef);
+              finalStoragePath = storagePath;
+            } else if (typeof finalTexUrl === 'string' && finalTexUrl.startsWith('blob:')) {
+              finalTexUrl = '';
             }
-          });
-        });
-      }
 
-      // 1d. Custom External 3D Models
-      const customModelsAnchor = document.getElementById('ar-custom-models-anchor');
-      const modelsRoot = customModelsAnchor?.getObject3D('customModelsRoot') || customModelsAnchor?.object3D;
-      if (modelsRoot && Array.isArray(customModels)) {
-        customModels.forEach((m) => {
-          if (m.visible === false) return;
-          modelsRoot.traverse((node) => {
-            if (node.userData?.modelId === m.id && node.userData?.isCustomModel) {
-              node.updateWorldMatrix(true, true);
-              const clonedMod = node.clone(true);
-              const toRemove = [];
-              clonedMod.traverse((c) => {
-                if (c.name && /helper|picker|gizmo|__starwear/i.test(c.name)) toRemove.push(c);
-              });
-              toRemove.forEach((c) => c.parent && c.parent.remove(c));
-              node.matrixWorld.decompose(clonedMod.position, clonedMod.quaternion, clonedMod.scale);
+            const cleanGeom = { ...g };
+            delete cleanGeom.texturePreviewUrl;
 
-              const uniqueModName = makeUniqueExportName(m.name || m.fileName || 'custom_model', 'model');
-              clonedMod.name = uniqueModName;
-              const childMeshes = [];
-              clonedMod.traverse((c) => {
-                if (c.isMesh) childMeshes.push(c);
-              });
-              if (childMeshes.length === 1) {
-                childMeshes[0].name = uniqueModName;
-              }
-
-              const modPrefix = `custommodel:${m.id}`;
-              if (videoTargetMesh === modPrefix) {
-                remappedVideoTargetMesh = childMeshes.length === 1 ? uniqueModName : (childMeshes[0]?.name || 'ALL_SCENE');
-              } else if (typeof videoTargetMesh === 'string' && videoTargetMesh.startsWith(`${modPrefix}:slot:`)) {
-                const slotSuffix = videoTargetMesh.slice(modPrefix.length);
-                const targetName = childMeshes[0]?.name || uniqueModName;
-                remappedVideoTargetMesh = `${targetName}${slotSuffix}`;
-              }
-
-              exportContainer.add(clonedMod);
-            }
-          });
-        });
-      }
-
-      // 1e. Surface Scattering & Foliage Instanced Meshes
-      if (scatterLayers.length > 0) {
-        scatterLayers.forEach((layer) => {
-          if (!layer.enabled || layer.visible === false) return;
-          const anchor = document.getElementById(`ar-scatter-layer-${layer.id}`);
-          const root = anchor?.getObject3D('scatterRoot') || anchor?.object3D;
-          if (root && anchor?.object3D) {
-            anchor.object3D.updateWorldMatrix(true, true);
-            const cloned = root.clone(true);
-            anchor.object3D.matrixWorld.decompose(cloned.position, cloned.quaternion, cloned.scale);
-            exportContainer.add(cloned);
-          }
-        });
-      } else {
-        const scatterAnchor = document.getElementById('ar-surface-scatter-anchor');
-        const scatterRoot = scatterAnchor?.getObject3D('scatterRoot') || scatterAnchor?.object3D;
-        if (scatterRoot && scatterEnabled) {
-          scatterRoot.updateWorldMatrix(true, true);
-          const clonedScatter = scatterRoot.clone(true);
-          scatterRoot.matrixWorld.decompose(clonedScatter.position, clonedScatter.quaternion, clonedScatter.scale);
-          exportContainer.add(clonedScatter);
-        }
-      }
-
-      if (remappedVideoTargetMesh === 'ALL_GEOMETRIES' && !primaryModel3D) {
-        remappedVideoTargetMesh = 'ALL';
-      }
-
-      exportScene.updateMatrixWorld(true);
-      sanitizeHierarchyForGLTFExport(exportScene, THREE);
-      exportScene.userData = { preserveSceneOrigin: true };
-      exportContainer.userData = { preserveSceneOrigin: true };
-
-      setSaveAsProgressMsg('Encoding 3D scene into binary .glb...');
-      setUploadProgress('Encoding 3D scene into binary .glb...');
-
-      const glbBlob = await new Promise((resolve, reject) => {
-        const exporter = new GLTFExporter();
-        const exportOptions = {
-          binary: true,
-          embedImages: true
-        };
-        if (primaryModel3D?.animations?.length > 0) {
-          exportOptions.animations = primaryModel3D.animations;
-        }
-        exporter.parse(
-          exportScene,
-          (result) => {
-            if (result instanceof ArrayBuffer) {
-              resolve(new Blob([result], { type: 'model/gltf-binary' }));
+            if (finalTexUrl) {
+              cleanGeom.textureUrl = finalTexUrl;
+              cleanGeom.textureStoragePath = finalStoragePath;
             } else {
-              resolve(new Blob([JSON.stringify(result)], { type: 'application/json' }));
+              delete cleanGeom.textureUrl;
+              delete cleanGeom.textureStoragePath;
+              delete cleanGeom.textureFileName;
             }
-          },
-          (err) => reject(err),
-          exportOptions
+
+            return cleanGeom;
+          })
         );
-      });
+        pendingShapeTexturesRef.current?.clear();
+      }
 
-      const sceneGlbFileName = `${cleanId}_scene.glb`;
-      const glbStoragePath = `assets/${cleanId}/${sceneGlbFileName}`;
-      setSaveAsProgressMsg(`Uploading 3D model to ${glbStoragePath}...`);
-      setUploadProgress(`Uploading 3D model to ${glbStoragePath}...`);
-
-      const glbStorageRef = ref(storage, glbStoragePath);
-      await uploadBytes(glbStorageRef, glbBlob, {
-        contentType: 'model/gltf-binary',
-        customMetadata: {
-          batchId: cleanId,
-          assetName: name,
-          exportedFrom: 'ar-test-studio'
-        }
-      });
-      const glbDownloadUrl = await getDownloadURL(glbStorageRef);
+      // 1c. Upload any staged custom external 3D model files (.glb/.gltf) to Firebase Storage
+      let cleanedCustomModels = [];
+      if (Array.isArray(customModels) && customModels.length > 0) {
+        setSaveAsProgressMsg('Uploading external 3D models to Storage...');
+        setUploadProgress('Uploading external 3D models to Storage...');
+        cleanedCustomModels = await Promise.all(
+          customModels.map(async (m) => {
+            let finalUrl = m.url;
+            if (m.file) {
+              setUploadProgress(`Uploading 3D model ${m.name || m.fileName || 'model'} to Storage...`);
+              const cleanFileName = (m.fileName || `${m.id}.glb`).replace(/[^a-zA-Z0-9._-]/g, '_');
+              const storagePath = `assets/${cleanId}/custom_models/${m.id}_${cleanFileName}`;
+              const modelRef = ref(storage, storagePath);
+              await uploadBytes(modelRef, m.file, {
+                contentType: 'model/gltf-binary',
+                customMetadata: {
+                  batchId: cleanId,
+                  modelId: m.id,
+                  originalName: m.fileName || m.name || ''
+                }
+              });
+              finalUrl = await getDownloadURL(modelRef);
+            }
+            const { file, ...cleanModel } = m;
+            return {
+              ...cleanModel,
+              url: finalUrl
+            };
+          })
+        );
+      }
 
       pendingTextureFilesRef.current?.clear();
-      pendingShapeTexturesRef.current?.clear();
 
       // -----------------------------------------------------------------------
       // STEP 2: Resolve & Upload Permanent Marker Image -> assets/{id}/marker_...
@@ -10964,12 +10882,12 @@ const ARTest = () => {
           source: 'storage_marker_image',
           mindFilePath
         },
-        additionalGeometries: [],
-        customModels: [],
-        custom3DTexts: [],
+        additionalGeometries: cleanedAdditionalGeometries || [],
+        customModels: cleanedCustomModels || [],
+        custom3DTexts: custom3DTexts || [],
         customLights: customLights || [],
-        scatterLayers: [],
-        sceneGroups: [],
+        scatterLayers: scatterLayers || [],
+        sceneGroups: sceneGroups || [],
         ...(finalThumbnailUrl ? { thumbnailUrl: finalThumbnailUrl, thumbnail_url: finalThumbnailUrl } : {}),
         updatedAt: nowIso
       };
@@ -10994,12 +10912,12 @@ const ARTest = () => {
         portalConfig: arConfigPayload.portalConfig,
         particleConfig: arConfigPayload.particleConfig,
         websiteLayer: arConfigPayload.websiteLayer,
-        additionalGeometries: [],
-        customModels: [],
-        custom3DTexts: [],
+        additionalGeometries: cleanedAdditionalGeometries || [],
+        customModels: cleanedCustomModels || [],
+        custom3DTexts: custom3DTexts || [],
         customLights: customLights || [],
-        scatterLayers: [],
-        sceneGroups: [],
+        scatterLayers: scatterLayers || [],
+        sceneGroups: sceneGroups || [],
         ambientColor,
         ambientIntensity,
         dir1Color,
@@ -11048,24 +10966,32 @@ const ARTest = () => {
       }
 
       // Bind current ARTest studio session to the newly created batch & unified scene .glb
-      const freshSceneUrl = withCacheBuster(glbDownloadUrl, Date.now());
+      const freshSceneUrl = glbDownloadUrl ? withCacheBuster(glbDownloadUrl, Date.now()) : '';
       clearSelectionAndDetachGizmo();
       setBatchId(cleanId);
-      setLocalGlbUrl('');
-      setLocalGlbName(sceneGlbFileName);
-      setModelPosX(0);
-      setModelPosY(0);
-      setModelPosZ(0);
-      setModelScale(1);
-      setModelRotX(0);
-      setModelRotY(0);
-      setModelRotZ(0);
-      setAdditionalGeometries([]);
-      setCustom3DTexts([]);
-      setCustomModels([]);
-      setScatterEnabled(false);
-      setScatterLayers([]);
-      setSelectedScatterLayerId(null);
+      if (hasPrimaryModel) {
+        setLocalGlbUrl('');
+        setLocalGlbName(sceneGlbFileName);
+        setModelPosX(0);
+        setModelPosY(0);
+        setModelPosZ(0);
+        setModelScale(1);
+        setModelRotX(0);
+        setModelRotY(0);
+        setModelRotZ(0);
+      } else {
+        setLocalGlbUrl('');
+        setLocalGlbName('');
+      }
+      setAdditionalGeometries(cleanedAdditionalGeometries);
+      setCustom3DTexts(custom3DTexts || []);
+      setCustomModels(cleanedCustomModels);
+      if (Array.isArray(scatterLayers) && scatterLayers.length > 0) {
+        setScatterLayers(scatterLayers);
+      }
+      if (Array.isArray(sceneGroups) && sceneGroups.length > 0) {
+        setSceneGroups(sceneGroups);
+      }
       setDeletedMeshNames([]);
       if (remappedVideoTargetMesh !== videoTargetMesh) {
         setVideoTargetMesh(remappedVideoTargetMesh);
@@ -11102,14 +11028,22 @@ const ARTest = () => {
         video_url: safeVideoUrl,
         video_file_path: videoFilePath,
         config: arConfigPayload,
-        customModels: [],
+        additionalGeometries: cleanedAdditionalGeometries,
+        customModels: cleanedCustomModels,
+        custom3DTexts: custom3DTexts || [],
+        scatterLayers: scatterLayers || [],
+        sceneGroups: sceneGroups || [],
         arExperience: {
           thumbnailUrl: finalThumbnailUrl,
           thumbnail_url: finalThumbnailUrl,
           modelUrl: freshSceneUrl,
           videoUrl: safeVideoUrl,
           config: arConfigPayload,
-          customModels: []
+          additionalGeometries: cleanedAdditionalGeometries,
+          customModels: cleanedCustomModels,
+          custom3DTexts: custom3DTexts || [],
+          scatterLayers: scatterLayers || [],
+          sceneGroups: sceneGroups || []
         },
         trackingConfig: {
           mindUrl: mindDownloadUrl
