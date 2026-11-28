@@ -436,8 +436,24 @@ const ARExperience = ({ propBatchId, onBack, isTestMode }) => {
           }
         }
 
-        if (!data || !data.arExperience || !data.arExperience.modelUrl) {
+        const docSource = assetDocData || batchDocData;
+        const hasSceneContent = Boolean(
+          (Array.isArray(docSource?.additionalGeometries) && docSource.additionalGeometries.length > 0) ||
+          (Array.isArray(docSource?.ar_config?.additionalGeometries) && docSource.ar_config.additionalGeometries.length > 0) ||
+          (Array.isArray(docSource?.customModels) && docSource.customModels.length > 0) ||
+          (Array.isArray(docSource?.ar_config?.customModels) && docSource.ar_config.customModels.length > 0) ||
+          (Array.isArray(docSource?.custom3DTexts) && docSource.custom3DTexts.length > 0) ||
+          (Array.isArray(docSource?.ar_config?.custom3DTexts) && docSource.ar_config.custom3DTexts.length > 0) ||
+          docSource?.video_url || docSource?.videoUrl || docSource?.ar_config?.videoUrl ||
+          docSource?.portalConfig?.enabled || docSource?.ar_config?.portalConfig?.enabled
+        );
+
+        if (!data || !data.arExperience || (!data.arExperience.modelUrl && !hasSceneContent)) {
           throw new Error('No 3D experience configuration found for this batch.');
+        }
+
+        if (data?.arExperience && !data.arExperience.modelUrl && hasSceneContent) {
+          data.arExperience.modelUrl = '';
         }
 
         const extractConfigFields = (docData) => {

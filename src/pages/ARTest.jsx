@@ -53,6 +53,8 @@ import GoogleFontSelector from '../components/GoogleFontSelector';
 import ArSceneApiModal from '../components/ArSceneApiModal';
 import ARLightDiagnosticsDrawer from '../components/ARLightDiagnosticsDrawer';
 import FaceSketchExtrudeStudio from '../components/FaceSketchExtrudeStudio';
+import NormalMapConverterModal from '../components/NormalMapConverterModal';
+import { generateNormalMap, convertImageFileToNormalMap } from '../utils/normalMapGenerator';
 import SaveAsInventoryModal, { MarkerLibrarySelector } from '../components/SaveAsInventoryModal';
 import ProductViewer from '../components/ProductViewer';
 import { exportCurrentSceneToArApi } from '../utils/arSceneApi';
@@ -2122,6 +2124,10 @@ const ARTest = () => {
   const [editingSvgGeom, setEditingSvgGeom] = useState(null);
   const [editGeometryModalOpen, setEditGeometryModalOpen] = useState(false);
   const [editingGeometryTarget, setEditingGeometryTarget] = useState(null);
+
+  // Normal Map Studio & Converter Modal State
+  const [normalConverterOpen, setNormalConverterOpen] = useState(false);
+  const [normalConverterTarget, setNormalConverterTarget] = useState(null); // { type: 'mesh'|'shape'|'global', ref: any, title: string, sourceUrl: string }
 
   const handleSaveGeometryTopology = (id, updatedTopology) => {
     triggerUndoSnapshot();
@@ -8478,6 +8484,120 @@ const ARTest = () => {
     setTimeout(() => setSaveSuccessMsg(''), 4000);
   };
 
+  // Open Normal Map Studio & Converter Modal
+  const handleOpenNormalConverter = (targetType, targetRef) => {
+    let title = 'Material';
+    let sourceUrl = null;
+
+    if (targetType === 'mesh' && targetRef) {
+      title = targetRef.name || 'Selected Mesh';
+      sourceUrl = targetRef.material?.textureUrl || targetRef.material?.normalMapUrl || null;
+    } else if (targetType === 'shape' && targetRef) {
+      title = targetRef.name || 'Selected Shape';
+      sourceUrl = targetRef.textureUrl || targetRef.normalMap || null;
+    } else if (targetType === 'global') {
+      title = 'Global Model Material';
+      sourceUrl = matNormalMapUrl || selectedMesh?.material?.textureUrl || null;
+    }
+
+    setNormalConverterTarget({ type: targetType, ref: targetRef, title, sourceUrl });
+    setNormalConverterOpen(true);
+  };
+
+  // Callback when normal map is applied from Converter Modal
+  const handleApplyConvertedNormal = async (convertedFile, settings = {}) => {
+    if (!normalConverterTarget || !convertedFile) return;
+    const { type, ref: targetRef } = normalConverterTarget;
+
+    if (type === 'mesh' && targetRef) {
+      await handleApplyMeshMap(targetRef, 'normalMap', convertedFile);
+      if (settings.strength !== undefined) {
+        handleMeshMaterialChange('normalScale', settings.strength);
+      }
+    } else if (type === 'shape' && targetRef) {
+      await handleApplyShapeMap(targetRef.id, 'normalMap', convertedFile);
+      if (settings.strength !== undefined) {
+        handleUpdateGeometry(targetRef.id, { normalScale: settings.strength });
+      }
+    } else if (type === 'global') {
+      await handleApplyGlobalMap('normalMap', convertedFile);
+      if (settings.strength !== undefined) {
+        setMatNormalScale(settings.strength);
+      }
+    }
+  };
+
+  // Dedicated helper to instantly upload an image, convert to normal map, and add to material
+  const handleUploadAndConvertNormalMap = async (targetType, targetRef, file) => {
+    if (!file || !targetType) return;
+    const uploadKey = targetType === 'mesh' ? `mesh-${targetRef.uuid}-normalMap-convert`
+      : targetType === 'shape' ? `shape-${targetRef.id}-normalMap-convert`
+      : 'global-normalMap-convert';
+    setMapUploadingSlot(uploadKey);
+    setUploadProgress(`Converting ${file.name} to normal map...`);
+
+    try {
+      // 1. Convert image to normal map file via Sobel filter
+      const convertedFile = await convertImageFileToNormalMap(file, { strength: 3.0 });
+
+      // 2. Apply to material
+      if (targetType === 'mesh' && targetRef) {
+        await handleApplyMeshMap(targetRef, 'normalMap', convertedFile);
+      } else if (targetType === 'shape' && targetRef) {
+        await handleApplyShapeMap(targetRef.id, 'normalMap', convertedFile);
+      } else if (targetType === 'global') {
+        await handleApplyGlobalMap('normalMap', convertedFile);
+      }
+
+      const targetLabel = targetType === 'mesh' ? (targetRef.name || 'mesh') : (targetType === 'shape' ? (targetRef.name || 'shape') : 'global model');
+      setSaveSuccessMsg(`Image converted to normal map & applied to ${targetLabel}!`);
+      setTimeout(() => setSaveSuccessMsg(''), 5000);
+    } catch (err) {
+      console.error('[ARTest] Failed to convert image to normal map:', err);
+      setError(`Failed to convert image to normal map: ${err.message || err}`);
+    } finally {
+      setMapUploadingSlot(null);
+      setUploadProgress('');
+    }
+  };
+
+  // Helper to generate a normal map from the current base texture map
+  const handleGenerateNormalFromBaseTexture = async (targetType, targetRef) => {
+    const texUrl = targetType === 'mesh' ? targetRef?.material?.textureUrl
+      : targetType === 'shape' ? targetRef?.textureUrl
+      : selectedMesh?.material?.textureUrl || null;
+    if (!texUrl) return;
+
+    const uploadKey = targetType === 'mesh' ? `mesh-${targetRef.uuid}-normalMap-convert`
+      : targetType === 'shape' ? `shape-${targetRef.id}-normalMap-convert`
+      : 'global-normalMap-convert';
+    setMapUploadingSlot(uploadKey);
+    setUploadProgress('Generating normal map from base texture...');
+
+    try {
+      const baseName = (targetType === 'mesh' ? targetRef?.name : (targetType === 'shape' ? targetRef?.name : 'material')) || 'texture';
+      const outFileName = `${baseName}_normal.png`;
+      const result = await generateNormalMap(texUrl, { strength: 3.0, fileName: outFileName });
+
+      if (targetType === 'mesh' && targetRef) {
+        await handleApplyMeshMap(targetRef, 'normalMap', result.file);
+      } else if (targetType === 'shape' && targetRef) {
+        await handleApplyShapeMap(targetRef.id, 'normalMap', result.file);
+      } else if (targetType === 'global') {
+        await handleApplyGlobalMap('normalMap', result.file);
+      }
+
+      setSaveSuccessMsg('Normal map generated from base texture & applied!');
+      setTimeout(() => setSaveSuccessMsg(''), 5000);
+    } catch (err) {
+      console.error('[ARTest] Failed to generate normal map from texture:', err);
+      setError(`Failed to generate normal map: ${err.message || err}`);
+    } finally {
+      setMapUploadingSlot(null);
+      setUploadProgress('');
+    }
+  };
+
   const resetCurrentTargetTransform = () => {
     if (!selectedMeshUuid) {
       setModelRotX(90);
@@ -10398,61 +10518,64 @@ const ARTest = () => {
 
       const hasPrimaryModel = Boolean(primaryModel3D && !(portalEnabled && portalHideOutsideModel));
       let glbBlob = null;
-      let sceneGlbFileName = '';
-      let glbStoragePath = '';
+      let sceneGlbFileName = `${cleanId}_scene.glb`;
+      let glbStoragePath = `assets/${cleanId}/${sceneGlbFileName}`;
       let glbDownloadUrl = '';
 
-      // Only export the primary root 3D model if one is present in the scene.
-      // Shapes, extruded vectors, custom meshes, 3D texts, and custom models remain parametric entities
-      // in additionalGeometries / customModels / custom3DTexts and are NOT baked as static child sub-meshes!
-      if (hasPrimaryModel && exportContainer.children.length > 0) {
-        exportScene.updateMatrixWorld(true);
-        sanitizeHierarchyForGLTFExport(exportScene, THREE);
-        exportScene.userData = { preserveSceneOrigin: true };
-        exportContainer.userData = { preserveSceneOrigin: true };
-
-        setSaveAsProgressMsg('Encoding 3D model into binary .glb...');
-        setUploadProgress('Encoding 3D model into binary .glb...');
-
-        glbBlob = await new Promise((resolve, reject) => {
-          const exporter = new GLTFExporter();
-          const exportOptions = {
-            binary: true,
-            embedImages: true
-          };
-          if (primaryModel3D?.animations?.length > 0) {
-            exportOptions.animations = primaryModel3D.animations;
-          }
-          exporter.parse(
-            exportScene,
-            (result) => {
-              if (result instanceof ArrayBuffer) {
-                resolve(new Blob([result], { type: 'model/gltf-binary' }));
-              } else {
-                resolve(new Blob([JSON.stringify(result)], { type: 'application/json' }));
-              }
-            },
-            (err) => reject(err),
-            exportOptions
-          );
-        });
-
-        sceneGlbFileName = `${cleanId}_scene.glb`;
-        glbStoragePath = `assets/${cleanId}/${sceneGlbFileName}`;
-        setSaveAsProgressMsg(`Uploading 3D model to ${glbStoragePath}...`);
-        setUploadProgress(`Uploading 3D model to ${glbStoragePath}...`);
-
-        const glbStorageRef = ref(storage, glbStoragePath);
-        await uploadBytes(glbStorageRef, glbBlob, {
-          contentType: 'model/gltf-binary',
-          customMetadata: {
-            batchId: cleanId,
-            assetName: name,
-            exportedFrom: 'ar-test-studio'
-          }
-        });
-        glbDownloadUrl = await getDownloadURL(glbStorageRef);
+      // Ensure exportContainer always has a valid scene root.
+      // If there is no primary 3D model, an empty scene anchor is created so that
+      // backend services (loomRouter, signed URL resolvers) and AR runtimes receive a valid GLB model path,
+      // while shapes in additionalGeometries render dynamically via ar-additional-geometries.
+      if (exportContainer.children.length === 0) {
+        const sceneAnchor = new THREE.Group();
+        sceneAnchor.name = `${cleanId}_anchor`;
+        exportContainer.add(sceneAnchor);
       }
+
+      exportScene.updateMatrixWorld(true);
+      sanitizeHierarchyForGLTFExport(exportScene, THREE);
+      exportScene.userData = { preserveSceneOrigin: true };
+      exportContainer.userData = { preserveSceneOrigin: true };
+
+      setSaveAsProgressMsg('Encoding 3D scene into binary .glb...');
+      setUploadProgress('Encoding 3D scene into binary .glb...');
+
+      glbBlob = await new Promise((resolve, reject) => {
+        const exporter = new GLTFExporter();
+        const exportOptions = {
+          binary: true,
+          embedImages: true
+        };
+        if (primaryModel3D?.animations?.length > 0) {
+          exportOptions.animations = primaryModel3D.animations;
+        }
+        exporter.parse(
+          exportScene,
+          (result) => {
+            if (result instanceof ArrayBuffer) {
+              resolve(new Blob([result], { type: 'model/gltf-binary' }));
+            } else {
+              resolve(new Blob([JSON.stringify(result)], { type: 'application/json' }));
+            }
+          },
+          (err) => reject(err),
+          exportOptions
+        );
+      });
+
+      setSaveAsProgressMsg(`Uploading 3D model to ${glbStoragePath}...`);
+      setUploadProgress(`Uploading 3D model to ${glbStoragePath}...`);
+
+      const glbStorageRef = ref(storage, glbStoragePath);
+      await uploadBytes(glbStorageRef, glbBlob, {
+        contentType: 'model/gltf-binary',
+        customMetadata: {
+          batchId: cleanId,
+          assetName: name,
+          exportedFrom: 'ar-test-studio'
+        }
+      });
+      glbDownloadUrl = await getDownloadURL(glbStorageRef);
 
       // 1b. Upload any staged custom shape textures to Firebase Storage (preserving all parametric shape properties)
       let cleanedAdditionalGeometries = additionalGeometries || [];
@@ -10969,20 +11092,15 @@ const ARTest = () => {
       const freshSceneUrl = glbDownloadUrl ? withCacheBuster(glbDownloadUrl, Date.now()) : '';
       clearSelectionAndDetachGizmo();
       setBatchId(cleanId);
-      if (hasPrimaryModel) {
-        setLocalGlbUrl('');
-        setLocalGlbName(sceneGlbFileName);
-        setModelPosX(0);
-        setModelPosY(0);
-        setModelPosZ(0);
-        setModelScale(1);
-        setModelRotX(0);
-        setModelRotY(0);
-        setModelRotZ(0);
-      } else {
-        setLocalGlbUrl('');
-        setLocalGlbName('');
-      }
+      setLocalGlbUrl('');
+      setLocalGlbName(sceneGlbFileName);
+      setModelPosX(0);
+      setModelPosY(0);
+      setModelPosZ(0);
+      setModelScale(1);
+      setModelRotX(0);
+      setModelRotY(0);
+      setModelRotZ(0);
       setAdditionalGeometries(cleanedAdditionalGeometries);
       setCustom3DTexts(custom3DTexts || []);
       setCustomModels(cleanedCustomModels);
@@ -16041,27 +16159,88 @@ const ARTest = () => {
                           </div>
 
                           {/* Normal Map */}
-                          <div className="space-y-2 p-2.5 rounded-lg bg-cyan-950/20 border border-cyan-500/30">
+                          <div className="space-y-2.5 p-2.5 rounded-lg bg-cyan-950/20 border border-cyan-500/30">
                             <div className="flex items-center justify-between">
                               <span className="text-[10px] uppercase font-bold tracking-wider text-cyan-300 flex items-center gap-1.5">
                                 <span className="material-symbols-outlined text-xs">waves</span>
                                 Shape Normal Map
                                 <InfoTooltip title="Normal Map" text={MATERIAL_TOOLTIPS.normalMap} />
                               </span>
-                              {currentGeom.normalMap && (
-                                <span className="text-[9px] bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
-                                  ACTIVE
-                                </span>
-                              )}
+                              <div className="flex items-center gap-1.5">
+                                {currentGeom.normalMap && (
+                                  <span className="text-[9px] bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
+                                    ACTIVE
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenNormalConverter('shape', currentGeom)}
+                                  className="text-[10px] text-cyan-400 hover:text-cyan-200 bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-500/30 px-2 py-0.5 rounded flex items-center gap-1 transition-colors cursor-pointer"
+                                  title="Open Normal Map Studio & Converter"
+                                >
+                                  <span className="material-symbols-outlined text-xs">tune</span>
+                                  <span>Converter Studio</span>
+                                </button>
+                              </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/40 rounded text-xs text-cyan-200 font-medium cursor-pointer transition-colors">
+
+                            {/* Active Normal Map Preview Thumbnail */}
+                            {currentGeom.normalMap && (
+                              <div className="flex items-center gap-2 p-1.5 bg-black/40 rounded border border-cyan-500/20">
+                                <img
+                                  src={currentGeom.normalMap}
+                                  alt="Shape Normal Map"
+                                  className="w-8 h-8 rounded object-cover border border-cyan-500/40 bg-zinc-900"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-[10px] font-mono text-cyan-200 truncate">
+                                    {currentGeom.normalMapFileName || 'Active Normal Map'}
+                                  </div>
+                                  <div className="text-[9px] text-zinc-400">Tangent vectors active</div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveShapeMap(currentGeom.id, 'normalMap')}
+                                  className="px-2 py-1 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-[10px] flex items-center gap-1 transition-colors cursor-pointer"
+                                  title="Remove Normal Map"
+                                >
+                                  <span className="material-symbols-outlined text-xs">close</span>
+                                  <span>Clear</span>
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Action Buttons: Convert Image to Normal vs Direct Normal Map */}
+                            <div className="grid grid-cols-2 gap-2">
+                              {/* Primary: Convert Uploaded Image to Normal Map */}
+                              <label className="flex items-center justify-center gap-1.5 py-1.5 px-2 bg-gradient-to-r from-cyan-600/80 to-blue-600/80 hover:from-cyan-500 hover:to-blue-500 border border-cyan-400/50 rounded text-xs text-white font-semibold cursor-pointer shadow-md transition-all">
+                                {mapUploadingSlot === `shape-${currentGeom.id}-normalMap-convert` ? (
+                                  <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                                ) : (
+                                  <span className="material-symbols-outlined text-sm">auto_fix_high</span>
+                                )}
+                                <span>Convert Image</span>
+                                <input
+                                  type="file"
+                                  accept="image/png,image/jpeg,image/webp,image/jpg"
+                                  onChange={(e) => {
+                                    if (e.target.files && e.target.files[0]) {
+                                      handleUploadAndConvertNormalMap('shape', currentGeom, e.target.files[0]);
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                  className="hidden"
+                                />
+                              </label>
+
+                              {/* Secondary: Upload Pre-baked Normal Map */}
+                              <label className="flex items-center justify-center gap-1.5 py-1.5 px-2 bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-700 hover:border-zinc-500 rounded text-xs text-zinc-200 font-medium cursor-pointer transition-colors">
                                 {mapUploadingSlot === `shape-${currentGeom.id}-normalMap` ? (
                                   <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
                                 ) : (
                                   <span className="material-symbols-outlined text-sm">upload_file</span>
                                 )}
-                                <span>{currentGeom.normalMap ? 'Replace Normal Map' : 'Upload Normal Map'}</span>
+                                <span>Direct Normal</span>
                                 <input
                                   type="file"
                                   accept="image/png,image/jpeg,image/webp,image/jpg"
@@ -16074,18 +16253,21 @@ const ARTest = () => {
                                   className="hidden"
                                 />
                               </label>
-                              {currentGeom.normalMap && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleRemoveShapeMap(currentGeom.id, 'normalMap')}
-                                  className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
-                                  title="Remove Normal Map"
-                                >
-                                  <span className="material-symbols-outlined text-sm">close</span>
-                                  <span>Clear</span>
-                                </button>
-                              )}
                             </div>
+
+                            {/* Convert from Base Color Texture if present */}
+                            {currentGeom.textureUrl && (
+                              <button
+                                type="button"
+                                onClick={() => handleGenerateNormalFromBaseTexture('shape', currentGeom)}
+                                className="w-full flex items-center justify-center gap-1.5 py-1 px-2 rounded bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-500/20 text-[11px] text-cyan-300 font-medium transition-colors cursor-pointer"
+                                title="Generate normal map from existing shape texture"
+                              >
+                                <span className="material-symbols-outlined text-xs">auto_awesome</span>
+                                <span>Generate from Base Texture Map</span>
+                              </button>
+                            )}
+
                             <NumberSliderInput
                               label="Normal Scale (Depth)"
                               value={currentGeom.normalScale ?? 1.0}
@@ -18071,27 +18253,88 @@ const ARTest = () => {
                   </div>
 
                   {/* Normal Map */}
-                  <div className="space-y-2 p-2.5 rounded-lg bg-cyan-950/20 border border-cyan-500/30">
+                  <div className="space-y-2.5 p-2.5 rounded-lg bg-cyan-950/20 border border-cyan-500/30">
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] uppercase font-bold tracking-wider text-cyan-300 flex items-center gap-1.5">
                         <span className="material-symbols-outlined text-xs">waves</span>
                         Normal Map
                         <InfoTooltip title="Normal Map" text={MATERIAL_TOOLTIPS.normalMap} />
                       </span>
-                      {selectedMesh.material?.normalMapUrl && (
-                        <span className="text-[9px] bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
-                          ACTIVE
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        {selectedMesh.material?.normalMapUrl && (
+                          <span className="text-[9px] bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
+                            ACTIVE
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleOpenNormalConverter('mesh', selectedMesh)}
+                          className="text-[10px] text-cyan-400 hover:text-cyan-200 bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-500/30 px-2 py-0.5 rounded flex items-center gap-1 transition-colors cursor-pointer"
+                          title="Open Normal Map Studio & Converter"
+                        >
+                          <span className="material-symbols-outlined text-xs">tune</span>
+                          <span>Converter Studio</span>
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/40 rounded text-xs text-cyan-200 font-medium cursor-pointer transition-colors">
+
+                    {/* Active Normal Map Preview Thumbnail */}
+                    {selectedMesh.material?.normalMapUrl && (
+                      <div className="flex items-center gap-2 p-1.5 bg-black/40 rounded border border-cyan-500/20">
+                        <img
+                          src={selectedMesh.material.normalMapUrl}
+                          alt="Mesh Normal Map"
+                          className="w-8 h-8 rounded object-cover border border-cyan-500/40 bg-zinc-900"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[10px] font-mono text-cyan-200 truncate">
+                            {selectedMesh.material?.normalMapFileName || 'Active Normal Map'}
+                          </div>
+                          <div className="text-[9px] text-zinc-400">Tangent vectors active</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveMeshMap(selectedMesh.uuid, selectedMesh.name, 'normalMap')}
+                          className="px-2 py-1 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-[10px] flex items-center gap-1 transition-colors cursor-pointer"
+                          title="Remove Normal Map"
+                        >
+                          <span className="material-symbols-outlined text-xs">close</span>
+                          <span>Clear</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Action Buttons: Convert Image to Normal vs Direct Normal Map */}
+                    <div className="grid grid-cols-2 gap-2">
+                      {/* Primary: Convert Uploaded Image to Normal Map */}
+                      <label className="flex items-center justify-center gap-1.5 py-1.5 px-2 bg-gradient-to-r from-cyan-600/80 to-blue-600/80 hover:from-cyan-500 hover:to-blue-500 border border-cyan-400/50 rounded text-xs text-white font-semibold cursor-pointer shadow-md transition-all">
+                        {mapUploadingSlot === `mesh-${selectedMesh.uuid}-normalMap-convert` ? (
+                          <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                        ) : (
+                          <span className="material-symbols-outlined text-sm">auto_fix_high</span>
+                        )}
+                        <span>Convert Image</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/jpg"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleUploadAndConvertNormalMap('mesh', selectedMesh, e.target.files[0]);
+                              e.target.value = '';
+                            }
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+
+                      {/* Secondary: Upload Pre-baked Normal Map */}
+                      <label className="flex items-center justify-center gap-1.5 py-1.5 px-2 bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-700 hover:border-zinc-500 rounded text-xs text-zinc-200 font-medium cursor-pointer transition-colors">
                         {mapUploadingSlot === `mesh-${selectedMesh.uuid}-normalMap` ? (
                           <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
                         ) : (
                           <span className="material-symbols-outlined text-sm">upload_file</span>
                         )}
-                        <span>{selectedMesh.material?.normalMapUrl ? 'Replace Normal Map' : 'Upload Normal Map'}</span>
+                        <span>Direct Normal</span>
                         <input
                           type="file"
                           accept="image/png,image/jpeg,image/webp,image/jpg"
@@ -18104,18 +18347,21 @@ const ARTest = () => {
                           className="hidden"
                         />
                       </label>
-                      {selectedMesh.material?.normalMapUrl && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveMeshMap(selectedMesh.uuid, selectedMesh.name, 'normalMap')}
-                          className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
-                          title="Remove Normal Map"
-                        >
-                          <span className="material-symbols-outlined text-sm">close</span>
-                          <span>Clear</span>
-                        </button>
-                      )}
                     </div>
+
+                    {/* Convert from Base Color Texture if present */}
+                    {selectedMesh.material?.textureUrl && (
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateNormalFromBaseTexture('mesh', selectedMesh)}
+                        className="w-full flex items-center justify-center gap-1.5 py-1 px-2 rounded bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-500/20 text-[11px] text-cyan-300 font-medium transition-colors cursor-pointer"
+                        title="Generate normal map from existing mesh texture"
+                      >
+                        <span className="material-symbols-outlined text-xs">auto_awesome</span>
+                        <span>Generate from Base Texture Map</span>
+                      </button>
+                    )}
+
                     <NumberSliderInput
                       label="Normal Map Scale (Depth)"
                       value={selectedMesh.material?.normalScale ?? 1.0}
@@ -18922,20 +19168,81 @@ const ARTest = () => {
                         Global Normal Map
                         <InfoTooltip title="Normal Map" text={MATERIAL_TOOLTIPS.normalMap} />
                       </span>
-                      {matNormalMapUrl && (
-                        <span className="text-[9px] bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
-                          ACTIVE
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        {matNormalMapUrl && (
+                          <span className="text-[9px] bg-cyan-500/30 text-cyan-300 border border-cyan-500/50 px-1.5 py-0.2 rounded font-mono font-bold">
+                            ACTIVE
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleOpenNormalConverter('global', null)}
+                          className="text-[10px] text-cyan-400 hover:text-cyan-200 bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-500/30 px-2 py-0.5 rounded flex items-center gap-1 transition-colors cursor-pointer"
+                          title="Open Normal Map Studio & Converter"
+                        >
+                          <span className="material-symbols-outlined text-xs">tune</span>
+                          <span>Converter Studio</span>
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <label className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/40 rounded text-xs text-cyan-200 font-medium cursor-pointer transition-colors">
+
+                    {/* Active Normal Map Preview Thumbnail */}
+                    {matNormalMapUrl && (
+                      <div className="flex items-center gap-2 p-1.5 bg-black/40 rounded border border-cyan-500/20">
+                        <img
+                          src={matNormalMapUrl}
+                          alt="Global Normal Map"
+                          className="w-8 h-8 rounded object-cover border border-cyan-500/40 bg-zinc-900"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[10px] font-mono text-cyan-200 truncate">
+                            Global Normal Map Active
+                          </div>
+                          <div className="text-[9px] text-zinc-400">Tangent vectors active</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveGlobalMap('normalMap')}
+                          className="px-2 py-1 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-[10px] flex items-center gap-1 transition-colors cursor-pointer"
+                          title="Remove Global Normal Map"
+                        >
+                          <span className="material-symbols-outlined text-xs">close</span>
+                          <span>Clear</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Action Buttons: Convert Image to Normal vs Direct Normal Map */}
+                    <div className="grid grid-cols-2 gap-2">
+                      {/* Primary: Convert Uploaded Image to Normal Map */}
+                      <label className="flex items-center justify-center gap-1.5 py-1.5 px-2 bg-gradient-to-r from-cyan-600/80 to-blue-600/80 hover:from-cyan-500 hover:to-blue-500 border border-cyan-400/50 rounded text-xs text-white font-semibold cursor-pointer shadow-md transition-all">
+                        {mapUploadingSlot === 'global-normalMap-convert' ? (
+                          <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
+                        ) : (
+                          <span className="material-symbols-outlined text-sm">auto_fix_high</span>
+                        )}
+                        <span>Convert Image</span>
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/jpg"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleUploadAndConvertNormalMap('global', null, e.target.files[0]);
+                              e.target.value = '';
+                            }
+                          }}
+                          className="hidden"
+                        />
+                      </label>
+
+                      {/* Secondary: Upload Pre-baked Normal Map */}
+                      <label className="flex items-center justify-center gap-1.5 py-1.5 px-2 bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-700 hover:border-zinc-500 rounded text-xs text-zinc-200 font-medium cursor-pointer transition-colors">
                         {mapUploadingSlot === 'global-normalMap' ? (
                           <span className="material-symbols-outlined text-sm animate-spin">progress_activity</span>
                         ) : (
                           <span className="material-symbols-outlined text-sm">upload_file</span>
                         )}
-                        <span>{matNormalMapUrl ? 'Replace Normal Map' : 'Upload Normal Map'}</span>
+                        <span>Direct Normal</span>
                         <input
                           type="file"
                           accept="image/png,image/jpeg,image/webp,image/jpg"
@@ -18948,18 +19255,21 @@ const ARTest = () => {
                           className="hidden"
                         />
                       </label>
-                      {matNormalMapUrl && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveGlobalMap('normalMap')}
-                          className="px-2.5 py-1.5 bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 rounded text-xs flex items-center gap-1 font-medium transition-colors cursor-pointer"
-                          title="Remove Global Normal Map"
-                        >
-                          <span className="material-symbols-outlined text-sm">close</span>
-                          <span>Clear</span>
-                        </button>
-                      )}
                     </div>
+
+                    {/* Convert from Base Color Texture if present on selected mesh */}
+                    {selectedMesh?.material?.textureUrl && (
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateNormalFromBaseTexture('global', null)}
+                        className="w-full flex items-center justify-center gap-1.5 py-1 px-2 rounded bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-500/20 text-[11px] text-cyan-300 font-medium transition-colors cursor-pointer"
+                        title="Generate normal map from active mesh texture"
+                      >
+                        <span className="material-symbols-outlined text-xs">auto_awesome</span>
+                        <span>Generate from Selected Mesh Texture Map</span>
+                      </button>
+                    )}
+
                     <NumberSliderInput
                       label="Normal Map Scale (Depth)"
                       value={matNormalScale}
@@ -24817,6 +25127,15 @@ const ARTest = () => {
         }}
         sceneRef={sceneRef}
         selectedTarget={selectedStudioTarget}
+      />
+
+      {/* Normal Map Studio & Converter Modal */}
+      <NormalMapConverterModal
+        isOpen={normalConverterOpen}
+        onClose={() => setNormalConverterOpen(false)}
+        onApply={handleApplyConvertedNormal}
+        targetTitle={normalConverterTarget?.title || 'Material'}
+        initialImageSource={normalConverterTarget?.sourceUrl}
       />
 
       {/* Save As — Compile MindAR Marker + Export 3D Scene .GLB + Add to Admin Inventory */}

@@ -72,18 +72,27 @@ app.get("/s/:batchId", async (req, res) => {
       gltf_file_path = batchData.gltf_file_path;
     }
 
-    if (!gltf_file_path) {
+    const arConfig = batchData.ar_config || {};
+    const hasAuxExperience = Boolean(
+      (Array.isArray(batchData.additionalGeometries) && batchData.additionalGeometries.length > 0) ||
+      (Array.isArray(arConfig.additionalGeometries) && arConfig.additionalGeometries.length > 0) ||
+      (Array.isArray(batchData.customModels) && batchData.customModels.length > 0) ||
+      (Array.isArray(arConfig.customModels) && arConfig.customModels.length > 0) ||
+      (Array.isArray(batchData.custom3DTexts) && batchData.custom3DTexts.length > 0) ||
+      (Array.isArray(arConfig.custom3DTexts) && arConfig.custom3DTexts.length > 0) ||
+      batchData.video_url || batchData.videoUrl || arConfig.videoUrl ||
+      batchData.portalConfig?.enabled || arConfig.portalConfig?.enabled
+    );
+
+    if (!gltf_file_path && !hasAuxExperience) {
       return res.status(500).json({ error: "Asset configuration is incomplete (missing model path)." });
     }
 
     // Step 4: Generate signed URLs in parallel for performance optimization
     const [mindFileUrl, gltfFileUrl] = await Promise.all([
       generateSignedUrl(mind_file_path),
-      generateSignedUrl(gltf_file_path)
+      gltf_file_path ? generateSignedUrl(gltf_file_path) : Promise.resolve("")
     ]);
-
-    // Pass the ar_config from batchData if it exists
-    const arConfig = batchData.ar_config || {};
 
     // Step 5: Return structured JSON payload to the client-side shell
     return res.status(200).json({
